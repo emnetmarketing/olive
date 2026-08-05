@@ -1143,15 +1143,11 @@
         <label for="loginPassword">비밀번호</label>
         <input id="loginPassword" type="password" placeholder="비밀번호 입력">
       </div>
-      <div class="field">
-        <label for="loginName">이름 <small class="muted">(최초 접근 신청 시 작성)</small></label>
-        <input id="loginName" placeholder="홍길동">
-      </div>
       <div class="toolbar">
         <button id="loginBtn" type="button">로그인</button>
         <button id="requestAccessBtn" class="secondary" type="button">접근 신청</button>
       </div>
-      <div class="auth-note">최초 가입(접근 신청)자는 이메일, 비밀번호, 이름을 작성하면 자동으로 <strong>마스터(관리자)</strong>로 등록되며 즉시 로그인됩니다. 이후 사용자는 이메일과 비밀번호로 로그인합니다.</div>
+      <div class="auth-note">최초 가입(접근 신청)자는 이메일과 비밀번호를 작성하면 자동으로 <strong>마스터(관리자)</strong>로 등록되며 즉시 로그인됩니다. 이후 신청자는 마스터의 승인이 필요합니다.</div>
     </div>
   </div>
 
@@ -1540,7 +1536,7 @@
     function requestAccess() {
       const email = normalizeEmail($("loginEmail").value);
       const password = $("loginPassword").value.trim();
-      const name = $("loginName").value.trim();
+      const name = email.split("@")[0] || email;
 
       if (!email) {
         alert("이메일을 입력하세요.");
@@ -1548,10 +1544,6 @@
       }
       if (!password) {
         alert("비밀번호를 입력하세요.");
-        return;
-      }
-      if (!name) {
-        alert("이름을 입력하세요.");
         return;
       }
 
