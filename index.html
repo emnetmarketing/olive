@@ -101,6 +101,219 @@
       font-weight: 800;
     }
 
+    .header-access-btn {
+      position: relative;
+      gap: 6px;
+      font-weight: 700;
+    }
+
+    .header-access-btn.highlight {
+      border-color: var(--brand);
+      color: var(--brand-dark);
+      background: #f0edff;
+    }
+
+    .badge-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .badge-count.has-pending {
+      background: #ef4444;
+      color: #ffffff;
+      animation: pulse-badge 1.8s infinite;
+    }
+
+    @keyframes pulse-badge {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.12); }
+      100% { transform: scale(1); }
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(15, 23, 42, 0.55);
+      backdrop-filter: blur(6px);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .modal-overlay[hidden] {
+      display: none !important;
+    }
+
+    .modal-card {
+      width: min(780px, 100%);
+      max-height: 88vh;
+      background: #ffffff;
+      border-radius: 20px;
+      box-shadow: 0 25px 60px rgba(15, 23, 42, 0.25);
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: modal-fade-in 0.2s ease-out;
+    }
+
+    @keyframes modal-fade-in {
+      from { opacity: 0; transform: translateY(12px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      background: #f8fafc;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 900;
+      color: var(--ink);
+    }
+
+    .modal-sub {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      line-height: 1;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 8px;
+    }
+
+    .modal-close:hover {
+      background: #e2e8f0;
+      color: var(--ink);
+    }
+
+    .modal-body {
+      padding: 20px 24px;
+      overflow-y: auto;
+    }
+
+    .modal-summary {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .summary-chip {
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .summary-chip.pending {
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+
+    .summary-chip.total {
+      background: #f0fdf4;
+      color: #166534;
+      border: 1px solid #bbf7d0;
+    }
+
+    .modal-user-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .modal-user-table th, .modal-user-table td {
+      padding: 12px 10px;
+      border-bottom: 1px solid #edf1f7;
+      vertical-align: middle;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .status-pill.ok { background: #dcfce7; color: #15803d; }
+    .status-pill.warn { background: #fef3c7; color: #b45309; }
+    .status-pill.bad { background: #fee2e2; color: #b91c1c; }
+
+    .modal-role-select {
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+    }
+
+    .action-btn-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-approve {
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-approve:hover { background: var(--brand-dark); }
+
+    .btn-reject {
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: #fee2e2;
+      color: #b91c1c;
+      border: 1px solid #fca5a5;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-reject:hover { background: #fecaca; }
+
+    .btn-delete {
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: #f1f5f9;
+      color: #64748b;
+      border: 1px solid #cbd5e1;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .btn-delete:hover { background: #e2e8f0; color: #0f172a; }
+
     header {
       display: flex;
       align-items: center;
@@ -930,7 +1143,7 @@
         <button id="loginBtn" type="button">로그인</button>
         <button id="requestAccessBtn" class="secondary" type="button">접근 신청</button>
       </div>
-      <div class="auth-note">초기 마스터 계정은 <strong>master@company.com</strong> 입니다. 실제 운영에서는 서버 인증, 비밀번호/SSO, API 키 서버 보관이 필요합니다.</div>
+      <div class="auth-note">최초 가입(접근 신청)자는 자동으로 <strong>마스터(관리자)</strong> 권한으로 승인되어 즉시 로그인할 수 있습니다. 이후 가입자는 마스터의 승인이 필요합니다.</div>
     </div>
   </div>
 
@@ -953,6 +1166,7 @@
       <button id="runBtn">▶ 분석 실행</button>
       <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
       <button id="teamsBtn" class="success">↗ Teams 전송</button>
+      <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">접근 신청 <span id="pendingBadge" class="badge-count">0</span></button>
       <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
       <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
     </div>
@@ -1242,9 +1456,41 @@
     </div>
   </main>
 
+  <div id="accessModal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h2>🔒 접근 신청 및 사용자 권한 관리</h2>
+          <p class="modal-sub">신청된 사용자를 승인/거절하고 역할 권한을 설정합니다.</p>
+        </div>
+        <button id="closeAccessModalBtn" class="modal-close" type="button">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-summary">
+          <div class="summary-chip pending">승인 대기 <strong id="modalPendingCount">0</strong>명</div>
+          <div class="summary-chip total">전체 계정 <strong id="modalTotalCount">0</strong>명</div>
+        </div>
+        <div class="user-table-wrap">
+          <table class="modal-user-table">
+            <thead>
+              <tr>
+                <th style="width: 28%;">이름 / 이메일</th>
+                <th style="width: 20%;">신청 일시</th>
+                <th style="width: 14%;">상태</th>
+                <th style="width: 18%;">권한</th>
+                <th style="width: 20%;">관리</th>
+              </tr>
+            </thead>
+            <tbody id="modalUserList">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
-    const MASTER_EMAIL = "master@company.com";
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null };
 
     const sampleInstagram = [
@@ -1268,15 +1514,10 @@
 
     function getUsers() {
       try {
-        const users = JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
-        if (!users.some((user) => user.email === MASTER_EMAIL)) {
-          users.unshift({ email: MASTER_EMAIL, name: "Master", role: "master", status: "approved", requestedAt: new Date().toISOString() });
-          localStorage.setItem("monitoringAccessUsers", JSON.stringify(users));
-        }
-        return users;
+        return JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
       } catch {
         localStorage.removeItem("monitoringAccessUsers");
-        return [{ email: MASTER_EMAIL, name: "Master", role: "master", status: "approved", requestedAt: new Date().toISOString() }];
+        return [];
       }
     }
 
@@ -1298,12 +1539,36 @@
       const users = getUsers();
       const existing = users.find((user) => user.email === email);
       if (existing) {
-        alert(existing.status === "approved" ? "이미 승인된 계정입니다. 로그인하세요." : "이미 접근 신청이 접수되었습니다.");
+        if (existing.status === "approved") {
+          alert("이미 승인된 계정입니다. 로그인하세요.");
+        } else if (existing.status === "rejected") {
+          alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
+        } else {
+          alert("이미 접근 신청이 접수되었습니다. 마스터 승인을 기다려주세요.");
+        }
         return;
       }
-      users.push({ email, name, role: "viewer", status: "pending", requestedAt: new Date().toISOString() });
+
+      const isFirstUser = users.length === 0;
+      const newUser = {
+        email,
+        name,
+        role: isFirstUser ? "master" : "viewer",
+        status: isFirstUser ? "approved" : "pending",
+        requestedAt: new Date().toISOString()
+      };
+
+      users.push(newUser);
       setUsers(users);
-      alert("접근 신청이 접수되었습니다. 마스터 승인 후 로그인할 수 있습니다.");
+
+      if (isFirstUser) {
+        alert("첫 번째 가입자로 마스터(관리자) 권한이 자동 부여되어 즉시 승인되었습니다.");
+        state.currentUser = newUser;
+        sessionStorage.setItem("monitoringCurrentUser", newUser.email);
+        applyAuthState();
+      } else {
+        alert("접근 신청이 접수되었습니다. 마스터 승인 후 로그인할 수 있습니다.");
+      }
     }
 
     function login() {
@@ -1312,9 +1577,22 @@
         alert("이메일을 입력하세요.");
         return;
       }
-      const user = getUsers().find((item) => item.email === email);
-      if (!user || user.status !== "approved") {
-        alert("아직 승인되지 않은 계정입니다. 접근 신청 후 마스터 승인을 받아주세요.");
+      const users = getUsers();
+      if (!users.length) {
+        alert("등록된 계정이 없습니다. 이메일과 이름을 입력한 후 [접근 신청]을 클릭하여 첫 마스터 계정을 등록하세요.");
+        return;
+      }
+      const user = users.find((item) => item.email === email);
+      if (!user) {
+        alert("등록되지 않은 이메일입니다. [접근 신청]을 진행해 주세요.");
+        return;
+      }
+      if (user.status === "rejected") {
+        alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
+        return;
+      }
+      if (user.status !== "approved") {
+        alert("아직 승인되지 않은 계정입니다. 마스터의 승인을 기다려주세요.");
         return;
       }
       state.currentUser = user;
@@ -1352,6 +1630,7 @@
       $("currentUserChip").innerHTML = `${escapeHtml(state.currentUser.name || state.currentUser.email)} <small>${roleLabel(state.currentUser.role)}</small>`;
       applyPermissions();
       renderAccessUsers();
+      updatePendingBadge();
     }
 
     function roleLabel(role) {
@@ -1363,6 +1642,7 @@
       const master = isMaster();
       $("permissionNote").style.display = editable ? "none" : "block";
       $("adminAccessCard").style.display = master ? "block" : "none";
+      if ($("headerAccessBtn")) $("headerAccessBtn").style.display = master ? "inline-flex" : "none";
 
       const editableIds = [
         "surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd",
@@ -1393,6 +1673,91 @@
       return false;
     }
 
+    function updatePendingBadge() {
+      const users = getUsers();
+      const pendingCount = users.filter((u) => u.status === "pending").length;
+      const badge = $("pendingBadge");
+      if (badge) {
+        badge.textContent = pendingCount;
+        badge.classList.toggle("has-pending", pendingCount > 0);
+      }
+      const headerBtn = $("headerAccessBtn");
+      if (headerBtn) {
+        headerBtn.classList.toggle("highlight", pendingCount > 0);
+      }
+    }
+
+    function openAccessModal() {
+      if (!isMaster()) return;
+      $("accessModal").hidden = false;
+      renderModalUserList();
+    }
+
+    function closeAccessModal() {
+      $("accessModal").hidden = true;
+    }
+
+    function renderModalUserList() {
+      const users = getUsers();
+      const pendingUsers = users.filter((u) => u.status === "pending");
+      $("modalPendingCount").textContent = pendingUsers.length;
+      $("modalTotalCount").textContent = users.length;
+
+      const tbody = $("modalUserList");
+      if (!tbody) return;
+      if (!users.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--muted); padding: 24px;">신청 또는 등록된 사용자가 없습니다.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = users.map((user) => {
+        const isCurrentMaster = state.currentUser?.email === user.email;
+        const statusBadge = user.status === "approved" 
+          ? '<span class="status-pill ok">승인됨</span>' 
+          : user.status === "rejected" 
+          ? '<span class="status-pill bad">거절됨</span>' 
+          : '<span class="status-pill warn">대기중</span>';
+
+        return `
+          <tr>
+            <td>
+              <strong>${escapeHtml(user.name || "이름 미지정")}</strong><br>
+              <span class="muted">${escapeHtml(user.email)}</span>
+            </td>
+            <td><small class="muted">${formatHistoryDate(user.requestedAt)}</small></td>
+            <td>${statusBadge}</td>
+            <td>
+              <select class="modal-role-select" data-user-email="${escapeHtml(user.email)}" ${isCurrentMaster ? "disabled" : ""}>
+                <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기/다운로드</option>
+                <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집자</option>
+                <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
+              </select>
+            </td>
+            <td>
+              <div class="action-btn-group">
+                ${user.status !== "approved" ? `<button class="btn-approve" type="button" data-email="${escapeHtml(user.email)}">승인</button>` : ""}
+                ${user.status !== "rejected" && !isCurrentMaster ? `<button class="btn-reject" type="button" data-email="${escapeHtml(user.email)}">거절</button>` : ""}
+                ${!isCurrentMaster ? `<button class="btn-delete" type="button" data-email="${escapeHtml(user.email)}" title="계정 삭제">삭제</button>` : ""}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      Array.from(document.querySelectorAll(".modal-role-select")).forEach((select) => {
+        select.addEventListener("change", () => updateUserRole(select.dataset.userEmail, select.value));
+      });
+      Array.from(document.querySelectorAll(".btn-approve")).forEach((btn) => {
+        btn.addEventListener("click", () => approveUser(btn.dataset.email));
+      });
+      Array.from(document.querySelectorAll(".btn-reject")).forEach((btn) => {
+        btn.addEventListener("click", () => rejectUser(btn.dataset.email));
+      });
+      Array.from(document.querySelectorAll(".btn-delete")).forEach((btn) => {
+        btn.addEventListener("click", () => deleteUser(btn.dataset.email));
+      });
+    }
+
     function renderAccessUsers() {
       const list = $("accessUserList");
       if (!list) return;
@@ -1403,8 +1768,8 @@
       }
       list.innerHTML = users.map((user) => `
         <div class="user-row">
-          <span><strong>${escapeHtml(user.name || user.email)}</strong><br><small class="muted">${escapeHtml(user.email)} · ${user.status === "approved" ? "승인됨" : "승인 대기"}</small></span>
-          <select class="role-select" data-user-email="${escapeHtml(user.email)}" ${user.email === MASTER_EMAIL ? "disabled" : ""}>
+          <span><strong>${escapeHtml(user.name || user.email)}</strong><br><small class="muted">${escapeHtml(user.email)} · ${user.status === "approved" ? "승인됨" : user.status === "rejected" ? "거절됨" : "승인 대기"}</small></span>
+          <select class="role-select" data-user-email="${escapeHtml(user.email)}" ${state.currentUser?.email === user.email ? "disabled" : ""}>
             <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기</option>
             <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집</option>
             <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
@@ -1426,6 +1791,17 @@
       const users = getUsers().map((user) => user.email === email ? { ...user, status: "approved" } : user);
       setUsers(users);
       renderAccessUsers();
+      renderModalUserList();
+      updatePendingBadge();
+    }
+
+    function rejectUser(email) {
+      if (!isMaster()) return;
+      const users = getUsers().map((user) => user.email === email ? { ...user, status: "rejected" } : user);
+      setUsers(users);
+      renderAccessUsers();
+      renderModalUserList();
+      updatePendingBadge();
     }
 
     function updateUserRole(email, role) {
@@ -1433,6 +1809,17 @@
       const users = getUsers().map((user) => user.email === email ? { ...user, role } : user);
       setUsers(users);
       renderAccessUsers();
+      renderModalUserList();
+    }
+
+    function deleteUser(email) {
+      if (!isMaster()) return;
+      if (!confirm(`'${email}' 계정을 삭제하시겠습니까?`)) return;
+      const users = getUsers().filter((user) => user.email !== email);
+      setUsers(users);
+      renderAccessUsers();
+      renderModalUserList();
+      updatePendingBadge();
     }
 
     function toggleSchedulePanel() {
@@ -2163,29 +2550,40 @@
       }
     }
 
-    $("runBtn").addEventListener("click", analyze);
-    $("scheduleBtn").addEventListener("click", toggleSchedulePanel);
-    $("startScheduleBtn").addEventListener("click", startScheduledCollection);
-    $("stopScheduleBtn").addEventListener("click", () => stopScheduledCollection(true));
-    $("scheduleMode").addEventListener("change", updateScheduleModeFields);
-    $("addScheduleTimeBtn").addEventListener("click", () => {
+    function bindEvent(id, type, fn) {
+      const el = $(id);
+      if (el) el.addEventListener(type, fn);
+    }
+
+    bindEvent("runBtn", "click", analyze);
+    bindEvent("scheduleBtn", "click", toggleSchedulePanel);
+    bindEvent("startScheduleBtn", "click", startScheduledCollection);
+    bindEvent("stopScheduleBtn", "click", () => stopScheduledCollection(true));
+    bindEvent("scheduleMode", "change", updateScheduleModeFields);
+    bindEvent("addScheduleTimeBtn", "click", () => {
       if (!requireEdit("수집 시간 추가")) return;
       addScheduleTime("09:00");
       saveSettings();
     });
-    $("teamsBtn").addEventListener("click", sendTeams);
-    $("saveBtn").addEventListener("click", saveSettings);
-    $("apiBtn").addEventListener("click", fetchApiData);
-    $("excelDownloadBtn").addEventListener("click", downloadExcel);
-    $("downloadHistoryBtn").addEventListener("click", toggleDownloadHistory);
-    $("clearDownloadHistoryBtn").addEventListener("click", clearDownloadHistory);
-    $("excelUpload").addEventListener("change", handleExcelUpload);
-    $("monitorTabBtn").addEventListener("click", () => switchSideTab("monitor"));
-    $("apiTabBtn").addEventListener("click", () => switchSideTab("api"));
+    bindEvent("teamsBtn", "click", sendTeams);
+    bindEvent("saveBtn", "click", saveSettings);
+    bindEvent("apiBtn", "click", fetchApiData);
+    bindEvent("excelDownloadBtn", "click", downloadExcel);
+    bindEvent("downloadHistoryBtn", "click", toggleDownloadHistory);
+    bindEvent("clearDownloadHistoryBtn", "click", clearDownloadHistory);
+    bindEvent("excelUpload", "change", handleExcelUpload);
+    bindEvent("monitorTabBtn", "click", () => switchSideTab("monitor"));
+    bindEvent("apiTabBtn", "click", () => switchSideTab("api"));
 
-    $("loginBtn").addEventListener("click", login);
-    $("requestAccessBtn").addEventListener("click", requestAccess);
-    $("logoutBtn").addEventListener("click", logout);
+    bindEvent("headerAccessBtn", "click", openAccessModal);
+    bindEvent("closeAccessModalBtn", "click", closeAccessModal);
+    bindEvent("accessModal", "click", (e) => {
+      if (e.target === $("accessModal")) closeAccessModal();
+    });
+
+    bindEvent("loginBtn", "click", login);
+    bindEvent("requestAccessBtn", "click", requestAccess);
+    bindEvent("logoutBtn", "click", logout);
 
     restoreSession();
     loadSettings();
