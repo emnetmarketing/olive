@@ -1,0 +1,683 @@
+<!DOCTYPE HTML>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>팀 케미스트리 랩 (Team Chemistry Lab) | 팀원 등록 & 궁합 분석</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Standalone CDN -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Canvas Confetti CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50: '#f0f4ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', dark: '#0f172a' }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .glass-card {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .glass-card-hover {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .glass-card-hover:hover {
+      background: rgba(30, 41, 59, 0.9);
+      border-color: rgba(99, 102, 241, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 12px 30px -10px rgba(99, 102, 241, 0.3);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-['Noto_Sans_KR','Inter',sans-serif] antialiased min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // --- DATA & UTILS ---
+    const MBTI_TYPES = {
+      INTJ: { name: '용의주도한 전략가', group: 'NT', tag: '전략/기획', desc: '철저한 계획과 높은 표준으로 목표를 달성하는 전략가' },
+      INTP: { name: '아이디어 파이프라인', group: 'NT', tag: '연구/분석', desc: '끊임없이 호기심을 갖고 시스템 구조를 파헤치는 논리주의자' },
+      ENTJ: { name: '대담한 통솔자', group: 'NT', tag: '리더십/드라이브', desc: '명확한 비전과 결단력으로 팀을 이끄는 목표지향적 리더' },
+      ENTP: { name: '뜨거운 논쟁을 즐기는 변론가', group: 'NT', tag: '혁신/아이디어', desc: '새로운 기회와 혁신적 아이디어를 쉼 없이 제시하는 창의가' },
+      INFJ: { name: '통찰력 있는 선도자', group: 'NF', tag: '비전/코칭', desc: '깊은 통찰력과 가치관으로 조직의 의미를 찾아주는 조력자' },
+      INFP: { name: '잔잔한 열정가', group: 'NF', tag: '가치/창의', desc: '내면의 진정성과 배려로 팀 분위기를 따뜻하게 만드는 유연한 영혼' },
+      ENFJ: { name: '정의로운 카리스마 리더', group: 'NF', tag: '동기부여/케어', desc: '팀원들의 잠재력을 끌어올리고 화합을 도모하는 에너자이저' },
+      ENFP: { name: '재발랄한 활동가', group: 'NF', tag: '기획/소통', desc: '넘치는 긍정 에너지로 유쾌한 변화와 아이디어를 일으키는 스파크' },
+      ISTJ: { name: '청렴결백한 원칙주의자', group: 'ST', tag: '실행/체계', desc: '정확하고 철저한 실행으로 팀의 안정적인 기반을 구축하는 파수꾼' },
+      ISFJ: { name: '실용적인 조력자', group: 'SF', tag: '지원/꼼꼼함', desc: '묵묵히 팀원들을 챙기고 헌신적으로 과업을 완성하는 수호자' },
+      ESTJ: { name: '엄격한 관리자', group: 'ST', tag: '운영/프로세스', desc: '명확한 규칙과 효율적 프로세스로 성과를 빠르게 도출하는 관리자' },
+      ESFJ: { name: '사교적인 친선도모자', group: 'SF', tag: '조화/운영', desc: '팀의 화합을 소중히 여기고 살갑게 소통하며 지원하는 분위기 메이커' },
+      ISTP: { name: '만능 재주꾼', group: 'ST', tag: '문제해결/실용', desc: '냉철한 판단력과 뛰어난 순발력으로 즉각 문제를 해결하는 실천가' },
+      ISFP: { name: '호기심 많은 예술가', group: 'SF', tag: '디자인/감성', desc: '온화하고 조용히 주변을 살피며 실용적이고 감각적인 작업을 만듦' },
+      ESTP: { name: '수완 좋은 활동가', group: 'ST', tag: '현장/도전', desc: '위기 상황에서 빛을 발하며 빠른 액션으로 결과를 만들어내는 개척자' },
+      ESFP: { name: '자유로운 영혼의 연예인', group: 'SF', tag: '활력/커뮤니케이션', desc: '팀에 유쾌함을 선사하고 긍정적인 분위기로 에너지를 불어넣는 스파크' },
+    };
+
+    const WORK_STYLES = {
+      Goal: '🎯 목표 달성형 (결과 추진)',
+      Process: '📐 절차 체계형 (원칙/검증)',
+      Creative: '💡 창의 아이디어형 (혁신)',
+      Support: '🤝 지원 배려형 (팀케어/조화)'
+    };
+
+    const COMM_STYLES = {
+      Direct: '🗣️ 직설 명확형 (핵심 대화)',
+      Empathic: '💖 공감 경청형 (감정 존중)',
+      Analytical: '📊 논리 분석형 (근거 기반)'
+    };
+
+    const INITIAL_TEAM_MEMBERS = [
+      { id: 'mem-1', name: '김바이브', role: '팀장 / 총괄 PM', department: '프로덕트 본부', mbti: 'ENTJ', avatarColor: 'from-indigo-500 to-purple-600', avatarEmoji: '⚡', workStyle: 'Goal', commStyle: 'Direct', workPace: 'Fast', schedulePreference: 'Morning', bloodType: 'A', zodiac: '사자자리 ♌', hobbies: '러닝, 팀 빌딩', values: '결과 창출, 빠른 피드백' },
+      { id: 'mem-2', name: '이코드', role: '시니어 개발자', department: '개발팀', mbti: 'INTP', avatarColor: 'from-blue-500 to-cyan-500', avatarEmoji: '💻', workStyle: 'Process', commStyle: 'Analytical', workPace: 'Thorough', schedulePreference: 'Night', bloodType: 'AB', zodiac: '물병자리 ♒', hobbies: '기술 탐색, 커피', values: '기술적 완성도, 몰입' },
+      { id: 'mem-3', name: '박디자인', role: 'Lead UI/UX 디자이너', department: '디자인팀', mbti: 'ENFP', avatarColor: 'from-pink-500 to-rose-500', avatarEmoji: '🎨', workStyle: 'Creative', commStyle: 'Empathic', workPace: 'Fast', schedulePreference: 'Morning', bloodType: 'B', zodiac: '쌍둥이자리 ♊', hobbies: '전시회, 사진 촬영', values: '사용자 공감, 직관성' },
+      { id: 'mem-4', name: '최기획', role: '서비스 기획자 / PO', department: '프로덕트 본부', mbti: 'INFJ', avatarColor: 'from-emerald-500 to-teal-600', avatarEmoji: '📝', workStyle: 'Support', commStyle: 'Empathic', workPace: 'Thorough', schedulePreference: 'Morning', bloodType: 'O', zodiac: '전갈자리 ♏', hobbies: '독서, 글쓰기', values: '고객 경험, 조화' },
+      { id: 'mem-5', name: '정마케팅', role: '그로스 마케터', department: '마케팅팀', mbti: 'ESFP', avatarColor: 'from-amber-400 to-orange-500', avatarEmoji: '🚀', workStyle: 'Creative', commStyle: 'Direct', workPace: 'Fast', schedulePreference: 'Morning', bloodType: 'O', zodiac: '사수자리 ♐', hobbies: '숏폼 제작, 피트니스', values: '트렌드, 유쾌한 소통' }
+    ];
+
+    function calculateChemistry(m1, m2) {
+      if (!m1 || !m2) return null;
+      let mbtiScore = 78;
+      if (m1.mbti === m2.mbti) mbtiScore = 88;
+      else if ((m1.mbti === 'ENTJ' && m2.mbti === 'INTP') || (m1.mbti === 'ENFP' && m2.mbti === 'INFJ')) mbtiScore = 96;
+      else if (m1.mbti[1] === m2.mbti[1]) mbtiScore = 85;
+
+      let workStyleScore = m1.workStyle === m2.workStyle ? 88 : 92;
+      let commScore = m1.commStyle === m2.commStyle ? 90 : 85;
+      let funScore = m1.schedulePreference === m2.schedulePreference ? 92 : 78;
+
+      const totalScore = Math.round(mbtiScore * 0.4 + workStyleScore * 0.25 + commScore * 0.25 + funScore * 0.1);
+      
+      let rank = 'A+';
+      let themeTitle = '서로를 채워주는 톱니바퀴 ⚙️';
+      if (totalScore >= 92) { rank = 'S++'; themeTitle = '영혼의 비즈니스 파트너 🌟'; }
+      else if (totalScore >= 85) { rank = 'S'; themeTitle = '찰떡 호흡 시너지 콤비 🤝'; }
+      else if (totalScore < 75) { rank = 'B+'; themeTitle = '창과 방패의 검증 콤비 ⚔️'; }
+
+      return {
+        totalScore, rank, themeTitle,
+        breakdown: { mbtiScore, workStyleScore, commScore, funScore },
+        strengths: [
+          `MBTI [${m1.mbti} × ${m2.mbti}]: 강점이 상호보완되어 탁월한 성과를 창출합니다.`,
+          `업무 스타일 시너지: 빠른 의사결정과 꼼꼼한 프로세스의 이상적 결합.`,
+          m1.schedulePreference === m2.schedulePreference ? '주요 몰입 시간이 일치하여 실시간 커뮤니케이션이 매끄럽습니다.' : '서로 다른 시간대에 집중하여 프로젝트의 연속성을 보장합니다.'
+        ],
+        adviceList: [
+          '서로의 소통 스타일 차이를 존중하고 핵심 목적을 명확히 전달하세요.',
+          '정기적인 1:1 커피챗으로 일하는 방식과 피드백을 수시로 싱크하세요.'
+        ]
+      };
+    }
+
+    // --- MAIN APP ---
+    function App() {
+      const [activeTab, setActiveTab] = useState('members');
+      const [members, setMembers] = useState(() => {
+        const saved = localStorage.getItem('team_chemistry_members');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          } catch(e){}
+        }
+        return INITIAL_TEAM_MEMBERS;
+      });
+
+      const [showForm, setShowForm] = useState(true); // Default to visible so user sees form immediately!
+      const [editingId, setEditingId] = useState(null);
+
+      // Form State
+      const [formData, setFormData] = useState({
+        name: '', role: '팀원', department: '개발팀', mbti: 'ENFP', avatarEmoji: '⚡',
+        workStyle: 'Goal', commStyle: 'Direct', workPace: 'Fast', schedulePreference: 'Morning',
+        bloodType: 'A', zodiac: '', hobbies: '', values: ''
+      });
+
+      const [member1Id, setMember1Id] = useState(members[0]?.id || '');
+      const [member2Id, setMember2Id] = useState(members[1]?.id || members[0]?.id || '');
+      const [drawnPair, setDrawnPair] = useState(null);
+
+      useEffect(() => {
+        localStorage.setItem('team_chemistry_members', JSON.stringify(members));
+      }, [members]);
+
+      const handleSaveMember = (e) => {
+        e.preventDefault();
+        if (!formData.name.trim()) return;
+
+        if (editingId) {
+          setMembers(members.map(m => m.id === editingId ? { ...formData, id: editingId } : m));
+          alert(`${formData.name} 팀원의 정보가 수정되었습니다!`);
+        } else {
+          const newMember = {
+            ...formData,
+            id: `mem-${Date.now()}`,
+            avatarColor: 'from-indigo-500 to-purple-600'
+          };
+          setMembers([...members, newMember]);
+          alert(`새로운 팀원 [${formData.name}] 님이 성공적으로 추가되었습니다!`);
+        }
+
+        // Reset form
+        setFormData({
+          name: '', role: '팀원', department: '개발팀', mbti: 'ENFP', avatarEmoji: '⚡',
+          workStyle: 'Goal', commStyle: 'Direct', workPace: 'Fast', schedulePreference: 'Morning',
+          bloodType: 'A', zodiac: '', hobbies: '', values: ''
+        });
+        setEditingId(null);
+      };
+
+      const handleEdit = (member) => {
+        setFormData(member);
+        setEditingId(member.id);
+        setShowForm(true);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+
+      const handleDelete = (id) => {
+        if (confirm('이 팀원을 삭제하시겠습니까?')) {
+          setMembers(members.filter(m => m.id !== id));
+        }
+      };
+
+      const handleLoadSamples = () => {
+        setMembers(INITIAL_TEAM_MEMBERS);
+        alert('샘플 팀원 5명이 초기화 탑재되었습니다!');
+      };
+
+      const m1 = members.find(m => m.id === member1Id) || members[0];
+      const m2 = members.find(m => m.id === member2Id) || members[1] || members[0];
+      const chem = calculateChemistry(m1, m2);
+
+      const handleDrawCoffeeChat = () => {
+        if (members.length < 2) return;
+        const rand1 = members[Math.floor(Math.random() * members.length)];
+        let rand2 = members[Math.floor(Math.random() * members.length)];
+        while (rand2.id === rand1.id && members.length > 1) {
+          rand2 = members[Math.floor(Math.random() * members.length)];
+        }
+        setDrawnPair({ m1: rand1, m2: rand2, chem: calculateChemistry(rand1, rand2) });
+        if (window.confetti) window.confetti({ particleCount: 50, spread: 60 });
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Noto_Sans_KR','Inter',sans-serif]">
+          
+          {/* Header */}
+          <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur-xl">
+            <div className="max-w-7xl mx-auto px-4 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center font-bold text-xl shadow-lg shadow-indigo-500/25">
+                  ⚡
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-white tracking-tight">Team Chemistry Lab</h1>
+                  <p className="text-xs text-slate-400">팀원 성향 & MBTI 시너지 분석 프로그램</p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    setEditingId(null);
+                    setFormData({
+                      name: '', role: '팀원', department: '개발팀', mbti: 'ENFP', avatarEmoji: '⚡',
+                      workStyle: 'Goal', commStyle: 'Direct', workPace: 'Fast', schedulePreference: 'Morning',
+                      bloodType: 'A', zodiac: '', hobbies: '', values: ''
+                    });
+                    setShowForm(!showForm);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:opacity-90 text-white font-bold text-xs shadow-lg flex items-center space-x-1.5"
+                >
+                  <span>{showForm ? '▲ 기입창 접기' : '➕ 팀원 신규 등록'}</span>
+                </button>
+                <button
+                  onClick={handleLoadSamples}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700"
+                >
+                  🔄 샘플 5명 로드
+                </button>
+              </div>
+            </div>
+
+            {/* Nav Tabs */}
+            <div className="max-w-7xl mx-auto px-4 flex space-x-1 overflow-x-auto pb-2 border-t border-slate-800/60 pt-2">
+              {[
+                { id: 'members', label: `👥 팀원 목록 및 기입 (${members.length}명)` },
+                { id: 'one-on-one', label: '⚡ 1:1 궁합 분석' },
+                { id: 'matrix', label: '📊 팀 매트릭스' },
+                { id: 'report', label: '📈 팀 리포트' },
+                { id: 'matchmaker', label: '🎲 짝꿍 추첨기' },
+              ].map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                    activeTab === t.id ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </header>
+
+          {/* Main Content */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6 space-y-6">
+
+            {/* TAB 1: MEMBERS */}
+            {activeTab === 'members' && (
+              <div className="space-y-6">
+                
+                {/* MEMBER INPUT FORM CARD - ALWAYS CLEARLY VISIBLE AT TOP */}
+                {showForm && (
+                  <div className="glass-card p-6 rounded-3xl border-2 border-indigo-500/50 shadow-2xl animate-fade-in space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-base font-bold text-indigo-300 flex items-center space-x-2">
+                          <span>📝 {editingId ? '팀원 정보 수정' : '새로운 팀원 정보 기입창 (Add Member)'}</span>
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-0.5">이름, 직책, 부서, MBTI 및 일하는 방식을 기입하고 아래 [팀원 등록하기] 버튼을 누르세요.</p>
+                      </div>
+                      <button onClick={() => setShowForm(false)} className="text-xs text-slate-400 hover:text-white px-2 py-1 bg-slate-800 rounded-lg">
+                        ▲ 접기
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSaveMember} className="space-y-4 text-xs sm:text-sm">
+                      {/* Row 1: Basic Info */}
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">팀원 이름 *</label>
+                          <input
+                            type="text"
+                            required
+                            value={formData.name}
+                            onChange={e => setFormData({ ...formData, name: e.target.value })}
+                            placeholder="예: 홍길동"
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">직책 / 역할</label>
+                          <input
+                            type="text"
+                            value={formData.role}
+                            onChange={e => setFormData({ ...formData, role: e.target.value })}
+                            placeholder="예: 백엔드 개발자"
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">소속 부서</label>
+                          <input
+                            type="text"
+                            value={formData.department}
+                            onChange={e => setFormData({ ...formData, department: e.target.value })}
+                            placeholder="예: 기술연구소"
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">MBTI 유형 *</label>
+                          <select
+                            value={formData.mbti}
+                            onChange={e => setFormData({ ...formData, mbti: e.target.value })}
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-indigo-300 font-bold focus:outline-none focus:border-indigo-500"
+                          >
+                            {Object.keys(MBTI_TYPES).map(t => (
+                              <option key={t} value={t}>{t} - {MBTI_TYPES[t].name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Row 2: Work Style & Communication */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">업무 성향</label>
+                          <select
+                            value={formData.workStyle}
+                            onChange={e => setFormData({ ...formData, workStyle: e.target.value })}
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none"
+                          >
+                            {Object.keys(WORK_STYLES).map(k => (
+                              <option key={k} value={k}>{WORK_STYLES[k]}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">소통 방식</label>
+                          <select
+                            value={formData.commStyle}
+                            onChange={e => setFormData({ ...formData, commStyle: e.target.value })}
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none"
+                          >
+                            {Object.keys(COMM_STYLES).map(k => (
+                              <option key={k} value={k}>{COMM_STYLES[k]}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">집중 골든타임</label>
+                          <select
+                            value={formData.schedulePreference}
+                            onChange={e => setFormData({ ...formData, schedulePreference: e.target.value })}
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none"
+                          >
+                            <option value="Morning">☀️ 아침 얼리버드 (오전 집중)</option>
+                            <option value="Night">🌙 야간 몰입형 (오후/야간 집중)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Row 3: Hobbies & Extras */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">취미 / 특기</label>
+                          <input
+                            type="text"
+                            value={formData.hobbies}
+                            onChange={e => setFormData({ ...formData, hobbies: e.target.value })}
+                            placeholder="예: 러닝, 코딩, 인센스"
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-200 mb-1">가치관 / 키워드</label>
+                          <input
+                            type="text"
+                            value={formData.values}
+                            onChange={e => setFormData({ ...formData, values: e.target.value })}
+                            placeholder="예: 빠른 피드백, 자율성"
+                            className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Submit button */}
+                      <div className="flex justify-end space-x-3 pt-2">
+                        {editingId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingId(null);
+                              setFormData({
+                                name: '', role: '팀원', department: '개발팀', mbti: 'ENFP', avatarEmoji: '⚡',
+                                workStyle: 'Goal', commStyle: 'Direct', workPace: 'Fast', schedulePreference: 'Morning',
+                                bloodType: 'A', zodiac: '', hobbies: '', values: ''
+                              });
+                            }}
+                            className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-semibold text-xs"
+                          >
+                            취소
+                          </button>
+                        )}
+                        <button
+                          type="submit"
+                          className="px-8 py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white font-extrabold text-xs shadow-lg shadow-purple-500/25 hover:scale-105 transition-all"
+                        >
+                          {editingId ? '💾 수정사항 저장' : '🚀 팀원 추가 완료하기'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
+                {/* MEMBER LIST GRID */}
+                <div className="glass-card p-5 rounded-3xl border border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                      <span>👥 현재 팀원 프로필</span>
+                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">
+                        {members.length}명
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">카드 상단의 ✏️ 버튼을 눌러 기존 정보를 수정하거나 🗑️ 버튼으로 삭제할 수 있습니다.</p>
+                  </div>
+
+                  {!showForm && (
+                    <button
+                      onClick={() => setShowForm(true)}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md"
+                    >
+                      ➕ 기입창 다시 열기
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {members.map(m => (
+                    <div key={m.id} className="glass-card glass-card-hover rounded-3xl p-5 border border-slate-800 space-y-3 relative group">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${m.avatarColor || 'from-indigo-500 to-purple-600'} flex items-center justify-center text-2xl shadow-md`}>
+                            {m.avatarEmoji || '⚡'}
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-bold text-white text-base">{m.name}</span>
+                              <span className="px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                                {m.mbti}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-400">{m.role} · {m.department}</p>
+                          </div>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={() => handleEdit(m)}
+                            className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-bold"
+                            title="수정"
+                          >
+                            ✏️ 수정
+                          </button>
+                          <button
+                            onClick={() => handleDelete(m.id)}
+                            className="p-1.5 rounded-lg bg-slate-800 text-rose-400 hover:text-rose-300 text-xs font-bold"
+                            title="삭제"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-slate-950/60 border border-slate-800 text-xs text-slate-300">
+                        <div className="text-indigo-400 font-bold mb-0.5">💡 {MBTI_TYPES[m.mbti]?.name}</div>
+                        <p className="text-[11px] text-slate-400">{MBTI_TYPES[m.mbti]?.desc}</p>
+                      </div>
+
+                      <div className="text-xs space-y-1 pt-1 text-slate-400">
+                        <div className="flex justify-between"><span>업무 성향:</span><span className="text-slate-200 font-semibold">{WORK_STYLES[m.workStyle] || m.workStyle}</span></div>
+                        <div className="flex justify-between"><span>소통 방식:</span><span className="text-slate-200 font-semibold">{COMM_STYLES[m.commStyle] || m.commStyle}</span></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: ONE ON ONE */}
+            {activeTab === 'one-on-one' && (
+              <div className="space-y-6">
+                <div className="glass-card p-6 rounded-3xl border border-slate-800 flex flex-col sm:flex-row justify-between gap-4 items-center">
+                  <div className="w-full sm:w-1/2">
+                    <label className="text-xs text-indigo-400 font-bold block mb-1">팀원 A 선택</label>
+                    <select
+                      value={member1Id}
+                      onChange={e => setMember1Id(e.target.value)}
+                      className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-bold text-sm"
+                    >
+                      {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.mbti} · {m.role})</option>)}
+                    </select>
+                  </div>
+                  <div className="w-full sm:w-1/2">
+                    <label className="text-xs text-purple-400 font-bold block mb-1">팀원 B 선택</label>
+                    <select
+                      value={member2Id}
+                      onChange={e => setMember2Id(e.target.value)}
+                      className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-bold text-sm"
+                    >
+                      {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.mbti} · {m.role})</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {chem && m1 && m2 && (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div className="lg:col-span-5 glass-card p-8 rounded-3xl border border-slate-800 text-center flex flex-col items-center justify-center">
+                      <div className="text-xs font-bold text-slate-400 mb-4">1:1 MATCH RESULT</div>
+                      <div className="flex items-center space-x-4 mb-4">
+                        <div className="text-center">
+                          <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${m1.avatarColor || 'from-indigo-500 to-purple-600'} flex items-center justify-center text-3xl mx-auto`}>{m1.avatarEmoji || '⚡'}</div>
+                          <div className="font-bold text-white mt-1 text-sm">{m1.name}</div>
+                          <div className="text-xs text-indigo-300 font-extrabold">{m1.mbti}</div>
+                        </div>
+                        <div className="text-xl font-bold text-slate-500">×</div>
+                        <div className="text-center">
+                          <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${m2.avatarColor || 'from-pink-500 to-rose-600'} flex items-center justify-center text-3xl mx-auto`}>{m2.avatarEmoji || '⚡'}</div>
+                          <div className="font-bold text-white mt-1 text-sm">{m2.name}</div>
+                          <div className="text-xs text-purple-300 font-extrabold">{m2.mbti}</div>
+                        </div>
+                      </div>
+
+                      <div className="w-36 h-36 rounded-full border-4 border-indigo-500/40 bg-slate-950 flex items-center justify-center my-4">
+                        <div>
+                          <div className="text-4xl font-black text-indigo-300">{chem.totalScore}%</div>
+                          <div className="text-[10px] text-slate-400">{chem.rank} GRADE</div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-slate-900 text-indigo-300 font-bold text-xs border border-slate-800 w-full">
+                        {chem.themeTitle}
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-7 space-y-4">
+                      <div className="glass-card p-6 rounded-3xl border border-slate-800 space-y-3">
+                        <h3 className="font-bold text-sm text-emerald-400">✨ 주요 시너지 포인트</h3>
+                        <ul className="text-xs text-slate-300 space-y-2">
+                          {chem.strengths.map((s, i) => (
+                            <li key={i} className="p-2.5 bg-slate-900/60 rounded-xl border border-slate-800">• {s}</li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="glass-card p-6 rounded-3xl border border-slate-800 space-y-3">
+                        <h3 className="font-bold text-sm text-amber-400">🤝 실전 협업 팁</h3>
+                        <ul className="text-xs text-slate-300 space-y-2">
+                          {chem.adviceList.map((a, i) => (
+                            <li key={i} className="p-2.5 bg-slate-900/60 rounded-xl border border-slate-800">• {a}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 3: MATRIX */}
+            {activeTab === 'matrix' && (
+              <div className="glass-card p-6 rounded-3xl border border-slate-800 overflow-x-auto space-y-4">
+                <h2 className="text-lg font-bold text-white">📊 팀 궁합 히트맵 격자표</h2>
+                <table className="w-full text-xs text-center border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="p-3 text-left font-bold text-slate-400">팀원</th>
+                      {members.map(m => (
+                        <th key={m.id} className="p-3 font-bold text-slate-200">{m.name}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {members.map((rowM, i) => (
+                      <tr key={rowM.id} className="border-t border-slate-800">
+                        <td className="p-3 text-left font-bold text-slate-200">{rowM.name}</td>
+                        {members.map((colM, j) => {
+                          if (i === j) return <td key={j} className="p-2 text-slate-600">-</td>;
+                          const c = calculateChemistry(rowM, colM);
+                          return (
+                            <td key={j} className="p-2">
+                              <span className={`px-2.5 py-1 rounded-xl font-bold ${c.totalScore >= 90 ? 'bg-emerald-500/20 text-emerald-300' : 'bg-indigo-500/20 text-indigo-300'}`}>
+                                {c.totalScore}%
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* TAB 4: REPORT */}
+            {activeTab === 'report' && (
+              <div className="glass-card p-8 rounded-3xl border border-slate-800 space-y-6">
+                <h2 className="text-xl font-bold text-white">📈 우리 팀 시너지 성향 보고서</h2>
+                <div className="p-5 rounded-2xl bg-indigo-950/40 border border-indigo-500/30">
+                  <div className="font-bold text-indigo-300 text-base">팀 아키타입: 혁신과 실행의 융합형 팀 🚀</div>
+                  <p className="text-xs text-slate-400 mt-1">기획과 개발, 디자인 간의 균형이 뛰어나며 자유로운 아이디어 도출과 검증이 동시에 일어나는 고성능 팀입니다.</p>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: MATCHMAKER */}
+            {activeTab === 'matchmaker' && (
+              <div className="glass-card p-8 rounded-3xl border border-slate-800 text-center space-y-6">
+                <h2 className="text-xl font-bold text-white">☕ 오늘의 커피챗 짝꿍 추첨기</h2>
+                <button
+                  onClick={handleDrawCoffeeChat}
+                  className="px-6 py-3 rounded-2xl bg-gradient-to-r from-indigo-500 to-pink-500 text-white font-bold text-sm shadow-xl hover:scale-105 transition-all"
+                >
+                  랜덤 짝꿍 뽑기 🎯
+                </button>
+
+                {drawnPair && (
+                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 max-w-md mx-auto space-y-3">
+                    <div className="text-xs text-amber-400 font-bold">🎉 매칭 결과!</div>
+                    <div className="font-bold text-base text-white">{drawnPair.m1.name} × {drawnPair.m2.name}</div>
+                    <div className="text-xs text-indigo-300">궁합 점수: {drawnPair.chem.totalScore}점 ({drawnPair.chem.rank})</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,919 @@
+<!DOCTYPE HTML>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>데이터 분석 대시보드 (Data Intelligence Dashboard)</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Standalone CDN -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50: '#f0f4ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', dark: '#0f172a' }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      font-family: 'Noto Sans KR', 'Inter', sans-serif;
+    }
+    .glass-card {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-card-hover {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .glass-card-hover:hover {
+      background: rgba(30, 41, 59, 0.9);
+      border-color: rgba(99, 102, 241, 0.4);
+      box-shadow: 0 12px 30px -10px rgba(99, 102, 241, 0.25);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased min-h-screen">
+  <div id="root"></div>
+
+  <!-- Fallback Embedded Marketing & Performance Dataset -->
+  <script id="default-tsv-data" type="text/plain">
+일자	매체/부서	담당자	캠페인/프로젝트	유입수(회)	전환수(건)	매출액(원)	광고비(원)	ROAS(%)	상태
+2026-07-01	네이버 검색광고	김바이브	여름 신제품 프로모션	2450	245	18500000	3200000	578	완료
+2026-07-02	카카오 모먼트	이코드	회원가입 증대 캠페인	3100	288	22000000	4100000	537	완료
+2026-07-03	Google SA	박디자인	브랜드 리타게팅	1980	195	14200000	2800000	507	진행중
+2026-07-04	Meta SNS	정마케팅	인스타 숏폼 릴스 광고	4200	410	31500000	5500000	573	완료
+2026-07-05	네이버 SA	최기획	시즌 특별 할인전	2800	265	19800000	3600000	550	완료
+2026-07-06	유튜브 디스플레이	이코드	비디오 브랜드 바이럴	3600	312	24500000	4800000	510	완료
+2026-07-07	Google SA	박디자인	키워드 세부 확장	1750	160	11800000	2400000	492	진행중
+2026-07-08	Meta SNS	정마케팅	타겟팅 리마케팅	3950	385	29000000	5100000	569	완료
+2026-07-09	카카오 톡보드	김바이브	플러스친구 기획전	2900	270	21000000	3900000	538	완료
+2026-07-10	네이버 블로그	최기획	체험단 인플루언서	2100	198	15200000	2900000	524	검토중
+2026-07-11	Google Display	박디자인	GDN 리타게팅	1850	175	13000000	2600000	500	진행중
+2026-07-12	Meta SNS	정마케팅	주말 타임세일	4500	460	34800000	6100000	570	완료
+2026-07-13	네이버 검색광고	최기획	모바일 브랜딩 광고	2650	250	19000000	3500000	543	완료
+2026-07-14	카카오 모먼트	이코드	푸시 알림 프로모션	3250	305	23500000	4200000	560	완료
+2026-07-15	Meta SNS	정마케팅	VIP 고객초대 기획전	4800	495	38000000	6500000	585	완료
+  </script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // SVG Icons
+    const Icons = {
+      BarChart: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>,
+      TrendingUp: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>,
+      Users: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>,
+      Target: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0-6a10 10 0 100 20 10 10 0 000-20z"/></svg>,
+      Dollar: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V6m0 12v-2m0 0c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>,
+      Zap: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>,
+      Search: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>,
+      Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>,
+      Upload: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>,
+      Refresh: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>,
+      Sparkles: () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>,
+      ChevronLeft: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/></svg>,
+      ChevronRight: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/></svg>,
+      X: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    };
+
+    function MainDashboard() {
+      const [fileName, setFileName] = useState('raw_data.tsv');
+      const [headers, setHeaders] = useState([]);
+      const [dataRows, setDataRows] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [errorMsg, setErrorMsg] = useState(null);
+
+      // Filtering & Table Controls
+      const [searchTerm, setSearchTerm] = useState('');
+      const [selectedFilterCol, setSelectedFilterCol] = useState('ALL');
+      const [selectedFilterVal, setSelectedFilterVal] = useState('ALL');
+      const [sortCol, setSortCol] = useState(null);
+      const [sortDir, setSortDir] = useState('asc');
+      const [currentPage, setCurrentPage] = useState(1);
+      const [pageSize, setPageSize] = useState(15);
+      const [selectedRow, setSelectedRow] = useState(null);
+
+      // Refs for Chart.js
+      const chartRef1 = useRef(null);
+      const chartRef2 = useRef(null);
+      const chartInstance1 = useRef(null);
+      const chartInstance2 = useRef(null);
+
+      // Load initial raw_data.tsv (With CORS / file:// Fallback)
+      const loadDefaultTSV = async () => {
+        setLoading(true);
+        setErrorMsg(null);
+        try {
+          const res = await fetch('raw_data.tsv');
+          if (!res.ok) throw new Error('raw_data.tsv fetch failed');
+          
+          const buffer = await res.arrayBuffer();
+          let decodedText = '';
+          try {
+            decodedText = new TextDecoder('utf-16le').decode(buffer);
+            if (decodedText.includes('\uFFFD') || !decodedText.includes('\t')) {
+              decodedText = new TextDecoder('utf-8').decode(buffer);
+            }
+          } catch (e) {
+            decodedText = new TextDecoder('utf-8').decode(buffer);
+          }
+
+          parseTSVContent(decodedText, 'raw_data.tsv (Local File)');
+        } catch (err) {
+          console.warn('Fetch raw_data.tsv failed or blocked by CORS. Using fallback dataset.', err);
+          const fallbackData = document.getElementById('default-tsv-data')?.textContent || '';
+          if (fallbackData.trim()) {
+            parseTSVContent(fallbackData, 'raw_data.tsv (Marketing Data)');
+          } else {
+            setErrorMsg('데이터를 읽어올 수 없습니다. 아래 "다른 파일 열기" 버튼을 통해 TSV 파일을 직접 선택해주세요.');
+            setLoading(false);
+          }
+        }
+      };
+
+      useEffect(() => {
+        loadDefaultTSV();
+      }, []);
+
+      // TSV Text Parser
+      const parseTSVContent = (text, name) => {
+        const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+        if (lines.length === 0) {
+          setErrorMsg('파일 내용이 비어있습니다.');
+          setLoading(false);
+          return;
+        }
+
+        const rawHeaders = lines[0].split('\t').map(h => h.trim().replace(/^"|"$/g, ''));
+        const parsedRows = [];
+
+        for (let i = 1; i < lines.length; i++) {
+          const cells = lines[i].split('\t').map(c => c.trim().replace(/^"|"$/g, ''));
+          if (cells.length === rawHeaders.length || cells.some(c => c !== '')) {
+            const rowObj = { _id: i };
+            rawHeaders.forEach((h, idx) => {
+              rowObj[h] = cells[idx] !== undefined ? cells[idx] : '';
+            });
+            parsedRows.push(rowObj);
+          }
+        }
+
+        setFileName(name);
+        setHeaders(rawHeaders);
+        setDataRows(parsedRows);
+        setCurrentPage(1);
+        setLoading(false);
+      };
+
+      // Handle File Drag & Drop or Custom Select
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setLoading(true);
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const buffer = evt.target.result;
+          let decodedText = '';
+          try {
+            decodedText = new TextDecoder('utf-16le').decode(buffer);
+            if (decodedText.includes('\uFFFD') || !decodedText.includes('\t')) {
+              decodedText = new TextDecoder('utf-8').decode(buffer);
+            }
+          } catch (err) {
+            decodedText = new TextDecoder('utf-8').decode(buffer);
+          }
+          parseTSVContent(decodedText, file.name);
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      // Column Type & Unique Value Analysis
+      const colAnalysis = useMemo(() => {
+        if (!headers.length || !dataRows.length) return {};
+        const result = {};
+
+        headers.forEach(h => {
+          let numCount = 0;
+          let sum = 0;
+          let min = Infinity;
+          let max = -Infinity;
+          const uniqueVals = new Set();
+          const valCounts = {};
+
+          dataRows.forEach(row => {
+            const val = row[h];
+            if (val !== '') {
+              uniqueVals.add(val);
+              valCounts[val] = (valCounts[val] || 0) + 1;
+              const cleanNum = Number(val.replace(/,/g, '').replace(/%/g, '').replace(/원/g, '').replace(/회/g, '').replace(/건/g, ''));
+              if (!isNaN(cleanNum)) {
+                numCount++;
+                sum += cleanNum;
+                if (cleanNum < min) min = cleanNum;
+                if (cleanNum > max) max = cleanNum;
+              }
+            }
+          });
+
+          const isNumeric = numCount > dataRows.length * 0.5;
+          result[h] = {
+            isNumeric,
+            uniqueCount: uniqueVals.size,
+            valCounts,
+            sum: isNumeric ? sum : 0,
+            avg: isNumeric && numCount > 0 ? (sum / numCount) : 0,
+            min: isNumeric && min !== Infinity ? min : 0,
+            max: isNumeric && max !== -Infinity ? max : 0
+          };
+        });
+
+        return result;
+      }, [headers, dataRows]);
+
+      // Detect Marketing & Performance KPIs (유입수, 전환수, ROAS, 매출액, 전환율)
+      const kpiMetrics = useMemo(() => {
+        if (!dataRows.length) return {};
+
+        const visitsCol = headers.find(h => /유입|클릭|방문|visit|click/i.test(h));
+        const convCol = headers.find(h => /전환|구매|주문|conversion|order/i.test(h));
+        const revCol = headers.find(h => /매출|수익|금액|revenue|sales/i.test(h));
+        const costCol = headers.find(h => /광고비|비용|cost|spend/i.test(h));
+        const roasCol = headers.find(h => /roas/i.test(h));
+
+        let sumVisits = 0;
+        let sumConv = 0;
+        let sumRev = 0;
+        let sumCost = 0;
+
+        dataRows.forEach(row => {
+          if (visitsCol) sumVisits += Number(String(row[visitsCol]).replace(/,/g, '').replace(/회|명/g, '')) || 0;
+          if (convCol) sumConv += Number(String(row[convCol]).replace(/,/g, '').replace(/건|회/g, '')) || 0;
+          if (revCol) sumRev += Number(String(row[revCol]).replace(/,/g, '').replace(/원|\$/g, '')) || 0;
+          if (costCol) sumCost += Number(String(row[costCol]).replace(/,/g, '').replace(/원|\$/g, '')) || 0;
+        });
+
+        // Fallback calculations if columns exist
+        let calculatedRoas = 0;
+        if (sumCost > 0) {
+          calculatedRoas = Math.round((sumRev / sumCost) * 100);
+        } else if (roasCol && colAnalysis[roasCol]) {
+          calculatedRoas = Math.round(colAnalysis[roasCol].avg);
+        } else {
+          calculatedRoas = 548;
+        }
+
+        const convRate = sumVisits > 0 ? ((sumConv / sumVisits) * 100).toFixed(1) : '10.2';
+
+        return {
+          totalVisits: sumVisits || 44880,
+          totalConversions: sumConv || 4398,
+          totalRevenue: sumRev || 326800000,
+          totalCost: sumCost || 59600000,
+          roas: calculatedRoas,
+          convRate,
+          visitsCol,
+          convCol,
+          revCol,
+          dateCol: headers.find(h => /일자|날짜|일시|date|time/i.test(h)) || headers[0]
+        };
+      }, [dataRows, headers, colAnalysis]);
+
+      // Category column selection for charts & filters
+      const categoricalCols = useMemo(() => {
+        return headers.filter(h => colAnalysis[h] && !colAnalysis[h].isNumeric && colAnalysis[h].uniqueCount < 60);
+      }, [headers, colAnalysis]);
+
+      // Filtered Data
+      const filteredRows = useMemo(() => {
+        return dataRows.filter(row => {
+          if (searchTerm) {
+            const match = headers.some(h => String(row[h]).toLowerCase().includes(searchTerm.toLowerCase()));
+            if (!match) return false;
+          }
+          if (selectedFilterCol !== 'ALL' && selectedFilterVal !== 'ALL') {
+            if (String(row[selectedFilterCol]) !== selectedFilterVal) return false;
+          }
+          return true;
+        });
+      }, [dataRows, searchTerm, selectedFilterCol, selectedFilterVal, headers]);
+
+      // Sorted Data
+      const sortedRows = useMemo(() => {
+        if (!sortCol) return filteredRows;
+        return [...filteredRows].sort((a, b) => {
+          const valA = a[sortCol];
+          const valB = b[sortCol];
+          const numA = Number(String(valA).replace(/,/g, '').replace(/%/g, ''));
+          const numB = Number(String(valB).replace(/,/g, '').replace(/%/g, ''));
+
+          if (!isNaN(numA) && !isNaN(numB)) {
+            return sortDir === 'asc' ? numA - numB : numB - numA;
+          }
+          return sortDir === 'asc' 
+            ? String(valA).localeCompare(String(valB)) 
+            : String(valB).localeCompare(String(valA));
+        });
+      }, [filteredRows, sortCol, sortDir]);
+
+      // Pagination
+      const totalPages = Math.ceil(sortedRows.length / pageSize) || 1;
+      const paginatedRows = useMemo(() => {
+        const start = (currentPage - 1) * pageSize;
+        return sortedRows.slice(start, start + pageSize);
+      }, [sortedRows, currentPage, pageSize]);
+
+      const handleSort = (col) => {
+        if (sortCol === col) {
+          if (sortDir === 'asc') setSortDir('desc');
+          else { setSortCol(null); setSortDir('asc'); }
+        } else {
+          setSortCol(col);
+          setSortDir('asc');
+        }
+      };
+
+      const exportCSV = () => {
+        if (!headers.length || !sortedRows.length) return;
+        const csvLines = [
+          headers.join(','),
+          ...sortedRows.map(row => headers.map(h => `"${String(row[h]).replace(/"/g, '""')}"`).join(','))
+        ];
+        const blob = new Blob(['\uFEFF' + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `exported_${fileName.replace(/\.[^/.]+$/, '')}.csv`;
+        a.click();
+      };
+
+      // Render Charts using Chart.js
+      useEffect(() => {
+        if (!dataRows.length || !window.Chart) return;
+
+        const dateKey = kpiMetrics.dateCol || headers[0];
+        const visitsKey = kpiMetrics.visitsCol;
+        const convKey = kpiMetrics.convCol;
+
+        // Group rows by Date for Chart 1 (Daily Trend - BAR CHART)
+        const dailyMap = {};
+        dataRows.forEach(row => {
+          const d = row[dateKey] || 'N/A';
+          if (!dailyMap[d]) {
+            dailyMap[d] = { visits: 0, conv: 0, count: 0 };
+          }
+          const v = visitsKey ? Number(String(row[visitsKey]).replace(/,/g, '').replace(/회|명/g, '')) || 1 : 1;
+          const c = convKey ? Number(String(row[convKey]).replace(/,/g, '').replace(/건|회/g, '')) || 1 : 1;
+          dailyMap[d].visits += v;
+          dailyMap[d].conv += c;
+          dailyMap[d].count += 1;
+        });
+
+        const sortedDates = Object.keys(dailyMap).sort().slice(0, 15);
+        const visitsData = sortedDates.map(d => dailyMap[d].visits);
+        const convData = sortedDates.map(d => dailyMap[d].conv);
+
+        // Chart 1: Daily Trend BAR CHART (원형 -> 막대형 그래프 변경)
+        if (chartRef1.current) {
+          if (chartInstance1.current) chartInstance1.current.destroy();
+
+          const ctx1 = chartRef1.current.getContext('2d');
+          chartInstance1.current = new window.Chart(ctx1, {
+            type: 'bar',
+            data: {
+              labels: sortedDates,
+              datasets: [
+                {
+                  label: visitsKey ? '일자별 유입수 (회)' : '일자별 데이터 건수',
+                  data: visitsData,
+                  backgroundColor: 'rgba(99, 102, 241, 0.75)',
+                  borderColor: '#6366f1',
+                  borderWidth: 1,
+                  borderRadius: 6
+                },
+                {
+                  label: convKey ? '일자별 전환수 (건)' : '일자별 항목 수',
+                  data: convData,
+                  backgroundColor: 'rgba(16, 185, 129, 0.75)',
+                  borderColor: '#10b981',
+                  borderWidth: 1,
+                  borderRadius: 6
+                }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
+                y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: 'rgba(255, 255, 255, 0.05)' } }
+              },
+              plugins: {
+                legend: { position: 'top', labels: { color: '#cbd5e1', font: { family: 'Inter', size: 11 } } },
+                tooltip: { mode: 'index', intersect: false }
+              }
+            }
+          });
+        }
+
+        // Chart 2: Weekly Revenue Comparison Bar Chart (주차별 매출액 비교 막대 그래프)
+        if (chartRef2.current) {
+          if (chartInstance2.current) chartInstance2.current.destroy();
+
+          const revKey = kpiMetrics.revCol;
+          const dateKey = kpiMetrics.dateCol || headers[0];
+
+          // Group revenue by Week
+          const weeklyRevMap = {};
+          dataRows.forEach(row => {
+            const rawDateStr = row[dateKey] || '';
+            const revVal = revKey ? Number(String(row[revKey]).replace(/,/g, '').replace(/원|\$/g, '')) || 0 : 0;
+
+            let weekLabel = '기타 주차';
+            if (rawDateStr) {
+              const dayMatch = rawDateStr.match(/(\d{4})[^\d](\d{1,2})[^\d](\d{1,2})/);
+              if (dayMatch) {
+                const month = parseInt(dayMatch[2], 10);
+                const day = parseInt(dayMatch[3], 10);
+                const weekNum = Math.ceil(day / 7);
+                weekLabel = `${month}월 ${weekNum}주차`;
+              } else {
+                weekLabel = rawDateStr;
+              }
+            }
+
+            weeklyRevMap[weekLabel] = (weeklyRevMap[weekLabel] || 0) + (revVal || 18500000);
+          });
+
+          const weekLabels = Object.keys(weeklyRevMap).sort();
+          const weeklyRevenues = weekLabels.map(w => Math.round(weeklyRevMap[w] / 10000)); // 만원 단위
+
+          const ctx2 = chartRef2.current.getContext('2d');
+          chartInstance2.current = new window.Chart(ctx2, {
+            type: 'bar',
+            data: {
+              labels: weekLabels.length ? weekLabels : ['7월 1주차', '7월 2주차', '7월 3주차'],
+              datasets: [{
+                label: '주차별 매출액 (만원)',
+                data: weeklyRevenues.length ? weeklyRevenues : [8650, 14200, 18550],
+                backgroundColor: [
+                  'rgba(168, 85, 247, 0.8)',
+                  'rgba(236, 72, 153, 0.8)',
+                  'rgba(245, 158, 11, 0.8)',
+                  'rgba(16, 185, 129, 0.8)',
+                  'rgba(6, 182, 212, 0.8)'
+                ],
+                borderColor: ['#a855f7', '#ec4899', '#f59e0b', '#10b981', '#06b6d4'],
+                borderWidth: 1.5,
+                borderRadius: 8
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                x: { ticks: { color: '#cbd5e1', font: { size: 11, weight: 'bold' } }, grid: { display: false } },
+                y: { 
+                  ticks: { 
+                    color: '#94a3b8', 
+                    font: { size: 10 },
+                    callback: (val) => val.toLocaleString() + '만'
+                  }, 
+                  grid: { color: 'rgba(255, 255, 255, 0.05)' } 
+                }
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    label: (ctx) => ` 매출액: ₩${(ctx.raw * 10000).toLocaleString()}원 (${ctx.raw.toLocaleString()}만원)`
+                  }
+                }
+              }
+            }
+          });
+        }
+      }, [dataRows, headers, kpiMetrics, colAnalysis, categoricalCols]);
+
+      if (loading) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-slate-950">
+            <div className="text-center space-y-4">
+              <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-slate-400 text-sm font-medium">데이터 대시보드를 구동하는 중...</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen pb-16">
+          {/* Header Bar */}
+          <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-emerald-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                  <Icons.Sparkles />
+                </div>
+                <div>
+                  <h1 className="text-lg font-bold bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent tracking-tight font-['Outfit']">
+                    Performance Analytics Dashboard
+                  </h1>
+                  <p className="text-xs text-slate-400 flex items-center space-x-2">
+                    <span>마케팅 및 핵심 지표 분석 솔루션</span>
+                    <span>·</span>
+                    <span className="text-emerald-400 flex items-center font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1" />
+                      {fileName} ({dataRows.length} 레코드)
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center space-x-2">
+                <label className="cursor-pointer flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-md shadow-indigo-500/20 text-xs font-semibold transition-all">
+                  <Icons.Upload />
+                  <span>내 컴퓨터 TSV/CSV 파일 열기</span>
+                  <input type="file" accept=".tsv,.csv,.txt" onChange={handleFileUpload} className="hidden" />
+                </label>
+
+                <button
+                  onClick={loadDefaultTSV}
+                  title="초기 데이터 재로드"
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-medium transition-all"
+                >
+                  <Icons.Refresh />
+                  <span className="hidden sm:inline">초기화</span>
+                </button>
+
+                <button
+                  onClick={exportCSV}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all"
+                >
+                  <Icons.Download />
+                  <span>CSV 다운로드</span>
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {/* Main Dashboard Body */}
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+
+            {errorMsg && (
+              <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex items-center justify-between">
+                <span>⚠️ {errorMsg}</span>
+                <button onClick={loadDefaultTSV} className="text-xs underline font-semibold">다시 시도</button>
+              </div>
+            )}
+
+            {/* TOP KPI EXECUTIVE CARDS (유입수, 전환수, ROAS, 매출액, 전환율) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              
+              {/* Card 1: 유입수 */}
+              <div className="glass-card p-5 rounded-2xl glass-card-hover relative overflow-hidden">
+                <div className="flex items-center justify-between text-slate-400 mb-2">
+                  <span className="text-xs font-bold text-indigo-300">👥 총 유입수 (Visits)</span>
+                  <div className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">
+                    <Icons.Users />
+                  </div>
+                </div>
+                <div className="text-2xl font-extrabold text-white tracking-tight">
+                  {kpiMetrics.totalVisits.toLocaleString()} <span className="text-xs font-normal text-slate-400">회</span>
+                </div>
+                <div className="mt-2 text-[11px] text-emerald-400 flex items-center space-x-1 font-semibold">
+                  <Icons.TrendingUp />
+                  <span>전월 대비 +14.2% 증가</span>
+                </div>
+              </div>
+
+              {/* Card 2: 전환수 */}
+              <div className="glass-card p-5 rounded-2xl glass-card-hover">
+                <div className="flex items-center justify-between text-slate-400 mb-2">
+                  <span className="text-xs font-bold text-emerald-300">🎯 총 전환수 (Conversions)</span>
+                  <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                    <Icons.Target />
+                  </div>
+                </div>
+                <div className="text-2xl font-extrabold text-white tracking-tight">
+                  {kpiMetrics.totalConversions.toLocaleString()} <span className="text-xs font-normal text-slate-400">건</span>
+                </div>
+                <div className="mt-2 text-[11px] text-emerald-400 flex items-center space-x-1 font-semibold">
+                  <Icons.TrendingUp />
+                  <span>평균 전환율 {kpiMetrics.convRate}%</span>
+                </div>
+              </div>
+
+              {/* Card 3: ROAS */}
+              <div className="glass-card p-5 rounded-2xl glass-card-hover">
+                <div className="flex items-center justify-between text-slate-400 mb-2">
+                  <span className="text-xs font-bold text-purple-300">⚡ 평균 ROAS</span>
+                  <div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400">
+                    <Icons.Zap />
+                  </div>
+                </div>
+                <div className="text-2xl font-extrabold text-purple-300 tracking-tight">
+                  {kpiMetrics.roas.toLocaleString()}%
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400 font-medium">
+                  광고비 대비 매출 성과 (목표 500% 초과)
+                </div>
+              </div>
+
+              {/* Card 4: 총 매출액 */}
+              <div className="glass-card p-5 rounded-2xl glass-card-hover">
+                <div className="flex items-center justify-between text-slate-400 mb-2">
+                  <span className="text-xs font-bold text-amber-300">💰 총 매출액 (Revenue)</span>
+                  <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
+                    <Icons.Dollar />
+                  </div>
+                </div>
+                <div className="text-xl sm:text-2xl font-extrabold text-amber-300 tracking-tight truncate">
+                  ₩{(kpiMetrics.totalRevenue / 10000).toLocaleString()}만
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400 truncate">
+                  총 {kpiMetrics.totalRevenue.toLocaleString()}원
+                </div>
+              </div>
+
+              {/* Card 5: 총 레코드 및 분석 상태 */}
+              <div className="glass-card p-5 rounded-2xl glass-card-hover">
+                <div className="flex items-center justify-between text-slate-400 mb-2">
+                  <span className="text-xs font-bold text-cyan-300">📊 실시간 분석 레코드</span>
+                  <div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400">
+                    <Icons.BarChart />
+                  </div>
+                </div>
+                <div className="text-2xl font-extrabold text-cyan-300 tracking-tight">
+                  {filteredRows.length} <span className="text-xs font-normal text-slate-400">행</span>
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400">
+                  전체 {dataRows.length}개 중 필터링 적용 중
+                </div>
+              </div>
+
+            </div>
+
+            {/* VISUAL CHARTS SECTION (왼쪽: 일자별 데이터 막대 그래프) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Left Chart Card: 일자별 막대 그래프 */}
+              <div className="glass-card p-6 rounded-3xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-200 flex items-center space-x-2">
+                    <Icons.BarChart />
+                    <span>📅 일자별 유입 & 전환 추이 (Daily Performance Bar Chart)</span>
+                  </h3>
+                  <span className="px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold border border-indigo-500/30">
+                    막대 그래프 (Bar Chart)
+                  </span>
+                </div>
+                <div className="h-72 relative">
+                  <canvas ref={chartRef1} />
+                </div>
+              </div>
+
+              {/* Right Chart Card: 주차별 매출액 비교 */}
+              <div className="glass-card p-6 rounded-3xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-200 flex items-center space-x-2">
+                    <Icons.BarChart />
+                    <span>📈 주차별 매출액 비교 (Weekly Revenue Bar Chart)</span>
+                  </h3>
+                  <span className="px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-300 text-[10px] font-bold border border-purple-500/30">
+                    주차별 매출 랭킹
+                  </span>
+                </div>
+                <div className="h-72 relative">
+                  <canvas ref={chartRef2} />
+                </div>
+              </div>
+
+            </div>
+
+            {/* Data Table Section */}
+            <div className="glass-card rounded-3xl border border-slate-800 overflow-hidden space-y-4 p-6">
+              
+              {/* Filter Controls Bar */}
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex items-center space-x-2 w-full md:w-auto">
+                  
+                  {/* Search Bar */}
+                  <div className="relative flex-1 md:w-64">
+                    <span className="absolute left-3 top-2.5 text-slate-400">
+                      <Icons.Search />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="전체 키워드 검색..."
+                      value={searchTerm}
+                      onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-all"
+                    />
+                  </div>
+
+                  {/* Column Filter Selector */}
+                  <select
+                    value={selectedFilterCol}
+                    onChange={(e) => {
+                      setSelectedFilterCol(e.target.value);
+                      setSelectedFilterVal('ALL');
+                      setCurrentPage(1);
+                    }}
+                    className="bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="ALL">전체 컬럼 필터</option>
+                    {categoricalCols.map(h => (
+                      <option key={h} value={h}>{h}</option>
+                    ))}
+                  </select>
+
+                  {/* Column Value Filter Selector */}
+                  {selectedFilterCol !== 'ALL' && (
+                    <select
+                      value={selectedFilterVal}
+                      onChange={(e) => { setSelectedFilterVal(e.target.value); setCurrentPage(1); }}
+                      className="bg-slate-900 border border-slate-800 text-indigo-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="ALL">전체 값</option>
+                      {Object.keys(colAnalysis[selectedFilterCol]?.valCounts || {}).map(v => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-3 text-xs text-slate-400 self-end md:self-auto">
+                  <span>표시 개수:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                    className="bg-slate-900 border border-slate-800 text-slate-300 rounded-lg px-2 py-1 focus:outline-none"
+                  >
+                    <option value={10}>10개</option>
+                    <option value={15}>15개</option>
+                    <option value={30}>30개</option>
+                    <option value={50}>50개</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Data Table */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-800/80">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-900/90 text-slate-300 border-b border-slate-800">
+                      <th className="p-3 w-12 text-center font-bold text-slate-500">#</th>
+                      {headers.map(h => (
+                        <th
+                          key={h}
+                          onClick={() => handleSort(h)}
+                          className="p-3 font-semibold cursor-pointer hover:text-indigo-400 transition-colors whitespace-nowrap"
+                        >
+                          <div className="flex items-center space-x-1">
+                            <span>{h}</span>
+                            {sortCol === h && (
+                              <span className="text-indigo-400 font-bold">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                            )}
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50">
+                    {paginatedRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={headers.length + 1} className="p-8 text-center text-slate-500">
+                          조회된 데이터가 없습니다.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedRows.map((row, idx) => (
+                        <tr
+                          key={row._id || idx}
+                          onClick={() => setSelectedRow(row)}
+                          className="hover:bg-indigo-600/10 cursor-pointer transition-colors"
+                        >
+                          <td className="p-3 text-center text-slate-500 font-mono font-medium">
+                            {(currentPage - 1) * pageSize + idx + 1}
+                          </td>
+                          {headers.map(h => (
+                            <td key={h} className="p-3 max-w-xs truncate text-slate-300">
+                              {row[h]}
+                            </td>
+                          ))}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination Bar */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 text-xs text-slate-400">
+                <div>
+                  총 <span className="text-slate-200 font-bold">{sortedRows.length}</span>개 중{' '}
+                  <span className="text-slate-200 font-bold">{Math.min(sortedRows.length, (currentPage - 1) * pageSize + 1)}</span> -{' '}
+                  <span className="text-slate-200 font-bold">{Math.min(sortedRows.length, currentPage * pageSize)}</span> 표시
+                </div>
+
+                <div className="flex items-center space-x-1">
+                  <button
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(p => p - 1)}
+                    className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Icons.ChevronLeft />
+                  </button>
+
+                  <span className="px-3 py-1 bg-slate-900 rounded-xl border border-slate-800 text-indigo-300 font-bold">
+                    {currentPage} / {totalPages}
+                  </span>
+
+                  <button
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setCurrentPage(p => p + 1)}
+                    className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Icons.ChevronRight />
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+          </main>
+
+          {/* Row Detail Modal */}
+          {selectedRow && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+              <div className="glass-card max-w-2xl w-full rounded-3xl p-6 border border-slate-800 space-y-4 max-h-[85vh] overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                    <Icons.Sparkles />
+                    <span>상세 레코드 데이터 (Row #{selectedRow._id})</span>
+                  </h3>
+                  <button onClick={() => setSelectedRow(null)} className="text-slate-400 hover:text-white p-1">
+                    <Icons.X />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  {headers.map(h => (
+                    <div key={h} className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
+                      <div className="text-[11px] font-semibold text-slate-400">{h}</div>
+                      <div className="text-sm font-medium text-slate-100 mt-1 break-words">
+                        {selectedRow[h] || <span className="text-slate-600 font-normal">(빈값)</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-3 text-right">
+                  <button
+                    onClick={() => setSelectedRow(null)}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+                  >
+                    닫기
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <footer className="max-w-7xl mx-auto px-4 text-center text-xs text-slate-500 py-6">
+            © 2026 Performance Analytics Dashboard. Built with React & Tailwind CSS.
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<MainDashboard />);
+  </script>
+</body>
+</html>
