@@ -1140,14 +1140,18 @@
         <input id="loginEmail" type="email" placeholder="name@company.com">
       </div>
       <div class="field">
-        <label for="loginName">이름</label>
+        <label for="loginPassword">비밀번호</label>
+        <input id="loginPassword" type="password" placeholder="비밀번호 입력">
+      </div>
+      <div class="field">
+        <label for="loginName">이름 <small class="muted">(최초 접근 신청 시 작성)</small></label>
         <input id="loginName" placeholder="홍길동">
       </div>
       <div class="toolbar">
         <button id="loginBtn" type="button">로그인</button>
         <button id="requestAccessBtn" class="secondary" type="button">접근 신청</button>
       </div>
-      <div class="auth-note">최초 가입(접근 신청)자는 자동으로 <strong>마스터(관리자)</strong> 권한으로 승인되어 즉시 로그인할 수 있습니다. 이후 가입자는 마스터의 승인이 필요합니다.</div>
+      <div class="auth-note">최초 가입(접근 신청)자는 이메일, 비밀번호, 이름을 작성하면 자동으로 <strong>마스터(관리자)</strong>로 등록되며 즉시 로그인됩니다. 이후 사용자는 이메일과 비밀번호로 로그인합니다.</div>
     </div>
   </div>
 
@@ -1535,16 +1539,27 @@
 
     function requestAccess() {
       const email = normalizeEmail($("loginEmail").value);
-      const name = $("loginName").value.trim() || email;
+      const password = $("loginPassword").value.trim();
+      const name = $("loginName").value.trim();
+
       if (!email) {
         alert("이메일을 입력하세요.");
         return;
       }
+      if (!password) {
+        alert("비밀번호를 입력하세요.");
+        return;
+      }
+      if (!name) {
+        alert("이름을 입력하세요.");
+        return;
+      }
+
       const users = getUsers();
       const existing = users.find((user) => user.email === email);
       if (existing) {
         if (existing.status === "approved") {
-          alert("이미 승인된 계정입니다. 로그인하세요.");
+          alert("이미 승인된 계정입니다. 이메일과 비밀번호로 로그인하세요.");
         } else if (existing.status === "rejected") {
           alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
         } else {
@@ -1557,6 +1572,7 @@
       const newUser = {
         email,
         name,
+        password,
         role: isFirstUser ? "master" : "viewer",
         status: isFirstUser ? "approved" : "pending",
         requestedAt: new Date().toISOString()
@@ -1566,31 +1582,50 @@
       setUsers(users);
 
       if (isFirstUser) {
-        alert("첫 번째 가입자로 마스터(관리자) 권한이 자동 부여되어 즉시 승인되었습니다.");
+        alert("첫 번째 가입자로 마스터(관리자) 계정이 자동 승인되었습니다.");
         state.currentUser = newUser;
         sessionStorage.setItem("monitoringCurrentUser", newUser.email);
         applyAuthState();
       } else {
-        alert("접근 신청이 접수되었습니다. 마스터 승인 후 로그인할 수 있습니다.");
+        alert("접근 신청이 접수되었습니다. 마스터 승인 후 이메일과 비밀번호로 로그인할 수 있습니다.");
       }
     }
 
     function login() {
       const email = normalizeEmail($("loginEmail").value);
+      const password = $("loginPassword").value.trim();
+
       if (!email) {
         alert("이메일을 입력하세요.");
         return;
       }
+      if (!password) {
+        alert("비밀번호를 입력하세요.");
+        return;
+      }
+
       const users = getUsers();
       if (!users.length) {
-        alert("등록된 계정이 없습니다. 이메일과 이름을 입력한 후 [접근 신청]을 클릭하여 첫 마스터 계정을 등록하세요.");
+        alert("등록된 계정이 없습니다. 이메일, 비밀번호, 이름을 작성 후 [접근 신청]을 진행해 주세요.");
         return;
       }
+
       const user = users.find((item) => item.email === email);
       if (!user) {
-        alert("등록되지 않은 이메일입니다. [접근 신청]을 진행해 주세요.");
+        alert("등록되지 않은 이메일입니다. 이름과 비밀번호를 작성한 후 [접근 신청]을 진행해 주세요.");
         return;
       }
+
+      if (user.password && user.password !== password) {
+        alert("비밀번호가 일치하지 않습니다.");
+        return;
+      }
+
+      if (!user.password) {
+        user.password = password;
+        setUsers(users);
+      }
+
       if (user.status === "rejected") {
         alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
         return;
@@ -1599,6 +1634,7 @@
         alert("아직 승인되지 않은 계정입니다. 마스터의 승인을 기다려주세요.");
         return;
       }
+
       state.currentUser = user;
       sessionStorage.setItem("monitoringCurrentUser", user.email);
       applyAuthState();
@@ -2588,6 +2624,12 @@
     bindEvent("loginBtn", "click", login);
     bindEvent("requestAccessBtn", "click", requestAccess);
     bindEvent("logoutBtn", "click", logout);
+    bindEvent("loginPassword", "keydown", (e) => {
+      if (e.key === "Enter") login();
+    });
+    bindEvent("loginEmail", "keydown", (e) => {
+      if (e.key === "Enter" && $("loginPassword").value) login();
+    });
 
     restoreSession();
     loadSettings();
