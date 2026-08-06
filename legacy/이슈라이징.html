@@ -1,0 +1,2202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instagram x Naver Keyword Surge Monitor</title>
+  <style>
+    :root {
+      --bg: #f7f9ff;
+      --panel: rgba(255, 255, 255, .92);
+      --panel-strong: #ffffff;
+      --ink: #071733;
+      --muted: #748098;
+      --soft: #eef3ff;
+      --line: #e7ecf5;
+      --brand: #6c5cff;
+      --brand-dark: #4f46e5;
+      --brand-2: #17c8bd;
+      --warn: #ff914d;
+      --danger: #ef4444;
+      --ok: #12b886;
+      --shadow: 0 18px 48px rgba(64, 77, 117, .10);
+      --shadow-soft: 0 10px 24px rgba(80, 96, 132, .07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(108, 92, 255, .13), transparent 28vw),
+        radial-gradient(circle at 86% 10%, rgba(23, 200, 189, .12), transparent 24vw),
+        linear-gradient(180deg, #fbfcff 0%, var(--bg) 48%, #f4f7fd 100%);
+      color: var(--ink);
+      font-family: Pretendard, SUIT, Inter, "Segoe UI", Arial, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      letter-spacing: 0;
+    }
+
+    body.locked header,
+    body.locked main,
+    body.locked .schedule-panel {
+      display: none;
+    }
+
+    .auth-screen {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .auth-card {
+      width: min(520px, 100%);
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255,255,255,.96);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .auth-card h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+    .auth-card p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .auth-note {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 14px;
+      background: #fff7ed;
+      color: #8a4b12;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .user-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.78);
+      color: #24324b;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .user-chip small {
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 92px;
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 24px 22px 8px 318px;
+      color: var(--ink);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 900;
+    }
+
+    header p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .header-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      color: var(--brand-dark);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 24px;
+      padding: 8px 22px 24px;
+      max-width: 1480px;
+      margin: 0 auto;
+    }
+
+    section, aside {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    aside {
+      padding: 20px 18px;
+      align-self: start;
+      position: sticky;
+      top: 18px;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+    }
+
+    .workspace {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 20px;
+    }
+
+    .panel h2, aside h2 {
+      margin: 0 0 16px;
+      font-size: 16px;
+      line-height: 1.25;
+      font-weight: 900;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    label {
+      font-size: 12px;
+      color: #556176;
+      font-weight: 800;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid #dfe6f3;
+      border-radius: 12px;
+      padding: 11px 12px;
+      font: inherit;
+      background: rgba(255, 255, 255, .88);
+      color: var(--ink);
+      outline: none;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, .8) inset;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 4px rgba(108, 92, 255, .14);
+    }
+
+    input[type="file"] {
+      padding: 10px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%);
+    }
+
+    textarea {
+      min-height: 168px;
+      resize: vertical;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #26354f;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      min-height: 40px;
+      padding: 10px 15px;
+      background: linear-gradient(135deg, #5673ff 0%, #7c55ff 100%);
+      color: #fff;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+      box-shadow: 0 12px 24px rgba(92, 93, 255, .24);
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 30px rgba(92, 93, 255, .28);
+    }
+
+    button.secondary {
+      color: #5363ff;
+      background: #f1f4ff;
+      border-color: #e3e8ff;
+      box-shadow: none;
+    }
+
+    button.warning { background: var(--warn); }
+    button.success { background: linear-gradient(135deg, #13c8bb 0%, #40d6a6 100%); }
+
+    button:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .header-date-range {
+      display: flex;
+      align-items: end;
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, .72);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .header-date-range .field {
+      min-width: 142px;
+      margin-bottom: 0;
+      gap: 4px;
+    }
+
+    .header-date-range input {
+      min-height: 36px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+
+    .header-date-range label {
+      font-size: 10px;
+      padding-left: 2px;
+    }
+
+    .schedule-panel {
+      display: none;
+      position: absolute;
+      right: 22px;
+      top: 82px;
+      width: min(420px, calc(100vw - 36px));
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .96);
+      box-shadow: 0 24px 70px rgba(64, 77, 117, .18);
+      backdrop-filter: blur(18px);
+      z-index: 20;
+    }
+
+    .schedule-panel.open {
+      display: block;
+    }
+
+    .schedule-panel h2 {
+      margin: 0 0 14px;
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .schedule-status {
+      margin: 10px 0 0;
+      padding: 10px 12px;
+      border-radius: 13px;
+      background: #f3f6ff;
+      color: #59667d;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .schedule-mode-field[hidden] {
+      display: none;
+    }
+
+    .schedule-times {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .schedule-time-row {
+      display: grid;
+      grid-template-columns: 1fr 38px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .schedule-time-row button {
+      min-height: 38px;
+      width: 38px;
+      padding: 0;
+      border-radius: 11px;
+      box-shadow: none;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .note {
+      border: 1px solid #ede7ff;
+      background: linear-gradient(135deg, #f7f4ff 0%, #eef9ff 100%);
+      padding: 12px;
+      border-radius: 14px;
+      color: #4d5570;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 20px;
+      background:
+        linear-gradient(145deg, rgba(255,255,255,.98) 0%, rgba(247,249,255,.92) 100%);
+      min-height: 118px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .stat::after {
+      content: "";
+      position: absolute;
+      right: 20px;
+      top: 18px;
+      width: 44px;
+      height: 44px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(108,92,255,.22), rgba(23,200,189,.14));
+    }
+
+    .stat b {
+      display: block;
+      font-size: 30px;
+      line-height: 1.1;
+      margin: 16px 0 6px;
+      letter-spacing: 0;
+    }
+
+    #statLastRun {
+      font-size: 22px;
+      line-height: 1.18;
+      white-space: normal;
+    }
+
+    #statLastRun .date-line,
+    #statLastRun .time-line {
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #edf1f7;
+      padding: 14px 12px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    th {
+      color: #7a8498;
+      background: #f7f9fd;
+      font-size: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      max-height: 460px;
+      background: #fff;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 62px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #e8fbf5;
+      color: var(--ok);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .pill.warn {
+      background: #fff0d9;
+      color: #9b4e00;
+    }
+
+    .pill.bad {
+      background: #ffe9e8;
+      color: var(--danger);
+    }
+
+    .trend-chart {
+      display: grid;
+      gap: 12px;
+    }
+
+    .trend-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 1.35fr) minmax(220px, 2fr) 112px;
+      gap: 14px;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #edf1f7;
+    }
+
+    .trend-row:last-child {
+      border-bottom: 0;
+    }
+
+    .trend-name {
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 900;
+      color: #1c2840;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .trend-sub {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .trend-track {
+      position: relative;
+      height: 12px;
+      border-radius: 999px;
+      background: #edf2fb;
+      overflow: hidden;
+    }
+
+    .trend-fill {
+      height: 100%;
+      min-width: 3%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #17c8bd 0%, #6c5cff 100%);
+      box-shadow: 0 8px 18px rgba(108, 92, 255, .20);
+    }
+
+    .trend-value {
+      text-align: right;
+      color: #15213a;
+      font-size: 13px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .trend-empty {
+      padding: 18px;
+      color: var(--muted);
+      border: 1px dashed #dce4f2;
+      border-radius: 16px;
+      background: #fbfcff;
+      font-size: 13px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .section-head h2 {
+      margin: 0;
+    }
+
+    .section-actions {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .download-history {
+      display: grid;
+      gap: 10px;
+      position: absolute;
+      right: 0;
+      top: 48px;
+      width: min(460px, calc(100vw - 40px));
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .98);
+      box-shadow: 0 24px 70px rgba(64, 77, 117, .18);
+      backdrop-filter: blur(18px);
+      z-index: 12;
+    }
+
+    .download-history[hidden] {
+      display: none;
+    }
+
+    .download-history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      color: #15213a;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .download-history-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .download-history-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+    }
+
+    .download-history-name {
+      display: block;
+      color: #1c2840;
+      font-size: 13px;
+      font-weight: 900;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .download-history-meta {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .download-history-empty {
+      padding: 12px;
+      border: 1px dashed #dce4f2;
+      border-radius: 14px;
+      color: var(--muted);
+      background: #fbfcff;
+      font-size: 12px;
+    }
+
+    .log {
+      min-height: 96px;
+      max-height: 180px;
+      overflow: auto;
+      padding: 12px;
+      border-radius: 16px;
+      background: #111827;
+      color: #dce7f7;
+      font: 12px/1.55 Consolas, "Courier New", monospace;
+      white-space: pre-wrap;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .sample {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 8px 0 14px;
+      flex-wrap: wrap;
+    }
+
+    .brand-card {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin-bottom: 22px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      color: #fff;
+      font-weight: 900;
+      background: linear-gradient(135deg, #5aa7ff 0%, #7b55ff 100%);
+      box-shadow: 0 12px 24px rgba(108, 92, 255, .25);
+    }
+
+    .brand-name {
+      display: block;
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .brand-sub {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      padding: 10px 12px;
+      border-radius: 13px;
+      color: #5f6b81;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .nav-item.active {
+      color: var(--brand-dark);
+      background: linear-gradient(135deg, rgba(108, 92, 255, .13), rgba(108, 92, 255, .06));
+      box-shadow: inset 3px 0 0 var(--brand);
+    }
+
+    .nav-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 8px;
+      background: #eef2ff;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .side-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 5px;
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: #f4f7ff;
+    }
+
+    .side-tab {
+      min-height: 36px;
+      padding: 8px 10px;
+      border-radius: 11px;
+      color: #657289;
+      background: transparent;
+      box-shadow: none;
+      font-size: 12px;
+    }
+
+    .side-tab:hover {
+      transform: none;
+      box-shadow: none;
+    }
+
+    .side-tab.active {
+      color: #fff;
+      background: linear-gradient(135deg, #5673ff 0%, #7c55ff 100%);
+      box-shadow: 0 10px 20px rgba(92, 93, 255, .20);
+    }
+
+    .tab-panel[hidden] {
+      display: none;
+    }
+
+    .hidden-data {
+      display: none;
+    }
+
+    .api-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .api-card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, .74);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .api-card-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 11px;
+      font-size: 13px;
+      font-weight: 900;
+      color: #15213a;
+    }
+
+    .api-tag {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #edf1ff;
+      color: var(--brand-dark);
+      font-size: 10px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .admin-card {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid #e4e9ff;
+      border-radius: 16px;
+      background: #fbfcff;
+    }
+
+    .user-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .user-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 112px 78px;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: #fff;
+    }
+
+    .user-row strong,
+    .user-row span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .user-row select {
+      min-height: 36px;
+      padding: 7px 9px;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+
+    .permission-note {
+      display: none;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid #dbe7ff;
+      border-radius: 14px;
+      background: #f4f8ff;
+      color: #4c5a72;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .panel:first-child {
+      border-color: #e5e9ff;
+    }
+
+    .panel:first-child h2::after,
+    .panel:nth-child(2) h2::after,
+    .panel:nth-child(3) h2::after {
+      content: "";
+      display: block;
+      width: 34px;
+      height: 3px;
+      margin-top: 9px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+    }
+
+    @media (max-width: 1040px) {
+      header { padding: 22px 18px 8px; }
+      main { grid-template-columns: 1fr; }
+      aside { position: static; }
+      .grid, .stats, .two { grid-template-columns: 1fr; }
+      .header-date-range {
+        width: 100%;
+        align-items: stretch;
+      }
+      .header-date-range .field {
+        min-width: 0;
+        flex: 1;
+      }
+      .trend-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .trend-value {
+        text-align: left;
+      }
+      .schedule-panel {
+        position: static;
+        margin: 8px 18px 0;
+        width: auto;
+      }
+    }
+  </style>
+</head>
+<body class="locked">
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-card">
+      <span class="header-eyebrow">SECURE ACCESS</span>
+      <h1>네쇼검 이슈라이징 모니터링 솔루션</h1>
+      <p>마스터가 승인한 사용자만 접근할 수 있습니다. 목업에서는 브라우저 저장소 기준으로 승인/권한 흐름을 확인합니다.</p>
+      <div class="field">
+        <label for="loginEmail">이메일</label>
+        <input id="loginEmail" type="email" placeholder="name@company.com">
+      </div>
+      <div class="field">
+        <label for="loginName">이름</label>
+        <input id="loginName" placeholder="홍길동">
+      </div>
+      <div class="toolbar">
+        <button id="loginBtn" type="button">로그인</button>
+        <button id="requestAccessBtn" class="secondary" type="button">접근 신청</button>
+      </div>
+      <div class="auth-note">초기 마스터 계정은 <strong>master@company.com</strong> 입니다. 실제 운영에서는 서버 인증, 비밀번호/SSO, API 키 서버 보관이 필요합니다.</div>
+    </div>
+  </div>
+
+  <header>
+    <div>
+      <span class="header-eyebrow">NAVER SEARCH AD MONITOR</span>
+      <h1>네쇼검 이슈라이징 모니터링 솔루션</h1>
+    </div>
+    <div class="toolbar">
+      <div class="header-date-range">
+        <div class="field">
+          <label for="collectionStart">수집 기간 시작일</label>
+          <input id="collectionStart" type="date">
+        </div>
+        <div class="field">
+          <label for="collectionEnd">수집 기간 종료일</label>
+          <input id="collectionEnd" type="date">
+        </div>
+      </div>
+      <button id="runBtn">▶ 분석 실행</button>
+      <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
+      <button id="teamsBtn" class="success">↗ Teams 전송</button>
+      <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
+      <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
+    </div>
+  </header>
+
+  <div id="schedulePanel" class="schedule-panel">
+    <h2>자동 수집 설정</h2>
+    <div class="field">
+      <label for="scheduleMode">수집 반복 방식</label>
+      <select id="scheduleMode">
+        <option value="daily">일별</option>
+        <option value="weekly">주별</option>
+        <option value="specific">특정 날짜</option>
+      </select>
+    </div>
+    <div id="weeklyScheduleField" class="field schedule-mode-field" hidden>
+      <label for="scheduleWeekday">수집 요일</label>
+      <select id="scheduleWeekday">
+        <option value="1">월요일</option>
+        <option value="2">화요일</option>
+        <option value="3">수요일</option>
+        <option value="4">목요일</option>
+        <option value="5">금요일</option>
+        <option value="6">토요일</option>
+        <option value="0">일요일</option>
+      </select>
+    </div>
+    <div id="specificScheduleField" class="field schedule-mode-field" hidden>
+      <label for="scheduleDate">수집 날짜</label>
+      <input id="scheduleDate" type="date">
+    </div>
+    <div class="field">
+      <label>수집 시간</label>
+      <div id="scheduleTimes" class="schedule-times"></div>
+      <button id="addScheduleTimeBtn" class="secondary" type="button">시간 추가</button>
+    </div>
+    <div class="toolbar">
+      <button id="startScheduleBtn" type="button">자동 수집 시작</button>
+      <button id="stopScheduleBtn" class="secondary" type="button">중지</button>
+    </div>
+    <div id="scheduleStatus" class="schedule-status">자동 수집 시간이 설정되지 않았습니다.</div>
+  </div>
+
+  <main>
+    <aside>
+      <div class="brand-card">
+        <span class="brand-mark">IM</span>
+        <div>
+          <span class="brand-name">Issue Rising Monitor</span>
+          <span class="brand-sub">Keyword monitor</span>
+        </div>
+      </div>
+      <div class="side-tabs">
+        <button id="monitorTabBtn" class="side-tab active" type="button">모니터링</button>
+        <button id="apiTabBtn" class="side-tab" type="button">API 연결</button>
+      </div>
+
+      <div id="monitorPanel" class="tab-panel">
+        <h2>설정</h2>
+        <div class="grid" style="grid-template-columns:1fr 1fr;">
+          <div class="field">
+            <label for="surgeThreshold">급등 기준 언급량</label>
+            <input id="surgeThreshold" type="number" min="1" value="10000">
+          </div>
+          <div class="field">
+            <label for="matchThreshold">일치율 기준(%)</label>
+            <input id="matchThreshold" type="number" min="1" max="100" value="60">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="yesterdayMax">전일 저조 기준 최대 언급량</label>
+          <input id="yesterdayMax" type="number" min="0" value="300">
+        </div>
+
+        <div class="field">
+          <label for="excelUpload">브랜드/제품 엑셀 업로드</label>
+          <input id="excelUpload" type="file" accept=".xlsx,.xls,.csv">
+          <span class="muted">1행 헤더: A열 계정, B열 브랜드, C열 제품. 업로드하면 목업 데이터로 반영됩니다.</span>
+        </div>
+        <div id="uploadStatus" class="note">목업 검증은 엑셀 업로드 또는 샘플 데이터로 진행하세요.</div>
+      </div>
+
+      <div id="apiPanel" class="tab-panel" hidden>
+        <h2>API 연결</h2>
+        <div id="permissionNote" class="permission-note">현재 계정은 보기/다운로드 권한만 있습니다. API 연결과 모니터링 조건은 편집할 수 없습니다.</div>
+        <div class="note">운영 연결 시 5개 API 정보를 이곳에서 관리합니다. 브라우저 직접 호출이 막히면 사내 프록시 URL을 입력하세요.</div>
+        <div id="adminAccessCard" class="admin-card">
+          <div class="api-card-title">접근 승인 및 권한 관리 <span class="api-tag">Master</span></div>
+          <div class="muted">신청 사용자를 승인하고 역할을 지정합니다. 역할: 마스터, 편집자, 보기/다운로드.</div>
+          <div id="accessUserList" class="user-list"></div>
+        </div>
+        <div class="api-list">
+          <div class="api-card">
+            <div class="api-card-title">Teams Webhook URL <span class="api-tag">Alert</span></div>
+            <div class="field">
+              <label for="teamsWebhook">Webhook URL</label>
+              <input id="teamsWebhook" type="url" placeholder="https://...webhook...">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">메일 발송 연결 <span class="api-tag">Email</span></div>
+            <div class="field">
+              <label for="emailEndpoint">Endpoint</label>
+              <input id="emailEndpoint" placeholder="메일 발송 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="emailRecipients">수신 이메일</label>
+              <input id="emailRecipients" placeholder="team@example.com, owner@example.com">
+            </div>
+            <div class="field">
+              <label for="emailApiKey">API Key / Token</label>
+              <input id="emailApiKey" type="password" placeholder="메일 발송 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">카카오톡 발송 연결 <span class="api-tag">Kakao</span></div>
+            <div class="field">
+              <label for="kakaoEndpoint">Endpoint</label>
+              <input id="kakaoEndpoint" placeholder="카카오 알림톡 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="kakaoChannel">채널 / 템플릿 ID</label>
+              <input id="kakaoChannel" placeholder="채널 ID 또는 알림톡 템플릿 ID">
+            </div>
+            <div class="field">
+              <label for="kakaoApiKey">API Key / Token</label>
+              <input id="kakaoApiKey" type="password" placeholder="카카오 발송 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">자동 알람 설정 <span class="api-tag">Automation</span></div>
+            <div class="field">
+              <label for="alertChannel">알람 채널</label>
+              <select id="alertChannel">
+                <option value="teams">Teams</option>
+                <option value="email">메일</option>
+                <option value="kakao">카카오톡</option>
+                <option value="all">전체 채널</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="alertInterval">자동 점검 주기</label>
+              <select id="alertInterval">
+                <option value="15">15분마다</option>
+                <option value="30">30분마다</option>
+                <option value="60">1시간마다</option>
+                <option value="daily">매일 1회</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="alertRule">자동 알람 조건</label>
+              <input id="alertRule" value="일치 키워드 1건 이상 발생 시">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 쇼핑검색광고 계정 API 1 <span class="api-tag">Search Ad</span></div>
+            <div class="field">
+              <label for="naverEndpoint1">Endpoint</label>
+              <input id="naverEndpoint1" placeholder="계정 1 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="naverApiKey1">API Key / Token</label>
+              <input id="naverApiKey1" type="password" placeholder="계정 1 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 쇼핑검색광고 계정 API 2 <span class="api-tag">Search Ad</span></div>
+            <div class="field">
+              <label for="naverEndpoint2">Endpoint</label>
+              <input id="naverEndpoint2" placeholder="계정 2 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="naverApiKey2">API Key / Token</label>
+              <input id="naverApiKey2" type="password" placeholder="계정 2 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 데이터랩 API <span class="api-tag">DataLab</span></div>
+            <div class="field">
+              <label for="datalabEndpoint">Endpoint</label>
+              <input id="datalabEndpoint" placeholder="데이터랩 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="datalabApiKey">API Key / Token</label>
+              <input id="datalabApiKey" type="password" placeholder="데이터랩 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 뉴스 API <span class="api-tag">News</span></div>
+            <div class="field">
+              <label for="newsEndpoint">Endpoint</label>
+              <input id="newsEndpoint" placeholder="뉴스 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="newsApiKey">API Key / Token</label>
+              <input id="newsApiKey" type="password" placeholder="뉴스 API 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">쇼핑인사이트 API <span class="api-tag">Shopping Insight</span></div>
+            <div class="field">
+              <label for="shoppingInsightEndpoint">Endpoint</label>
+              <input id="shoppingInsightEndpoint" placeholder="쇼핑인사이트 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="shoppingInsightApiKey">API Key / Token</label>
+              <input id="shoppingInsightApiKey" type="password" placeholder="쇼핑인사이트 토큰">
+            </div>
+          </div>
+        </div>
+        <div class="toolbar" style="margin-top:14px;">
+          <button id="saveBtn" class="secondary">설정 저장</button>
+          <button id="apiBtn" class="secondary">API 데이터 가져오기</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <div class="hidden-data">
+        <textarea id="instagramData" spellcheck="false"></textarea>
+        <textarea id="naverData" spellcheck="false"></textarea>
+      </div>
+
+      <section class="panel">
+        <h2>모니터링 요약</h2>
+        <div class="stats">
+          <div class="stat"><b id="statDatalab">0</b><span class="muted">네이버 데이터랩</span></div>
+          <div class="stat"><b id="statShoppingInsight">0</b><span class="muted">네이버 쇼핑인사이트</span></div>
+          <div class="stat"><b id="statNews">0</b><span class="muted">네이버 뉴스</span></div>
+          <div class="stat"><b id="statMatches">0</b><span class="muted">일치 키워드</span></div>
+          <div class="stat"><b id="statLastRun">-</b><span class="muted">마지막 분석 시간</span></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>급등 TOP 10 키워드</h2>
+        <div id="trendChart" class="trend-chart">
+          <div class="trend-empty">분석 후 급등 키워드 증감 그래프가 표시됩니다.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>모니터링 결과</h2>
+          <div class="section-actions">
+            <button id="excelDownloadBtn" class="secondary" type="button">엑셀 다운로드</button>
+            <button id="downloadHistoryBtn" class="secondary" type="button">다운로드 신청 이력</button>
+            <div id="downloadHistoryPanel" class="download-history" hidden>
+              <div class="download-history-head">
+                <span>다운로드 신청 이력</span>
+                <button id="clearDownloadHistoryBtn" class="secondary" type="button">이력 비우기</button>
+              </div>
+              <div id="downloadHistoryList" class="download-history-list">
+                <div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:15%;">급등 키워드</th>
+                <th style="width:13%;">당일/전일</th>
+                <th style="width:11%;">상승폭</th>
+                <th style="width:15%;">출처</th>
+                <th style="width:18%;">Naver 광고 항목</th>
+                <th style="width:10%;">일치율</th>
+                <th style="width:18%;">판정</th>
+              </tr>
+            </thead>
+            <tbody id="resultBody">
+              <tr><td colspan="7" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const MASTER_EMAIL = "master@company.com";
+    const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null };
+
+    const sampleInstagram = [
+      { keyword: "아크멜로 비타 세럼", today: 12840, yesterday: 94, sources: { comments: 8210, feed: 3022, hashtags: 1608 } },
+      { keyword: "아크멜로비타세럼", today: 10380, yesterday: 51, sources: { comments: 6900, feed: 2350, hashtags: 1130 } },
+      { keyword: "모닝글로우 쿠션", today: 18810, yesterday: 220, sources: { comments: 12010, feed: 4210, hashtags: 2590 } },
+      { keyword: "그냥 인기 해시태그", today: 15120, yesterday: 9870, sources: { comments: 8000, feed: 4020, hashtags: 3100 } },
+      { keyword: "루미네 바디미스트", today: 11420, yesterday: 40, sources: { comments: 7100, feed: 2510, hashtags: 1810 } }
+    ];
+
+    const sampleNaver = [
+      { account: "계정1", campaign: "스킨케어_상반기", adGroup: "세럼", brand: "아크멜로", product: "아크멜로 비타 세럼" },
+      { account: "계정1", campaign: "베이스_신제품", adGroup: "쿠션", brand: "모닝글로우", product: "모닝글로우 커버 쿠션" },
+      { account: "계정2", campaign: "바디_상시", adGroup: "미스트", brand: "루미네", product: "루미네 퍼퓸 바디미스트" },
+      { account: "계정2", campaign: "헤어_상시", adGroup: "샴푸", brand: "오르디", product: "오르디 단백질 샴푸" }
+    ];
+
+    function log(message) {
+      console.info(`[Issue Rising Monitor] ${message}`);
+    }
+
+    function getUsers() {
+      try {
+        const users = JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
+        if (!users.some((user) => user.email === MASTER_EMAIL)) {
+          users.unshift({ email: MASTER_EMAIL, name: "Master", role: "master", status: "approved", requestedAt: new Date().toISOString() });
+          localStorage.setItem("monitoringAccessUsers", JSON.stringify(users));
+        }
+        return users;
+      } catch {
+        localStorage.removeItem("monitoringAccessUsers");
+        return [{ email: MASTER_EMAIL, name: "Master", role: "master", status: "approved", requestedAt: new Date().toISOString() }];
+      }
+    }
+
+    function setUsers(users) {
+      localStorage.setItem("monitoringAccessUsers", JSON.stringify(users));
+    }
+
+    function normalizeEmail(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+
+    function requestAccess() {
+      const email = normalizeEmail($("loginEmail").value);
+      const name = $("loginName").value.trim() || email;
+      if (!email) {
+        alert("이메일을 입력하세요.");
+        return;
+      }
+      const users = getUsers();
+      const existing = users.find((user) => user.email === email);
+      if (existing) {
+        alert(existing.status === "approved" ? "이미 승인된 계정입니다. 로그인하세요." : "이미 접근 신청이 접수되었습니다.");
+        return;
+      }
+      users.push({ email, name, role: "viewer", status: "pending", requestedAt: new Date().toISOString() });
+      setUsers(users);
+      alert("접근 신청이 접수되었습니다. 마스터 승인 후 로그인할 수 있습니다.");
+    }
+
+    function login() {
+      const email = normalizeEmail($("loginEmail").value);
+      if (!email) {
+        alert("이메일을 입력하세요.");
+        return;
+      }
+      const user = getUsers().find((item) => item.email === email);
+      if (!user || user.status !== "approved") {
+        alert("아직 승인되지 않은 계정입니다. 접근 신청 후 마스터 승인을 받아주세요.");
+        return;
+      }
+      state.currentUser = user;
+      sessionStorage.setItem("monitoringCurrentUser", user.email);
+      applyAuthState();
+    }
+
+    function logout() {
+      state.currentUser = null;
+      sessionStorage.removeItem("monitoringCurrentUser");
+      applyAuthState();
+    }
+
+    function restoreSession() {
+      const email = normalizeEmail(sessionStorage.getItem("monitoringCurrentUser"));
+      if (!email) return;
+      const user = getUsers().find((item) => item.email === email && item.status === "approved");
+      if (user) state.currentUser = user;
+    }
+
+    function canEdit() {
+      return ["master", "editor"].includes(state.currentUser?.role);
+    }
+
+    function isMaster() {
+      return state.currentUser?.role === "master";
+    }
+
+    function applyAuthState() {
+      const authed = Boolean(state.currentUser);
+      document.body.classList.toggle("locked", !authed);
+      $("authScreen").hidden = authed;
+      if (!authed) return;
+
+      $("currentUserChip").innerHTML = `${escapeHtml(state.currentUser.name || state.currentUser.email)} <small>${roleLabel(state.currentUser.role)}</small>`;
+      applyPermissions();
+      renderAccessUsers();
+    }
+
+    function roleLabel(role) {
+      return { master: "마스터", editor: "편집자", viewer: "보기/다운로드" }[role] || "보기";
+    }
+
+    function applyPermissions() {
+      const editable = canEdit();
+      const master = isMaster();
+      $("permissionNote").style.display = editable ? "none" : "block";
+      $("adminAccessCard").style.display = master ? "block" : "none";
+
+      const editableIds = [
+        "surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd",
+        "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
+        "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
+        "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
+        "naverEndpoint2", "naverApiKey2", "datalabEndpoint", "datalabApiKey", "newsEndpoint",
+        "newsApiKey", "shoppingInsightEndpoint", "shoppingInsightApiKey", "excelUpload"
+      ];
+      editableIds.forEach((id) => {
+        if ($(id)) $(id).disabled = !editable;
+      });
+      Array.from(document.querySelectorAll(".schedule-time-input, .remove-schedule-time-btn")).forEach((el) => {
+        el.disabled = !editable;
+      });
+      ["scheduleBtn", "saveBtn", "apiBtn", "addScheduleTimeBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
+        if ($(id)) $(id).disabled = !editable;
+      });
+      $("runBtn").disabled = false;
+      $("excelDownloadBtn").disabled = false;
+      $("downloadHistoryBtn").disabled = false;
+      $("teamsBtn").disabled = !editable;
+    }
+
+    function requireEdit(actionName = "이 기능") {
+      if (canEdit()) return true;
+      alert(`${actionName}은 편집 권한이 필요합니다.`);
+      return false;
+    }
+
+    function renderAccessUsers() {
+      const list = $("accessUserList");
+      if (!list) return;
+      const users = getUsers();
+      if (!users.length) {
+        list.innerHTML = '<div class="download-history-empty">접근 신청자가 없습니다.</div>';
+        return;
+      }
+      list.innerHTML = users.map((user) => `
+        <div class="user-row">
+          <span><strong>${escapeHtml(user.name || user.email)}</strong><br><small class="muted">${escapeHtml(user.email)} · ${user.status === "approved" ? "승인됨" : "승인 대기"}</small></span>
+          <select class="role-select" data-user-email="${escapeHtml(user.email)}" ${user.email === MASTER_EMAIL ? "disabled" : ""}>
+            <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기</option>
+            <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집</option>
+            <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
+          </select>
+          <button class="secondary approve-user-btn" type="button" data-user-email="${escapeHtml(user.email)}" ${user.status === "approved" ? "disabled" : ""}>승인</button>
+        </div>
+      `).join("");
+
+      Array.from(document.querySelectorAll(".role-select")).forEach((select) => {
+        select.addEventListener("change", () => updateUserRole(select.dataset.userEmail, select.value));
+      });
+      Array.from(document.querySelectorAll(".approve-user-btn")).forEach((button) => {
+        button.addEventListener("click", () => approveUser(button.dataset.userEmail));
+      });
+    }
+
+    function approveUser(email) {
+      if (!isMaster()) return;
+      const users = getUsers().map((user) => user.email === email ? { ...user, status: "approved" } : user);
+      setUsers(users);
+      renderAccessUsers();
+    }
+
+    function updateUserRole(email, role) {
+      if (!isMaster()) return;
+      const users = getUsers().map((user) => user.email === email ? { ...user, role } : user);
+      setUsers(users);
+      renderAccessUsers();
+    }
+
+    function toggleSchedulePanel() {
+      if (!requireEdit("자동 수집 설정")) return;
+      $("schedulePanel").classList.toggle("open");
+    }
+
+    function updateScheduleModeFields() {
+      const mode = $("scheduleMode").value;
+      $("weeklyScheduleField").hidden = mode !== "weekly";
+      $("specificScheduleField").hidden = mode !== "specific";
+    }
+
+    function getScheduleTimes() {
+      return Array.from(document.querySelectorAll(".schedule-time-input"))
+        .map((input) => input.value)
+        .filter(Boolean)
+        .sort();
+    }
+
+    function addScheduleTime(value = "09:00") {
+      const wrap = document.createElement("div");
+      wrap.className = "schedule-time-row";
+      wrap.innerHTML = `
+        <input class="schedule-time-input" type="time" value="${escapeHtml(value)}">
+        <button class="secondary remove-schedule-time-btn" type="button" title="시간 삭제">×</button>
+      `;
+      $("scheduleTimes").appendChild(wrap);
+      wrap.querySelector(".remove-schedule-time-btn").addEventListener("click", () => {
+        if (getScheduleTimes().length <= 1) {
+          alert("수집 시간은 최소 1개 이상 필요합니다.");
+          return;
+        }
+        wrap.remove();
+        saveSettings();
+      });
+      wrap.querySelector(".schedule-time-input").addEventListener("change", saveSettings);
+    }
+
+    function restoreScheduleTimes(savedTimes) {
+      $("scheduleTimes").innerHTML = "";
+      const times = Array.isArray(savedTimes) && savedTimes.length ? savedTimes : ["09:00"];
+      times.forEach((time) => addScheduleTime(time));
+    }
+
+    function startScheduledCollection() {
+      if (!requireEdit("자동 수집 시작")) return;
+      stopScheduledCollection(false);
+      const nextRun = getNextRunDate(new Date());
+      if (!nextRun) {
+        alert("현재 시점 이후로 실행 가능한 자동 수집 시간을 선택하세요.");
+        return;
+      }
+
+      state.nextRunAt = nextRun;
+      state.autoCollecting = true;
+      state.autoTimer = setTimeout(runScheduledCollection, Math.max(1000, nextRun.getTime() - Date.now()));
+      $("scheduleBtn").textContent = "⏱ 자동 수집 예약됨";
+      $("scheduleBtn").classList.remove("secondary");
+      updateScheduleStatus();
+      saveSettings();
+      log(`자동 수집 예약: ${formatDateTimeText(nextRun)}`);
+    }
+
+    function stopScheduledCollection(showStatus = true) {
+      if (state.autoTimer) clearTimeout(state.autoTimer);
+      state.autoTimer = null;
+      state.autoCollecting = false;
+      state.nextRunAt = null;
+      $("scheduleBtn").textContent = "⏱ 자동 수집 설정";
+      $("scheduleBtn").classList.add("secondary");
+      if (showStatus) {
+        $("scheduleStatus").textContent = "자동 수집이 중지되었습니다.";
+        log("자동 수집이 중지되었습니다.");
+      }
+    }
+
+    function runScheduledCollection() {
+      analyze();
+      if ($("scheduleMode").value === "specific") {
+        stopScheduledCollection(false);
+        $("scheduleStatus").textContent = "특정 날짜 자동 수집이 1회 완료되었습니다.";
+        return;
+      }
+      const nextRun = getNextRunDate(new Date(Date.now() + 1000));
+      state.nextRunAt = nextRun;
+      state.autoTimer = setTimeout(runScheduledCollection, Math.max(1000, nextRun.getTime() - Date.now()));
+      updateScheduleStatus();
+    }
+
+    function getNextRunDate(baseDate) {
+      const mode = $("scheduleMode").value;
+      const times = getScheduleTimes();
+      if (!times.length) return null;
+      const candidates = [];
+
+      if (mode === "daily") {
+        times.forEach((time) => {
+          const next = dateAtTime(baseDate, time);
+          if (next <= baseDate) next.setDate(next.getDate() + 1);
+          candidates.push(next);
+        });
+        return earliestDate(candidates);
+      }
+
+      if (mode === "weekly") {
+        const targetDay = Number($("scheduleWeekday").value || 1);
+        times.forEach((time) => {
+          const next = dateAtTime(baseDate, time);
+          const diff = (targetDay - next.getDay() + 7) % 7;
+          next.setDate(next.getDate() + diff);
+          if (next <= baseDate) next.setDate(next.getDate() + 7);
+          candidates.push(next);
+        });
+        return earliestDate(candidates);
+      }
+
+      if (mode === "specific") {
+        if (!$("scheduleDate").value) return null;
+        times.forEach((time) => {
+          const next = new Date(`${$("scheduleDate").value}T${time}:00`);
+          if (next > baseDate) candidates.push(next);
+        });
+        return earliestDate(candidates);
+      }
+
+      return null;
+    }
+
+    function dateAtTime(baseDate, time) {
+      const [hour, minute] = time.split(":").map(Number);
+      const date = new Date(baseDate);
+      date.setHours(hour || 0, minute || 0, 0, 0);
+      return date;
+    }
+
+    function earliestDate(dates) {
+      return dates.length ? dates.sort((a, b) => a.getTime() - b.getTime())[0] : null;
+    }
+
+    function updateScheduleStatus() {
+      const modeLabel = { daily: "일별", weekly: "주별", specific: "특정 날짜" }[$("scheduleMode").value] || "일별";
+      const next = state.nextRunAt ? formatDateTimeText(state.nextRunAt) : "-";
+      $("scheduleStatus").textContent = `수집 방식: ${modeLabel} / 다음 실행: ${next}`;
+    }
+
+    function formatDateTimeText(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function setDefaultCollectionDates() {
+      const today = new Date();
+      const sevenDaysAgo = new Date(today);
+      sevenDaysAgo.setDate(today.getDate() - 7);
+      if (!$("collectionStart").value) $("collectionStart").value = formatDateInput(sevenDaysAgo);
+      if (!$("collectionEnd").value) $("collectionEnd").value = formatDateInput(today);
+    }
+
+    function formatDateInput(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    function normalize(text) {
+      return String(text || "")
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, "")
+        .trim();
+    }
+
+    function tokens(text) {
+      return String(text || "")
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s#]+/gu, " ")
+        .split(/\s+/)
+        .map((x) => x.replace(/^#/, "").trim())
+        .filter(Boolean);
+    }
+
+    function levenshtein(a, b) {
+      a = normalize(a);
+      b = normalize(b);
+      if (a === b) return 0;
+      if (!a.length) return b.length;
+      if (!b.length) return a.length;
+      const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+      for (let i = 1; i <= a.length; i += 1) {
+        let prev = row[0];
+        row[0] = i;
+        for (let j = 1; j <= b.length; j += 1) {
+          const temp = row[j];
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost);
+          prev = temp;
+        }
+      }
+      return row[b.length];
+    }
+
+    function charSimilarity(a, b) {
+      const aa = normalize(a);
+      const bb = normalize(b);
+      const maxLen = Math.max(aa.length, bb.length);
+      if (!maxLen) return 0;
+      return (1 - levenshtein(aa, bb) / maxLen) * 100;
+    }
+
+    function tokenSimilarity(a, b) {
+      const left = new Set(tokens(a));
+      const right = new Set(tokens(b));
+      if (!left.size || !right.size) return 0;
+      let intersection = 0;
+      left.forEach((item) => {
+        if (right.has(item)) intersection += 1;
+      });
+      const union = new Set([...left, ...right]).size;
+      return (intersection / union) * 100;
+    }
+
+    function similarity(a, b) {
+      const compactA = normalize(a);
+      const compactB = normalize(b);
+      const containsBoost = compactA && compactB && (compactA.includes(compactB) || compactB.includes(compactA)) ? 12 : 0;
+      return Math.min(100, Math.round(charSimilarity(a, b) * 0.68 + tokenSimilarity(a, b) * 0.32 + containsBoost));
+    }
+
+    function parseJson(id) {
+      const raw = $(id).value.trim();
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error("JSON 배열 형식이어야 합니다.");
+        return parsed;
+      } catch (error) {
+        throw new Error(`${id === "instagramData" ? "Instagram" : "Naver"} 데이터 파싱 실패: ${error.message}`);
+      }
+    }
+
+    function bestNaverMatch(keyword, naverItems) {
+      let best = null;
+      naverItems.forEach((item) => {
+        const candidates = [
+          item.product,
+          item.brand,
+          `${item.brand || ""} ${item.product || ""}`.trim()
+        ].filter(Boolean);
+        candidates.forEach((candidate) => {
+          const score = similarity(keyword, candidate);
+          if (!best || score > best.score) {
+            best = { item, candidate, score };
+          }
+        });
+      });
+      return best;
+    }
+
+    function analyze() {
+      try {
+        const instagram = parseJson("instagramData");
+        const naver = parseJson("naverData");
+        const surgeThreshold = Number($("surgeThreshold").value || 10000);
+        const matchThreshold = Number($("matchThreshold").value || 60);
+        const yesterdayMax = Number($("yesterdayMax").value || 300);
+
+        const surges = instagram.filter((row) => Number(row.today || 0) >= surgeThreshold && Number(row.yesterday || 0) <= yesterdayMax);
+        const results = surges.map((row) => {
+          const match = bestNaverMatch(row.keyword, naver);
+          const matched = match && match.score >= matchThreshold;
+          return {
+            keyword: row.keyword,
+            today: Number(row.today || 0),
+            yesterday: Number(row.yesterday || 0),
+            lift: Number(row.today || 0) - Number(row.yesterday || 0),
+            sources: row.sources || {},
+            match,
+            matched
+          };
+        }).filter((row) => row.matched)
+          .sort((a, b) => b.today - a.today || b.match.score - a.match.score);
+
+        state.results = results;
+        render(instagram.length, surges.length, results, surges);
+        log(`분석 완료: Instagram ${instagram.length}건, 급등 후보 ${surges.length}건, Naver 매칭 ${results.length}건`);
+      } catch (error) {
+        log(error.message);
+        alert(error.message);
+      }
+    }
+
+    function render(total, surges, results, surgeRows = []) {
+      $("statDatalab").textContent = total.toLocaleString("ko-KR");
+      $("statShoppingInsight").textContent = surges.toLocaleString("ko-KR");
+      $("statNews").textContent = countNewsSignals(results).toLocaleString("ko-KR");
+      $("statMatches").textContent = results.length.toLocaleString("ko-KR");
+      $("statLastRun").innerHTML = formatDateTime(new Date());
+      renderTrendChart(surgeRows);
+
+      const body = $("resultBody");
+      if (!results.length) {
+        body.innerHTML = '<tr><td colspan="7" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
+        return;
+      }
+
+      body.innerHTML = results.map((row) => {
+        const source = sourceSummary(row);
+        const item = row.match.item;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(row.keyword)}</strong></td>
+            <td>${row.today.toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
+            <td>+${row.lift.toLocaleString("ko-KR")}</td>
+            <td>${source}</td>
+            <td>
+              <strong>${escapeHtml(item.product || item.brand || "-")}</strong><br>
+              <span class="muted">${escapeHtml(item.account || "계정 미지정")} · ${escapeHtml(item.campaign || "-")} · ${escapeHtml(item.adGroup || "-")}</span>
+            </td>
+            <td><span class="pill">${row.match.score}%</span></td>
+            <td>관련 키워드로 판단<br><span class="muted">비교값: ${escapeHtml(row.match.candidate)}</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function countNewsSignals(results) {
+      return results.reduce((sum, row) => sum + Number(row.sources.news || 0), 0);
+    }
+
+    function sourceSummary(row) {
+      const datalab = Number(row.sources.datalab || row.today || 0);
+      const shoppingInsight = Number(row.sources.shoppingInsight || row.sources.shopping || row.lift || 0);
+      const news = Number(row.sources.news || 0);
+      return [
+        `데이터랩 ${datalab.toLocaleString("ko-KR")}`,
+        `쇼핑인사이트 ${shoppingInsight.toLocaleString("ko-KR")}`,
+        `뉴스 ${news.toLocaleString("ko-KR")}`
+      ].join("<br>");
+    }
+
+    function sourceSummaryText(row) {
+      return sourceSummary(row).replaceAll("<br>", " / ");
+    }
+
+    function csvCell(value) {
+      const text = String(value ?? "");
+      return `"${text.replaceAll('"', '""')}"`;
+    }
+
+    function downloadExcel() {
+      if (!state.results.length) analyze();
+      if (!state.results.length) {
+        alert("다운로드할 모니터링 결과가 없습니다.");
+        return;
+      }
+
+      const exportData = buildExcelExport();
+      saveDownloadHistory(exportData);
+      triggerExcelDownload(exportData.filename, exportData.csv);
+      renderDownloadHistory();
+      log(`엑셀 다운로드 생성: ${state.results.length}건`);
+    }
+
+    function buildExcelExport() {
+      const headers = ["급등 키워드", "당일 언급량", "전일 언급량", "상승폭", "출처", "계정", "브랜드", "제품", "캠페인", "광고그룹", "일치율", "판정"];
+      const rows = state.results.map((row) => {
+        const item = row.match.item;
+        return [
+          row.keyword,
+          row.today,
+          row.yesterday,
+          row.lift,
+          sourceSummaryText(row),
+          item.account || "계정 미지정",
+          item.brand || "",
+          item.product || "",
+          item.campaign || "",
+          item.adGroup || "",
+          `${row.match.score}%`,
+          "관련 키워드"
+        ];
+      });
+
+      const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+      return {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        filename: `monitoring-result-${formatFileDate(new Date())}.xls`,
+        createdAt: new Date().toISOString(),
+        count: state.results.length,
+        csv
+      };
+    }
+
+    function triggerExcelDownload(filename, csv) {
+      const blob = new Blob(["\ufeff" + csv], { type: "application/vnd.ms-excel;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function getDownloadHistory() {
+      try {
+        return JSON.parse(localStorage.getItem("monitoringDownloadHistory") || "[]");
+      } catch {
+        localStorage.removeItem("monitoringDownloadHistory");
+        return [];
+      }
+    }
+
+    function saveDownloadHistory(item) {
+      const history = [item, ...getDownloadHistory()].slice(0, 10);
+      localStorage.setItem("monitoringDownloadHistory", JSON.stringify(history));
+    }
+
+    function renderDownloadHistory() {
+      const list = $("downloadHistoryList");
+      const history = getDownloadHistory();
+      if (!history.length) {
+        list.innerHTML = '<div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div>';
+        return;
+      }
+
+      list.innerHTML = history.map((item) => `
+        <div class="download-history-item">
+          <div>
+            <span class="download-history-name">${escapeHtml(item.filename)}</span>
+            <span class="download-history-meta">${formatHistoryDate(item.createdAt)} · ${Number(item.count || 0).toLocaleString("ko-KR")}건</span>
+          </div>
+          <button class="secondary history-download-btn" type="button" data-download-id="${escapeHtml(item.id)}">다시 다운로드</button>
+        </div>
+      `).join("");
+
+      Array.from(document.querySelectorAll(".history-download-btn")).forEach((button) => {
+        button.addEventListener("click", () => {
+          const target = getDownloadHistory().find((item) => item.id === button.dataset.downloadId);
+          if (target) triggerExcelDownload(target.filename, target.csv);
+        });
+      });
+    }
+
+    function clearDownloadHistory() {
+      localStorage.removeItem("monitoringDownloadHistory");
+      renderDownloadHistory();
+      log("다운로드 이력을 비웠습니다.");
+    }
+
+    function toggleDownloadHistory() {
+      $("downloadHistoryPanel").hidden = !$("downloadHistoryPanel").hidden;
+      if (!$("downloadHistoryPanel").hidden) renderDownloadHistory();
+    }
+
+    function formatHistoryDate(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "-";
+      return formatDateTimeText(date);
+    }
+
+    function formatFileDate(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${String(date.getFullYear()).slice(2)}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+    }
+
+    function renderTrendChart(rows) {
+      const chart = $("trendChart");
+      const topRows = rows.map((row) => ({
+        keyword: row.keyword,
+        today: Number(row.today || 0),
+        yesterday: Number(row.yesterday || 0),
+        lift: Number(row.today || 0) - Number(row.yesterday || 0),
+        rate: Number(row.yesterday || 0) > 0 ? ((Number(row.today || 0) - Number(row.yesterday || 0)) / Number(row.yesterday || 0)) * 100 : 100
+      })).sort((a, b) => b.lift - a.lift).slice(0, 10);
+
+      if (!topRows.length) {
+        chart.innerHTML = '<div class="trend-empty">조건에 맞는 급등 키워드가 없습니다.</div>';
+        return;
+      }
+
+      const maxLift = Math.max(...topRows.map((row) => row.lift), 1);
+      chart.innerHTML = topRows.map((row) => {
+        const width = Math.max(3, Math.round((row.lift / maxLift) * 100));
+        return `
+          <div class="trend-row">
+            <div class="trend-name">
+              ${escapeHtml(row.keyword)}
+              <span class="trend-sub">전일 ${row.yesterday.toLocaleString("ko-KR")} → 당일 ${row.today.toLocaleString("ko-KR")}</span>
+            </div>
+            <div class="trend-track" aria-label="${escapeHtml(row.keyword)} 증가량">
+              <div class="trend-fill" style="width:${width}%"></div>
+            </div>
+            <div class="trend-value">+${row.lift.toLocaleString("ko-KR")} · ${Math.round(row.rate).toLocaleString("ko-KR")}%</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function formatDateTime(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      const dateText = [
+        String(date.getFullYear()).slice(2),
+        pad(date.getMonth() + 1),
+        pad(date.getDate())
+      ].join("-");
+      const timeText = [
+        pad(date.getHours()),
+        pad(date.getMinutes()),
+        pad(date.getSeconds())
+      ].join(":");
+      return `<span class="date-line">${dateText}</span><span class="time-line">${timeText}</span>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+      }[ch]));
+    }
+
+    function teamsPayload() {
+      const rows = state.results.slice(0, 12).map((row, index) => {
+        const item = row.match.item;
+        return `${index + 1}. ${row.keyword} - ${row.today.toLocaleString("ko-KR")}회, 전일 ${row.yesterday.toLocaleString("ko-KR")}회, Naver ${item.account || "계정 미지정"}: ${item.product || item.brand}, 일치율 ${row.match.score}%`;
+      }).join("\n");
+      return {
+        text: `Instagram 급등 키워드 감지\n\n기준: 당일 ${Number($("surgeThreshold").value).toLocaleString("ko-KR")}회 이상, 전일 ${Number($("yesterdayMax").value).toLocaleString("ko-KR")}회 이하, Naver 일치율 ${$("matchThreshold").value}% 이상\n\n${rows || "전송할 매칭 결과가 없습니다."}`
+      };
+    }
+
+    async function sendTeams() {
+      if (!requireEdit("Teams 전송")) return;
+      if (!state.results.length) analyze();
+      if (!state.results.length) {
+        alert("전송할 매칭 결과가 없습니다.");
+        return;
+      }
+      const url = $("teamsWebhook").value.trim();
+      if (!url) {
+        alert("Teams Webhook URL을 입력하세요.");
+        return;
+      }
+      try {
+        $("teamsBtn").disabled = true;
+        await fetch(url, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(teamsPayload())
+        });
+        log(`Teams Webhook 전송 요청 완료: ${state.results.length}건`);
+        alert("Teams 전송 요청을 보냈습니다. 브라우저 no-cors 전송은 응답 내용을 확인할 수 없습니다.");
+      } catch (error) {
+        log(`Teams 전송 실패: ${error.message}`);
+        alert(`Teams 전송 실패: ${error.message}`);
+      } finally {
+        $("teamsBtn").disabled = false;
+      }
+    }
+
+    function parseCsv(text) {
+      const rows = [];
+      let row = [];
+      let cell = "";
+      let quoted = false;
+      for (let i = 0; i < text.length; i += 1) {
+        const ch = text[i];
+        const next = text[i + 1];
+        if (ch === '"' && quoted && next === '"') {
+          cell += '"';
+          i += 1;
+        } else if (ch === '"') {
+          quoted = !quoted;
+        } else if (ch === "," && !quoted) {
+          row.push(cell);
+          cell = "";
+        } else if ((ch === "\n" || ch === "\r") && !quoted) {
+          if (ch === "\r" && next === "\n") i += 1;
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = "";
+        } else {
+          cell += ch;
+        }
+      }
+      row.push(cell);
+      rows.push(row);
+      return rows.filter((items) => items.some((item) => String(item || "").trim()));
+    }
+
+    function rowsToNaverItems(rows) {
+      return rows.slice(1).map((row, index) => ({
+        account: String(row[0] || "").trim() || "계정 미지정",
+        brand: String(row[1] || "").trim(),
+        product: String(row[2] || "").trim(),
+        campaign: "엑셀 업로드",
+        adGroup: `행 ${index + 2}`
+      })).filter((item) => item.brand || item.product);
+    }
+
+    function loadSheetJs() {
+      if (window.XLSX) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("엑셀 파서 로드 실패"));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function handleExcelUpload(event) {
+      if (!requireEdit("엑셀 업로드")) {
+        event.target.value = "";
+        return;
+      }
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      try {
+        $("uploadStatus").textContent = `${file.name} 파일을 읽는 중입니다.`;
+        const extension = file.name.split(".").pop().toLowerCase();
+        let rows = [];
+        if (extension === "csv") {
+          rows = parseCsv(await file.text());
+        } else {
+          await loadSheetJs();
+          const buffer = await file.arrayBuffer();
+          const workbook = XLSX.read(buffer, { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+        }
+
+        const items = rowsToNaverItems(rows);
+        if (!items.length) throw new Error("A:C열에서 읽을 수 있는 브랜드/제품 데이터가 없습니다.");
+        $("naverData").value = JSON.stringify(items, null, 2);
+        $("uploadStatus").textContent = `${file.name}에서 ${items.length.toLocaleString("ko-KR")}건을 불러왔습니다.`;
+        log(`엑셀 업로드 반영: ${items.length}건`);
+        analyze();
+      } catch (error) {
+        $("uploadStatus").textContent = `업로드 실패: ${error.message}`;
+        log(`엑셀 업로드 실패: ${error.message}`);
+        alert(`엑셀 업로드 실패: ${error.message}\n\n.xlsx/.xls 파싱은 브라우저에서 SheetJS CDN을 불러옵니다. 인터넷이 차단된 환경이면 CSV로 저장해 업로드하세요.`);
+      }
+    }
+
+    function extractItems(data) {
+      if (Array.isArray(data)) return data;
+      return data.items || data.data || data.keywords || data.ads || [];
+    }
+
+    async function fetchNaverAccount(accountLabel, endpoint, key) {
+      const response = await fetch(endpoint, {
+        headers: key ? { "Authorization": `Bearer ${key}` } : {}
+      });
+      if (!response.ok) throw new Error(`${accountLabel} HTTP ${response.status}`);
+      const data = await response.json();
+      return extractItems(data).map((item) => ({ account: item.account || accountLabel, ...item }));
+    }
+
+    async function fetchApiData() {
+      if (!requireEdit("API 데이터 가져오기")) return;
+      const accounts = [
+        { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), matchSource: true },
+        { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), matchSource: true },
+        { label: "네이버 데이터랩", endpoint: $("datalabEndpoint").value.trim(), key: $("datalabApiKey").value.trim(), matchSource: false },
+        { label: "네이버 뉴스", endpoint: $("newsEndpoint").value.trim(), key: $("newsApiKey").value.trim(), matchSource: false },
+        { label: "쇼핑인사이트", endpoint: $("shoppingInsightEndpoint").value.trim(), key: $("shoppingInsightApiKey").value.trim(), matchSource: false }
+      ].filter((account) => account.endpoint);
+
+      if (!accounts.length) {
+        alert("연동할 API Endpoint를 하나 이상 입력하세요. CORS 차단 시 사내 프록시 URL을 사용하세요.");
+        return;
+      }
+      try {
+        $("apiBtn").disabled = true;
+        const merged = [];
+        for (const account of accounts) {
+          const items = await fetchNaverAccount(account.label, account.endpoint, account.key);
+          if (account.matchSource) merged.push(...items);
+          log(`${account.label} Naver API 데이터 ${items.length}건을 불러왔습니다.`);
+        }
+        if (merged.length) {
+          $("naverData").value = JSON.stringify(merged, null, 2);
+          log(`쇼핑검색광고 계정 API 통합 데이터 ${merged.length}건을 매칭 기준에 반영했습니다.`);
+          analyze();
+        } else {
+          log("매칭 기준으로 반영할 쇼핑검색광고 계정 API 데이터는 없습니다.");
+        }
+      } catch (error) {
+        log(`API 가져오기 실패: ${error.message}`);
+        alert("브라우저에서 직접 호출이 차단될 수 있습니다. 사내 프록시 또는 수동 JSON 입력을 사용하세요.");
+      } finally {
+        $("apiBtn").disabled = false;
+      }
+    }
+
+    function saveSettings() {
+      if (!requireEdit("설정 저장")) return;
+      const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "datalabEndpoint", "datalabApiKey", "newsEndpoint", "newsApiKey", "shoppingInsightEndpoint", "shoppingInsightApiKey"];
+      const config = Object.fromEntries(ids.map((id) => [id, $(id).value]));
+      config.scheduleTimes = getScheduleTimes();
+      localStorage.setItem("keywordMonitorConfig", JSON.stringify(config));
+      log("설정을 브라우저 localStorage에 저장했습니다.");
+    }
+
+    function switchSideTab(tabName) {
+      const api = tabName === "api";
+      $("monitorPanel").hidden = api;
+      $("apiPanel").hidden = !api;
+      $("monitorTabBtn").classList.toggle("active", !api);
+      $("apiTabBtn").classList.toggle("active", api);
+    }
+
+    function loadSettings() {
+      const raw = localStorage.getItem("keywordMonitorConfig");
+      if (!raw) return;
+      try {
+        const config = JSON.parse(raw);
+        if (config.naverEndpoint && !config.naverEndpoint1) config.naverEndpoint1 = config.naverEndpoint;
+        if (config.naverApiKey && !config.naverApiKey1) config.naverApiKey1 = config.naverApiKey;
+        Object.entries(config).forEach(([id, value]) => {
+          if ($(id)) $(id).value = value;
+        });
+        restoreScheduleTimes(config.scheduleTimes);
+      } catch {
+        localStorage.removeItem("keywordMonitorConfig");
+      }
+    }
+
+    $("runBtn").addEventListener("click", analyze);
+    $("scheduleBtn").addEventListener("click", toggleSchedulePanel);
+    $("startScheduleBtn").addEventListener("click", startScheduledCollection);
+    $("stopScheduleBtn").addEventListener("click", () => stopScheduledCollection(true));
+    $("scheduleMode").addEventListener("change", updateScheduleModeFields);
+    $("addScheduleTimeBtn").addEventListener("click", () => {
+      if (!requireEdit("수집 시간 추가")) return;
+      addScheduleTime("09:00");
+      saveSettings();
+    });
+    $("teamsBtn").addEventListener("click", sendTeams);
+    $("saveBtn").addEventListener("click", saveSettings);
+    $("apiBtn").addEventListener("click", fetchApiData);
+    $("excelDownloadBtn").addEventListener("click", downloadExcel);
+    $("downloadHistoryBtn").addEventListener("click", toggleDownloadHistory);
+    $("clearDownloadHistoryBtn").addEventListener("click", clearDownloadHistory);
+    $("excelUpload").addEventListener("change", handleExcelUpload);
+    $("monitorTabBtn").addEventListener("click", () => switchSideTab("monitor"));
+    $("apiTabBtn").addEventListener("click", () => switchSideTab("api"));
+
+    $("loginBtn").addEventListener("click", login);
+    $("requestAccessBtn").addEventListener("click", requestAccess);
+    $("logoutBtn").addEventListener("click", logout);
+
+    restoreSession();
+    loadSettings();
+    if (!getScheduleTimes().length) restoreScheduleTimes(["09:00"]);
+    setDefaultCollectionDates();
+    updateScheduleModeFields();
+    $("instagramData").value = JSON.stringify(sampleInstagram, null, 2);
+    $("naverData").value = JSON.stringify(sampleNaver, null, 2);
+    analyze();
+    renderDownloadHistory();
+    applyAuthState();
+  </script>
+</body>
+</html>
