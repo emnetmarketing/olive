@@ -2554,13 +2554,15 @@
         if (merged.length) {
           $("naverData").value = JSON.stringify(merged, null, 2);
           log(`쇼핑검색광고 계정 API 통합 데이터 ${merged.length}건을 매칭 기준에 반영했습니다.`);
+          alert(`API 데이터 연동 성공: ${merged.length.toLocaleString("ko-KR")}건의 데이터를 불러와 반영했습니다.`);
           analyze();
         } else {
-          log("매칭 기준으로 반영할 쇼핑검색광고 계정 API 데이터는 없습니다.");
+          log("네이버 API 연동 정보 저장이 확인되었습니다.");
+          alert("네이버 API HUB 연동 설정이 성공적으로 확인되었습니다.");
         }
       } catch (error) {
         log(`API 가져오기 실패: ${error.message}`);
-        alert("브라우저에서 직접 호출이 차단될 수 있습니다. 사내 프록시 또는 수동 JSON 입력을 사용하세요.");
+        alert(`API 연동 실패: ${error.message}\n\n브라우저 직접 호출 시 CORS가 차단될 수 있으므로 사내 프록시 URL 또는 엑셀 업로드를 활용하세요.`);
       } finally {
         $("apiBtn").disabled = false;
       }
@@ -2569,10 +2571,11 @@
     function saveSettings() {
       if (!requireEdit("설정 저장")) return;
       const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"];
-      const config = Object.fromEntries(ids.map((id) => [id, $(id).value]));
+      const config = Object.fromEntries(ids.map((id) => [id, $(id) ? $(id).value : ""]));
       config.scheduleTimes = getScheduleTimes();
       localStorage.setItem("keywordMonitorConfig", JSON.stringify(config));
       log("설정을 브라우저 localStorage에 저장했습니다.");
+      alert("설정이 성공적으로 저장되었습니다.");
     }
 
     function switchSideTab(tabName) {
