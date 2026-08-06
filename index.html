@@ -1390,38 +1390,14 @@
           </div>
 
           <div class="api-card">
-            <div class="api-card-title">네이버 검색어트렌드 API <span class="api-tag">Search Trend</span></div>
+            <div class="api-card-title">네이버 API HUB <span class="api-tag">Naver Open API</span></div>
             <div class="field">
-              <label for="datalabEndpoint">Endpoint</label>
-              <input id="datalabEndpoint" placeholder="검색어트렌드 API 또는 사내 프록시 URL">
+              <label for="naverClientId">Client ID</label>
+              <input id="naverClientId" placeholder="네이버 개발자센터 Client ID">
             </div>
             <div class="field">
-              <label for="datalabApiKey">API Key / Token</label>
-              <input id="datalabApiKey" type="password" placeholder="검색어트렌드 토큰">
-            </div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">네이버 뉴스 API <span class="api-tag">News</span></div>
-            <div class="field">
-              <label for="newsEndpoint">Endpoint</label>
-              <input id="newsEndpoint" placeholder="뉴스 API 또는 사내 프록시 URL">
-            </div>
-            <div class="field">
-              <label for="newsApiKey">API Key / Token</label>
-              <input id="newsApiKey" type="password" placeholder="뉴스 API 토큰">
-            </div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">쇼핑인사이트 API <span class="api-tag">Shopping Insight</span></div>
-            <div class="field">
-              <label for="shoppingInsightEndpoint">Endpoint</label>
-              <input id="shoppingInsightEndpoint" placeholder="쇼핑인사이트 API 또는 사내 프록시 URL">
-            </div>
-            <div class="field">
-              <label for="shoppingInsightApiKey">API Key / Token</label>
-              <input id="shoppingInsightApiKey" type="password" placeholder="쇼핑인사이트 토큰">
+              <label for="naverClientSecret">Client Secret</label>
+              <input id="naverClientSecret" type="password" placeholder="네이버 개발자센터 Client Secret">
             </div>
           </div>
         </div>
@@ -1716,8 +1692,7 @@
         "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
         "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
         "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
-        "naverEndpoint2", "naverApiKey2", "datalabEndpoint", "datalabApiKey", "newsEndpoint",
-        "newsApiKey", "shoppingInsightEndpoint", "shoppingInsightApiKey", "excelUpload"
+        "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret", "excelUpload"
       ];
       editableIds.forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
@@ -2557,22 +2532,24 @@
       const accounts = [
         { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), matchSource: true },
         { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), matchSource: true },
-        { label: "네이버 검색어트렌드", endpoint: $("datalabEndpoint").value.trim(), key: $("datalabApiKey").value.trim(), matchSource: false },
-        { label: "네이버 뉴스", endpoint: $("newsEndpoint").value.trim(), key: $("newsApiKey").value.trim(), matchSource: false },
-        { label: "쇼핑인사이트", endpoint: $("shoppingInsightEndpoint").value.trim(), key: $("shoppingInsightApiKey").value.trim(), matchSource: false }
-      ].filter((account) => account.endpoint);
+        { label: "네이버 API HUB", clientId: $("naverClientId")?.value.trim(), clientSecret: $("naverClientSecret")?.value.trim(), matchSource: false }
+      ].filter((account) => account.endpoint || account.clientId);
 
       if (!accounts.length) {
-        alert("연동할 API Endpoint를 하나 이상 입력하세요. CORS 차단 시 사내 프록시 URL을 사용하세요.");
+        alert("연동할 API 정보를 하나 이상 입력하세요 (쇼핑검색광고 Endpoint 또는 네이버 API HUB Client ID/Secret).");
         return;
       }
       try {
         $("apiBtn").disabled = true;
         const merged = [];
         for (const account of accounts) {
-          const items = await fetchNaverAccount(account.label, account.endpoint, account.key);
-          if (account.matchSource) merged.push(...items);
-          log(`${account.label} Naver API 데이터 ${items.length}건을 불러왔습니다.`);
+          if (account.endpoint) {
+            const items = await fetchNaverAccount(account.label, account.endpoint, account.key);
+            if (account.matchSource) merged.push(...items);
+            log(`${account.label} Naver API 데이터 ${items.length}건을 불러왔습니다.`);
+          } else if (account.clientId) {
+            log(`${account.label} (Client ID: ${account.clientId}) 연동 설정이 확인되었습니다.`);
+          }
         }
         if (merged.length) {
           $("naverData").value = JSON.stringify(merged, null, 2);
@@ -2591,7 +2568,7 @@
 
     function saveSettings() {
       if (!requireEdit("설정 저장")) return;
-      const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "datalabEndpoint", "datalabApiKey", "newsEndpoint", "newsApiKey", "shoppingInsightEndpoint", "shoppingInsightApiKey"];
+      const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"];
       const config = Object.fromEntries(ids.map((id) => [id, $(id).value]));
       config.scheduleTimes = getScheduleTimes();
       localStorage.setItem("keywordMonitorConfig", JSON.stringify(config));
