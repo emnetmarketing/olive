@@ -322,11 +322,11 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      min-height: 80px;
+      gap: 24px;
+      min-height: 92px;
       max-width: 1480px;
       margin: 0 auto;
-      padding: 16px 22px 8px 300px;
+      padding: 24px 22px 8px 318px;
       color: var(--ink);
     }
 
@@ -338,14 +338,15 @@
     }
 
     header > div:first-child {
+      flex: 0 0 300px;
       flex-shrink: 0;
-      min-width: max-content;
+      min-width: 300px;
       white-space: nowrap;
     }
 
     header h1 {
-      font-size: 16px;
-      line-height: 1.2;
+      font-size: 24px;
+      line-height: 1.25;
       font-weight: 900;
       white-space: nowrap !important;
       word-break: keep-all;
@@ -360,10 +361,10 @@
     .header-eyebrow {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      margin-bottom: 3px;
+      gap: 8px;
+      margin-bottom: 8px;
       color: var(--brand-dark);
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 900;
       white-space: nowrap;
     }
@@ -506,7 +507,10 @@
     }
 
     header .toolbar {
+      flex: 1;
       flex-wrap: nowrap;
+      justify-content: flex-end;
+      min-width: 0;
     }
 
     header button {
@@ -1164,7 +1168,21 @@
     }
 
     @media (max-width: 1040px) {
-      header { padding: 22px 18px 8px; }
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 14px;
+        padding: 22px 18px 8px;
+      }
+      header > div:first-child {
+        flex-basis: auto;
+        min-width: 0;
+      }
+      header .toolbar {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        width: 100%;
+      }
       main { grid-template-columns: 1fr; }
       aside { position: static; }
       .grid, .stats, .two { grid-template-columns: 1fr; }
