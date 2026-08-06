@@ -1048,29 +1048,64 @@
     }
 
     .user-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 112px 78px;
-      gap: 8px;
-      align-items: center;
-      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
-      border-radius: 13px;
+      border-radius: 12px;
       background: #fff;
     }
 
-    .user-row strong,
-    .user-row span {
+    .user-row-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
       min-width: 0;
+    }
+
+    .user-row-info strong {
+      font-size: 12px;
+      color: var(--ink);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .user-row select {
-      min-height: 36px;
-      padding: 7px 9px;
-      border-radius: 10px;
+    .user-row-info small {
+      font-size: 11px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .user-row-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+    }
+
+    .user-row-actions select {
+      flex: 1;
+      min-width: 0;
+      height: 32px;
       font-size: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 0 6px;
+      background: #fff;
+    }
+
+    .user-row-actions button {
+      min-width: 54px;
+      height: 32px;
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 8px;
+      padding: 0 8px;
+      white-space: nowrap;
     }
 
     .permission-note {
@@ -1355,14 +1390,14 @@
           </div>
 
           <div class="api-card">
-            <div class="api-card-title">네이버 데이터랩 API <span class="api-tag">DataLab</span></div>
+            <div class="api-card-title">네이버 검색어트렌드 API <span class="api-tag">Search Trend</span></div>
             <div class="field">
               <label for="datalabEndpoint">Endpoint</label>
-              <input id="datalabEndpoint" placeholder="데이터랩 API 또는 사내 프록시 URL">
+              <input id="datalabEndpoint" placeholder="검색어트렌드 API 또는 사내 프록시 URL">
             </div>
             <div class="field">
               <label for="datalabApiKey">API Key / Token</label>
-              <input id="datalabApiKey" type="password" placeholder="데이터랩 토큰">
+              <input id="datalabApiKey" type="password" placeholder="검색어트렌드 토큰">
             </div>
           </div>
 
@@ -1406,7 +1441,7 @@
       <section class="panel">
         <h2>모니터링 요약</h2>
         <div class="stats">
-          <div class="stat"><b id="statDatalab">0</b><span class="muted">네이버 데이터랩</span></div>
+          <div class="stat"><b id="statDatalab">0</b><span class="muted">네이버 검색어트렌드</span></div>
           <div class="stat"><b id="statShoppingInsight">0</b><span class="muted">네이버 쇼핑인사이트</span></div>
           <div class="stat"><b id="statNews">0</b><span class="muted">네이버 뉴스</span></div>
           <div class="stat"><b id="statMatches">0</b><span class="muted">일치 키워드</span></div>
@@ -1800,13 +1835,18 @@
       }
       list.innerHTML = users.map((user) => `
         <div class="user-row">
-          <span><strong>${escapeHtml(user.name || user.email)}</strong><br><small class="muted">${escapeHtml(user.email)} · ${user.status === "approved" ? "승인됨" : user.status === "rejected" ? "거절됨" : "승인 대기"}</small></span>
-          <select class="role-select" data-user-email="${escapeHtml(user.email)}" ${state.currentUser?.email === user.email ? "disabled" : ""}>
-            <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기</option>
-            <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집</option>
-            <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
-          </select>
-          <button class="secondary approve-user-btn" type="button" data-user-email="${escapeHtml(user.email)}" ${user.status === "approved" ? "disabled" : ""}>승인</button>
+          <div class="user-row-info">
+            <strong>${escapeHtml(user.name || user.email)}</strong>
+            <small class="muted">${escapeHtml(user.email)} · ${user.status === "approved" ? "승인됨" : user.status === "rejected" ? "거절됨" : "승인 대기"}</small>
+          </div>
+          <div class="user-row-actions">
+            <select class="role-select" data-user-email="${escapeHtml(user.email)}" ${state.currentUser?.email === user.email ? "disabled" : ""}>
+              <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기</option>
+              <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집</option>
+              <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
+            </select>
+            <button class="secondary approve-user-btn" type="button" data-user-email="${escapeHtml(user.email)}" ${user.status === "approved" ? "disabled" : ""}>승인</button>
+          </div>
         </div>
       `).join("");
 
@@ -2185,7 +2225,7 @@
       const shoppingInsight = Number(row.sources.shoppingInsight || row.sources.shopping || row.lift || 0);
       const news = Number(row.sources.news || 0);
       return [
-        `데이터랩 ${datalab.toLocaleString("ko-KR")}`,
+        `검색어트렌드 ${datalab.toLocaleString("ko-KR")}`,
         `쇼핑인사이트 ${shoppingInsight.toLocaleString("ko-KR")}`,
         `뉴스 ${news.toLocaleString("ko-KR")}`
       ].join("<br>");
@@ -2517,7 +2557,7 @@
       const accounts = [
         { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), matchSource: true },
         { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), matchSource: true },
-        { label: "네이버 데이터랩", endpoint: $("datalabEndpoint").value.trim(), key: $("datalabApiKey").value.trim(), matchSource: false },
+        { label: "네이버 검색어트렌드", endpoint: $("datalabEndpoint").value.trim(), key: $("datalabApiKey").value.trim(), matchSource: false },
         { label: "네이버 뉴스", endpoint: $("newsEndpoint").value.trim(), key: $("newsApiKey").value.trim(), matchSource: false },
         { label: "쇼핑인사이트", endpoint: $("shoppingInsightEndpoint").value.trim(), key: $("shoppingInsightApiKey").value.trim(), matchSource: false }
       ].filter((account) => account.endpoint);
