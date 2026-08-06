@@ -90,19 +90,24 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      min-height: 40px;
-      padding: 8px 12px;
+      min-height: 34px;
+      padding: 0 12px;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: rgba(255,255,255,.78);
       color: #24324b;
       font-size: 12px;
       font-weight: 900;
+      line-height: 1;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transform: translateY(-1px);
     }
 
     .user-chip small {
       color: var(--muted);
       font-weight: 800;
+      white-space: nowrap;
     }
 
     .header-access-btn {
@@ -159,7 +164,7 @@
     }
 
     .modal-card {
-      width: min(780px, 100%);
+      width: min(920px, 100%);
       max-height: 88vh;
       background: #ffffff;
       border-radius: 20px;
@@ -244,6 +249,36 @@
       border: 1px solid #bbf7d0;
     }
 
+    .summary-chip.approved {
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+    }
+
+    .permission-guide {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .permission-guide-item {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .permission-guide-item strong {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
     .modal-user-table {
       width: 100%;
       border-collapse: collapse;
@@ -317,6 +352,20 @@
     }
 
     .btn-delete:hover { background: #e2e8f0; color: #0f172a; }
+
+    .btn-transfer {
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: #ede9fe;
+      color: #6d28d9;
+      border: 1px solid #c4b5fd;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn-transfer:hover { background: #ddd6fe; }
 
     header {
       display: flex;
@@ -1167,6 +1216,24 @@
       background: linear-gradient(90deg, var(--brand), var(--brand-2));
     }
 
+    @media (max-width: 1320px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+        padding: 22px 22px 8px 326px;
+      }
+      header > div:first-child {
+        flex-basis: auto;
+        min-width: 0;
+      }
+      header .toolbar {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        width: 100%;
+      }
+    }
+
     @media (max-width: 1040px) {
       header {
         align-items: flex-start;
@@ -1186,6 +1253,7 @@
       main { grid-template-columns: 1fr; }
       aside { position: static; }
       .grid, .stats, .two { grid-template-columns: 1fr; }
+      .permission-guide { grid-template-columns: 1fr; }
       .header-date-range {
         width: 100%;
         align-items: stretch;
@@ -1227,7 +1295,7 @@
         <button id="loginBtn" type="button">로그인</button>
         <button id="requestAccessBtn" class="secondary" type="button">접근 신청</button>
       </div>
-      <div class="auth-note"><strong>huni@emnet.co.kr</strong> 계정만 마스터로 등록됩니다. 그 외 계정은 접근 신청 후 마스터의 승인이 필요합니다.</div>
+      <div class="auth-note">초기 마스터는 <strong>huni@emnet.co.kr</strong>입니다. 그 외 계정은 접근 신청 후 승인이 필요하며, 마스터는 권한 관리에서 위임할 수 있습니다.</div>
     </div>
   </div>
 
@@ -1250,7 +1318,7 @@
       <button id="runBtn">▶ 분석 실행</button>
       <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
       <button id="teamsBtn" class="success">↗ Teams 전송</button>
-      <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">접근 신청 <span id="pendingBadge" class="badge-count">0</span></button>
+      <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">권한 관리 <span id="pendingBadge" class="badge-count">0</span></button>
       <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
       <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
     </div>
@@ -1336,7 +1404,7 @@
 
       <div id="apiPanel" class="tab-panel" hidden>
         <h2>API 연결</h2>
-        <div id="permissionNote" class="permission-note">현재 계정은 보기/다운로드 권한만 있습니다. API 연결과 모니터링 조건은 편집할 수 없습니다.</div>
+        <div id="permissionNote" class="permission-note">현재 계정은 실행 권한입니다. 분석과 수집은 실행할 수 있지만 API 연결과 모니터링 조건은 편집할 수 없습니다.</div>
         <div class="note">운영 연결 시 5개 API 정보를 이곳에서 관리합니다. 브라우저 직접 호출이 막히면 사내 프록시 URL을 입력하세요.</div>
         <div id="adminAccessCard" class="admin-card">
           <div class="api-card-title">접근 승인 및 권한 관리 <span class="api-tag">Master</span></div>
@@ -1527,15 +1595,21 @@
     <div class="modal-card">
       <div class="modal-header">
         <div>
-          <h2>🔒 접근 신청 및 사용자 권한 관리</h2>
-          <p class="modal-sub">신청된 사용자를 승인/거절하고 역할 권한을 설정합니다.</p>
+          <h2>🔒 사용자 권한 관리</h2>
+          <p class="modal-sub">승인 상태와 권한 범위를 확인하고, 승인된 사용자에게 마스터 권한을 위임할 수 있습니다.</p>
         </div>
         <button id="closeAccessModalBtn" class="modal-close" type="button">&times;</button>
       </div>
       <div class="modal-body">
         <div class="modal-summary">
           <div class="summary-chip pending">승인 대기 <strong id="modalPendingCount">0</strong>명</div>
+          <div class="summary-chip approved">승인 완료 <strong id="modalApprovedCount">0</strong>명</div>
           <div class="summary-chip total">전체 계정 <strong id="modalTotalCount">0</strong>명</div>
+        </div>
+        <div class="permission-guide">
+          <div class="permission-guide-item"><strong>마스터</strong>사용자 승인·거절, 권한 변경, 마스터 위임 및 모든 기능</div>
+          <div class="permission-guide-item"><strong>편집 권한</strong>설정과 API 정보를 수정하고 모든 기능 실행</div>
+          <div class="permission-guide-item"><strong>실행 권한</strong>설정은 변경하지 않고 분석·수집·전송·다운로드만 실행</div>
         </div>
         <div class="user-table-wrap">
           <table class="modal-user-table">
@@ -1559,7 +1633,8 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null };
-    const MASTER_EMAIL = "huni@emnet.co.kr";
+    const DEFAULT_MASTER_EMAIL = "huni@emnet.co.kr";
+    const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
 
     const sampleInstagram = [
       { keyword: "아크멜로 비타 세럼", today: 12840, yesterday: 94, sources: { comments: 8210, feed: 3022, hashtags: 1608 } },
@@ -1584,16 +1659,18 @@
       try {
         const storedUsers = JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
         if (!Array.isArray(storedUsers)) return [];
+        const masterEmail = getMasterEmail();
 
         // 지정된 계정만 마스터로 유지하고, 과거 자동 생성된 마스터 권한은 회수한다.
         const normalizedUsers = storedUsers.map((user) => {
           const email = normalizeEmail(user.email);
-          if (email === MASTER_EMAIL) {
+          if (email === masterEmail) {
             return { ...user, email, role: "master", status: "approved" };
           }
           if (user.role === "master") {
-            return { ...user, email, role: "viewer", status: "pending" };
+            return { ...user, email, role: "operator", status: "pending" };
           }
+          if (user.role === "viewer") return { ...user, email, role: "operator" };
           return { ...user, email };
         }).filter((user) => user.email);
 
@@ -1613,6 +1690,10 @@
 
     function normalizeEmail(value) {
       return String(value || "").trim().toLowerCase();
+    }
+
+    function getMasterEmail() {
+      return normalizeEmail(localStorage.getItem(MASTER_EMAIL_STORAGE_KEY) || DEFAULT_MASTER_EMAIL);
     }
 
     function requestAccess() {
@@ -1642,12 +1723,12 @@
         return;
       }
 
-      const isMasterAccount = email === MASTER_EMAIL;
+      const isMasterAccount = email === getMasterEmail();
       const newUser = {
         email,
         name,
         password,
-        role: isMasterAccount ? "master" : "viewer",
+        role: isMasterAccount ? "master" : "operator",
         status: isMasterAccount ? "approved" : "pending",
         requestedAt: new Date().toISOString()
       };
@@ -1731,6 +1812,10 @@
       return ["master", "editor"].includes(state.currentUser?.role);
     }
 
+    function canOperate() {
+      return ["master", "editor", "operator"].includes(state.currentUser?.role);
+    }
+
     function isMaster() {
       return state.currentUser?.role === "master";
     }
@@ -1748,16 +1833,16 @@
     }
 
     function roleLabel(role) {
-      return { master: "마스터", editor: "편집자", viewer: "보기/다운로드" }[role] || "보기";
+      return { master: "마스터", editor: "편집 권한", operator: "실행 권한" }[role] || "실행 권한";
     }
 
     function roleOptions(user) {
-      if (user.email === MASTER_EMAIL) {
+      if (user.email === getMasterEmail()) {
         return '<option value="master" selected>마스터</option>';
       }
       return `
-        <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기/다운로드</option>
-        <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집자</option>
+        <option value="operator" ${user.role === "operator" ? "selected" : ""}>실행 권한</option>
+        <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집 권한</option>
       `;
     }
 
@@ -1771,6 +1856,7 @@
 
     function applyPermissions() {
       const editable = canEdit();
+      const operable = canOperate();
       const master = isMaster();
       $("permissionNote").style.display = editable ? "none" : "block";
       $("adminAccessCard").style.display = master ? "block" : "none";
@@ -1781,7 +1867,7 @@
         "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
         "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
         "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
-        "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret", "excelUpload"
+        "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"
       ];
       editableIds.forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
@@ -1790,18 +1876,23 @@
       Array.from(document.querySelectorAll(".schedule-time-input, .remove-schedule-time-btn")).forEach((el) => {
         el.disabled = !editable;
       });
-      ["scheduleBtn", "saveBtn", "apiBtn", "addScheduleTimeBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
+      ["saveBtn", "addScheduleTimeBtn"].forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
       });
-      $("runBtn").disabled = false;
-      $("excelDownloadBtn").disabled = false;
-      $("downloadHistoryBtn").disabled = false;
-      $("teamsBtn").disabled = !editable;
+      ["runBtn", "scheduleBtn", "apiBtn", "startScheduleBtn", "stopScheduleBtn", "excelUpload", "excelDownloadBtn", "downloadHistoryBtn", "teamsBtn"].forEach((id) => {
+        if ($(id)) $(id).disabled = !operable;
+      });
     }
 
     function requireEdit(actionName = "이 기능") {
       if (canEdit()) return true;
       alert(`${actionName}은 편집 권한이 필요합니다.`);
+      return false;
+    }
+
+    function requireOperate(actionName = "이 기능") {
+      if (canOperate()) return true;
+      alert(`${actionName}은 실행 권한이 필요합니다.`);
       return false;
     }
 
@@ -1830,9 +1921,14 @@
     }
 
     function renderModalUserList() {
-      const users = getUsers();
+      const users = [...getUsers()].sort((a, b) => {
+        const statusOrder = { pending: 0, approved: 1, rejected: 2 };
+        return (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
+      });
       const pendingUsers = users.filter((u) => u.status === "pending");
+      const approvedUsers = users.filter((u) => u.status === "approved");
       $("modalPendingCount").textContent = pendingUsers.length;
+      $("modalApprovedCount").textContent = approvedUsers.length;
       $("modalTotalCount").textContent = users.length;
 
       const tbody = $("modalUserList");
@@ -1866,6 +1962,7 @@
             <td>
               <div class="action-btn-group">
                 ${user.status !== "approved" ? `<button class="btn-approve" type="button" data-email="${escapeHtml(user.email)}">승인</button>` : ""}
+                ${user.status === "approved" && !isCurrentMaster ? `<button class="btn-transfer" type="button" data-email="${escapeHtml(user.email)}">마스터 위임</button>` : ""}
                 ${user.status !== "rejected" && !isCurrentMaster ? `<button class="btn-reject" type="button" data-email="${escapeHtml(user.email)}">거절</button>` : ""}
                 ${!isCurrentMaster ? `<button class="btn-delete" type="button" data-email="${escapeHtml(user.email)}" title="계정 삭제">삭제</button>` : ""}
               </div>
@@ -1882,6 +1979,9 @@
       });
       Array.from(document.querySelectorAll(".btn-reject")).forEach((btn) => {
         btn.addEventListener("click", () => rejectUser(btn.dataset.email));
+      });
+      Array.from(document.querySelectorAll(".btn-transfer")).forEach((btn) => {
+        btn.addEventListener("click", () => transferMaster(btn.dataset.email));
       });
       Array.from(document.querySelectorAll(".btn-delete")).forEach((btn) => {
         btn.addEventListener("click", () => deleteUser(btn.dataset.email));
@@ -1940,11 +2040,34 @@
     function updateUserRole(email, role) {
       if (!isMaster()) return;
       const normalizedTarget = normalizeEmail(email);
-      if (normalizedTarget === MASTER_EMAIL || !["viewer", "editor"].includes(role)) return;
+      if (normalizedTarget === getMasterEmail() || !["operator", "editor"].includes(role)) return;
       const users = getUsers().map((user) => user.email === normalizedTarget ? { ...user, role } : user);
       setUsers(users);
       renderAccessUsers();
       renderModalUserList();
+    }
+
+    function transferMaster(email) {
+      if (!isMaster()) return;
+      const targetEmail = normalizeEmail(email);
+      const currentMasterEmail = getMasterEmail();
+      const users = getUsers();
+      const targetUser = users.find((user) => user.email === targetEmail && user.status === "approved");
+      if (!targetUser || targetEmail === currentMasterEmail) return;
+      if (!confirm(`마스터 권한을 '${targetEmail}' 계정에 위임하시겠습니까?\n위임 후 현재 계정은 편집 권한으로 변경됩니다.`)) return;
+
+      const updatedUsers = users.map((user) => {
+        if (user.email === targetEmail) return { ...user, role: "master", status: "approved" };
+        if (user.email === currentMasterEmail) return { ...user, role: "editor", status: "approved" };
+        return user.role === "master" ? { ...user, role: "operator" } : user;
+      });
+
+      localStorage.setItem(MASTER_EMAIL_STORAGE_KEY, targetEmail);
+      setUsers(updatedUsers);
+      state.currentUser = updatedUsers.find((user) => user.email === state.currentUser?.email) || null;
+      closeAccessModal();
+      applyAuthState();
+      alert(`마스터 권한이 ${targetEmail} 계정으로 위임되었습니다.`);
     }
 
     function deleteUser(email) {
@@ -1958,7 +2081,7 @@
     }
 
     function toggleSchedulePanel() {
-      if (!requireEdit("자동 수집 설정")) return;
+      if (!requireOperate("자동 수집 설정 열기")) return;
       $("schedulePanel").classList.toggle("open");
     }
 
@@ -2001,7 +2124,7 @@
     }
 
     function startScheduledCollection() {
-      if (!requireEdit("자동 수집 시작")) return;
+      if (!requireOperate("자동 수집 시작")) return;
       stopScheduledCollection(false);
       const nextRun = getNextRunDate(new Date());
       if (!nextRun) {
@@ -2486,7 +2609,7 @@
     }
 
     async function sendTeams() {
-      if (!requireEdit("Teams 전송")) return;
+      if (!requireOperate("Teams 전송")) return;
       if (!state.results.length) analyze();
       if (!state.results.length) {
         alert("전송할 매칭 결과가 없습니다.");
@@ -2568,7 +2691,7 @@
     }
 
     async function handleExcelUpload(event) {
-      if (!requireEdit("엑셀 업로드")) {
+      if (!requireOperate("엑셀 업로드")) {
         event.target.value = "";
         return;
       }
@@ -2616,7 +2739,7 @@
     }
 
     async function fetchApiData() {
-      if (!requireEdit("API 데이터 가져오기")) return;
+      if (!requireOperate("API 데이터 가져오기")) return;
       const accounts = [
         { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), matchSource: true },
         { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), matchSource: true },
