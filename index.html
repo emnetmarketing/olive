@@ -322,11 +322,11 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 18px;
-      min-height: 92px;
+      gap: 12px;
+      min-height: 80px;
       max-width: 1480px;
       margin: 0 auto;
-      padding: 24px 22px 8px 318px;
+      padding: 16px 22px 8px 300px;
       color: var(--ink);
     }
 
@@ -335,6 +335,20 @@
       font-size: 24px;
       line-height: 1.25;
       font-weight: 900;
+    }
+
+    header > div:first-child {
+      flex-shrink: 0;
+      min-width: max-content;
+      white-space: nowrap;
+    }
+
+    header h1 {
+      font-size: 16px;
+      line-height: 1.2;
+      font-weight: 900;
+      white-space: nowrap !important;
+      word-break: keep-all;
     }
 
     header p {
@@ -346,11 +360,12 @@
     .header-eyebrow {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
+      gap: 6px;
+      margin-bottom: 3px;
       color: var(--brand-dark);
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 900;
+      white-space: nowrap;
     }
 
     main {
@@ -486,36 +501,48 @@
     .toolbar {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
+    }
+
+    header .toolbar {
+      flex-wrap: nowrap;
+    }
+
+    header button {
+      padding: 0 10px;
+      min-height: 34px;
+      font-size: 12px;
+      border-radius: 9px;
+      white-space: nowrap;
     }
 
     .header-date-range {
       display: flex;
-      align-items: end;
-      gap: 8px;
-      padding: 6px;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 6px;
       border: 1px solid var(--line);
-      border-radius: 16px;
-      background: rgba(255, 255, 255, .72);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, .82);
       box-shadow: var(--shadow-soft);
     }
 
     .header-date-range .field {
-      min-width: 142px;
+      min-width: 118px;
       margin-bottom: 0;
-      gap: 4px;
+      gap: 2px;
     }
 
     .header-date-range input {
-      min-height: 36px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      font-size: 12px;
+      min-height: 30px;
+      padding: 4px 6px;
+      border-radius: 8px;
+      font-size: 11px;
     }
 
     .header-date-range label {
-      font-size: 10px;
+      font-size: 9px;
       padding-left: 2px;
     }
 
