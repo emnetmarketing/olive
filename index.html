@@ -326,7 +326,7 @@
       min-height: 92px;
       max-width: 1480px;
       margin: 0 auto;
-      padding: 24px 22px 8px 318px;
+      padding: 24px 22px 8px 326px;
       color: var(--ink);
     }
 
@@ -345,7 +345,7 @@
     }
 
     header h1 {
-      font-size: 24px;
+      font-size: 28px;
       line-height: 1.25;
       font-weight: 900;
       white-space: nowrap !important;
@@ -364,7 +364,7 @@
       gap: 8px;
       margin-bottom: 8px;
       color: var(--brand-dark);
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 900;
       white-space: nowrap;
     }
@@ -1227,7 +1227,7 @@
         <button id="loginBtn" type="button">로그인</button>
         <button id="requestAccessBtn" class="secondary" type="button">접근 신청</button>
       </div>
-      <div class="auth-note">최초 가입(접근 신청)자는 이메일과 비밀번호를 작성하면 자동으로 <strong>마스터(관리자)</strong>로 등록되며 즉시 로그인됩니다. 이후 신청자는 마스터의 승인이 필요합니다.</div>
+      <div class="auth-note"><strong>huni@emnet.co.kr</strong> 계정만 마스터로 등록됩니다. 그 외 계정은 접근 신청 후 마스터의 승인이 필요합니다.</div>
     </div>
   </div>
 
@@ -1559,6 +1559,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null };
+    const MASTER_EMAIL = "huni@emnet.co.kr";
 
     const sampleInstagram = [
       { keyword: "아크멜로 비타 세럼", today: 12840, yesterday: 94, sources: { comments: 8210, feed: 3022, hashtags: 1608 } },
@@ -1581,7 +1582,25 @@
 
     function getUsers() {
       try {
-        return JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
+        const storedUsers = JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
+        if (!Array.isArray(storedUsers)) return [];
+
+        // 지정된 계정만 마스터로 유지하고, 과거 자동 생성된 마스터 권한은 회수한다.
+        const normalizedUsers = storedUsers.map((user) => {
+          const email = normalizeEmail(user.email);
+          if (email === MASTER_EMAIL) {
+            return { ...user, email, role: "master", status: "approved" };
+          }
+          if (user.role === "master") {
+            return { ...user, email, role: "viewer", status: "pending" };
+          }
+          return { ...user, email };
+        }).filter((user) => user.email);
+
+        if (JSON.stringify(storedUsers) !== JSON.stringify(normalizedUsers)) {
+          localStorage.setItem("monitoringAccessUsers", JSON.stringify(normalizedUsers));
+        }
+        return normalizedUsers;
       } catch {
         localStorage.removeItem("monitoringAccessUsers");
         return [];
@@ -1623,21 +1642,21 @@
         return;
       }
 
-      const isFirstUser = users.length === 0;
+      const isMasterAccount = email === MASTER_EMAIL;
       const newUser = {
         email,
         name,
         password,
-        role: isFirstUser ? "master" : "viewer",
-        status: isFirstUser ? "approved" : "pending",
+        role: isMasterAccount ? "master" : "viewer",
+        status: isMasterAccount ? "approved" : "pending",
         requestedAt: new Date().toISOString()
       };
 
       users.push(newUser);
       setUsers(users);
 
-      if (isFirstUser) {
-        alert("첫 번째 가입자로 마스터(관리자) 계정이 자동 승인되었습니다.");
+      if (isMasterAccount) {
+        alert("지정된 마스터(관리자) 계정으로 등록되었습니다.");
         state.currentUser = newUser;
         sessionStorage.setItem("monitoringCurrentUser", newUser.email);
         applyAuthState();
@@ -1730,6 +1749,16 @@
 
     function roleLabel(role) {
       return { master: "마스터", editor: "편집자", viewer: "보기/다운로드" }[role] || "보기";
+    }
+
+    function roleOptions(user) {
+      if (user.email === MASTER_EMAIL) {
+        return '<option value="master" selected>마스터</option>';
+      }
+      return `
+        <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기/다운로드</option>
+        <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집자</option>
+      `;
     }
 
     function updateAlertStateFields() {
@@ -1831,9 +1860,7 @@
             <td>${statusBadge}</td>
             <td>
               <select class="modal-role-select" data-user-email="${escapeHtml(user.email)}" ${isCurrentMaster ? "disabled" : ""}>
-                <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기/다운로드</option>
-                <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집자</option>
-                <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
+                ${roleOptions(user)}
               </select>
             </td>
             <td>
@@ -1877,9 +1904,7 @@
           </div>
           <div class="user-row-actions">
             <select class="role-select" data-user-email="${escapeHtml(user.email)}" ${state.currentUser?.email === user.email ? "disabled" : ""}>
-              <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>보기</option>
-              <option value="editor" ${user.role === "editor" ? "selected" : ""}>편집</option>
-              <option value="master" ${user.role === "master" ? "selected" : ""}>마스터</option>
+              ${roleOptions(user)}
             </select>
             <button class="secondary approve-user-btn" type="button" data-user-email="${escapeHtml(user.email)}" ${user.status === "approved" ? "disabled" : ""}>승인</button>
           </div>
@@ -1914,7 +1939,9 @@
 
     function updateUserRole(email, role) {
       if (!isMaster()) return;
-      const users = getUsers().map((user) => user.email === email ? { ...user, role } : user);
+      const normalizedTarget = normalizeEmail(email);
+      if (normalizedTarget === MASTER_EMAIL || !["viewer", "editor"].includes(role)) return;
+      const users = getUsers().map((user) => user.email === normalizedTarget ? { ...user, role } : user);
       setUsers(users);
       renderAccessUsers();
       renderModalUserList();
