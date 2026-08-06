@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Instagram x Naver Keyword Surge Monitor</title>
+  <title>네쇼검 트렌드 모니터</title>
   <style>
     :root {
       --bg: #f7f9ff;
@@ -1168,7 +1168,7 @@
   <div id="authScreen" class="auth-screen">
     <div class="auth-card">
       <span class="header-eyebrow">SECURE ACCESS</span>
-      <h1>네쇼검 이슈라이징 모니터링 솔루션</h1>
+      <h1>네쇼검 트렌드 모니터</h1>
       <p>마스터가 승인한 사용자만 접근할 수 있습니다. 목업에서는 브라우저 저장소 기준으로 승인/권한 흐름을 확인합니다.</p>
       <div class="field">
         <label for="loginEmail">이메일</label>
@@ -1188,8 +1188,8 @@
 
   <header>
     <div>
-      <span class="header-eyebrow">NAVER SEARCH AD MONITOR</span>
-      <h1>네쇼검 이슈라이징 모니터링 솔루션</h1>
+      <span class="header-eyebrow">NAVER TREND MONITOR</span>
+      <h1>네쇼검 트렌드 모니터</h1>
     </div>
     <div class="toolbar">
       <div class="header-date-range">
@@ -1252,9 +1252,9 @@
   <main>
     <aside>
       <div class="brand-card">
-        <span class="brand-mark">IM</span>
+        <span class="brand-mark">NT</span>
         <div>
-          <span class="brand-name">Issue Rising Monitor</span>
+          <span class="brand-name">Naver Trend Monitor</span>
           <span class="brand-sub">Keyword monitor</span>
         </div>
       </div>
@@ -1341,6 +1341,13 @@
 
           <div class="api-card">
             <div class="api-card-title">자동 알람 설정 <span class="api-tag">Automation</span></div>
+            <div class="field">
+              <label for="alertState">자동 알람 스위치 (ON / OFF)</label>
+              <select id="alertState">
+                <option value="off">🔴 OFF (자동 알람 끄기)</option>
+                <option value="on">🟢 ON (자동 알람 켜기)</option>
+              </select>
+            </div>
             <div class="field">
               <label for="alertChannel">알람 채널</label>
               <select id="alertChannel">
@@ -1680,6 +1687,14 @@
       return { master: "마스터", editor: "편집자", viewer: "보기/다운로드" }[role] || "보기";
     }
 
+    function updateAlertStateFields() {
+      const isOff = $("alertState")?.value === "off";
+      const editable = canEdit();
+      ["alertChannel", "alertInterval", "alertRule"].forEach((id) => {
+        if ($(id)) $(id).disabled = !editable || isOff;
+      });
+    }
+
     function applyPermissions() {
       const editable = canEdit();
       const master = isMaster();
@@ -1691,12 +1706,13 @@
         "surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd",
         "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
         "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
-        "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
+        "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
         "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret", "excelUpload"
       ];
       editableIds.forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
       });
+      updateAlertStateFields();
       Array.from(document.querySelectorAll(".schedule-time-input, .remove-schedule-time-btn")).forEach((el) => {
         el.disabled = !editable;
       });
@@ -2570,7 +2586,7 @@
 
     function saveSettings() {
       if (!requireEdit("설정 저장")) return;
-      const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"];
+      const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"];
       const config = Object.fromEntries(ids.map((id) => [id, $(id) ? $(id).value : ""]));
       config.scheduleTimes = getScheduleTimes();
       localStorage.setItem("keywordMonitorConfig", JSON.stringify(config));
@@ -2597,6 +2613,7 @@
           if ($(id)) $(id).value = value;
         });
         restoreScheduleTimes(config.scheduleTimes);
+        updateAlertStateFields();
       } catch {
         localStorage.removeItem("keywordMonitorConfig");
       }
@@ -2607,6 +2624,7 @@
       if (el) el.addEventListener(type, fn);
     }
 
+    bindEvent("alertState", "change", updateAlertStateFields);
     bindEvent("runBtn", "click", analyze);
     bindEvent("scheduleBtn", "click", toggleSchedulePanel);
     bindEvent("startScheduleBtn", "click", startScheduledCollection);
