@@ -279,6 +279,16 @@
       font-size: 12px;
     }
 
+    .settings-save-status {
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .settings-save-status.saved { color: #15803d; }
+    .settings-save-status.error { color: #b91c1c; }
+
     .modal-user-table {
       width: 100%;
       border-collapse: collapse;
@@ -1495,6 +1505,14 @@
               <label for="naverApiKey1">API Key / Token</label>
               <input id="naverApiKey1" type="password" placeholder="계정 1 토큰">
             </div>
+            <div class="field">
+              <label for="naverSecretKey1">Secret Key</label>
+              <input id="naverSecretKey1" type="password" placeholder="계정 1 Secret Key">
+            </div>
+            <div class="field">
+              <label for="naverCustomerId1">Customer ID</label>
+              <input id="naverCustomerId1" placeholder="계정 1 Customer ID">
+            </div>
           </div>
 
           <div class="api-card">
@@ -1506,6 +1524,14 @@
             <div class="field">
               <label for="naverApiKey2">API Key / Token</label>
               <input id="naverApiKey2" type="password" placeholder="계정 2 토큰">
+            </div>
+            <div class="field">
+              <label for="naverSecretKey2">Secret Key</label>
+              <input id="naverSecretKey2" type="password" placeholder="계정 2 Secret Key">
+            </div>
+            <div class="field">
+              <label for="naverCustomerId2">Customer ID</label>
+              <input id="naverCustomerId2" placeholder="계정 2 Customer ID">
             </div>
           </div>
 
@@ -1519,12 +1545,14 @@
               <label for="naverClientSecret">Client Secret</label>
               <input id="naverClientSecret" type="password" placeholder="네이버 개발자센터 Client Secret">
             </div>
+            <div class="note">Client ID/Secret은 연결 정보로 저장됩니다. 설정 저장만으로 API 데이터가 자동 호출되지는 않으며, 현재 데이터 가져오기는 위 쇼핑검색광고 Endpoint를 대상으로 실행됩니다.</div>
           </div>
         </div>
         <div class="toolbar" style="margin-top:14px;">
           <button id="saveBtn" class="secondary">설정 저장</button>
           <button id="apiBtn" class="secondary">API 데이터 가져오기</button>
         </div>
+        <div id="apiSaveStatus" class="settings-save-status">저장 상태를 확인하는 중입니다.</div>
       </div>
     </aside>
 
@@ -1632,9 +1660,19 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null };
+    const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null };
     const DEFAULT_MASTER_EMAIL = "huni@emnet.co.kr";
     const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
+    const SETTINGS_STORAGE_KEY = "keywordMonitorConfig";
+    const SETTINGS_BACKUP_KEY = "keywordMonitorConfigBackup";
+    const SETTINGS_IDS = [
+      "surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd",
+      "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
+      "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
+      "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
+      "naverSecretKey1", "naverCustomerId1", "naverEndpoint2", "naverApiKey2",
+      "naverSecretKey2", "naverCustomerId2", "naverClientId", "naverClientSecret"
+    ];
 
     const sampleInstagram = [
       { keyword: "아크멜로 비타 세럼", today: 12840, yesterday: 94, sources: { comments: 8210, feed: 3022, hashtags: 1608 } },
@@ -1867,7 +1905,8 @@
         "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
         "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
         "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
-        "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"
+        "naverSecretKey1", "naverCustomerId1", "naverEndpoint2", "naverApiKey2",
+        "naverSecretKey2", "naverCustomerId2", "naverClientId", "naverClientSecret"
       ];
       editableIds.forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
@@ -2729,9 +2768,19 @@
       return data.items || data.data || data.keywords || data.ads || [];
     }
 
-    async function fetchNaverAccount(accountLabel, endpoint, key) {
+    async function fetchNaverAccount(accountLabel, endpoint, key, secretKey, customerId) {
+      const headers = {};
+      if (key) {
+        headers.Authorization = `Bearer ${key}`;
+        headers["X-API-KEY"] = key;
+      }
+      if (secretKey) headers["X-Secret-Key"] = secretKey;
+      if (customerId) {
+        headers["X-Customer"] = customerId;
+        headers["X-Customer-ID"] = customerId;
+      }
       const response = await fetch(endpoint, {
-        headers: key ? { "Authorization": `Bearer ${key}` } : {}
+        headers
       });
       if (!response.ok) throw new Error(`${accountLabel} HTTP ${response.status}`);
       const data = await response.json();
@@ -2741,8 +2790,8 @@
     async function fetchApiData() {
       if (!requireOperate("API 데이터 가져오기")) return;
       const accounts = [
-        { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), matchSource: true },
-        { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), matchSource: true },
+        { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), secretKey: $("naverSecretKey1").value.trim(), customerId: $("naverCustomerId1").value.trim(), matchSource: true },
+        { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), secretKey: $("naverSecretKey2").value.trim(), customerId: $("naverCustomerId2").value.trim(), matchSource: true },
         { label: "네이버 API HUB", clientId: $("naverClientId")?.value.trim(), clientSecret: $("naverClientSecret")?.value.trim(), matchSource: false }
       ].filter((account) => account.endpoint || account.clientId);
 
@@ -2753,13 +2802,22 @@
       try {
         $("apiBtn").disabled = true;
         const merged = [];
+        let hubCredentialsReady = false;
         for (const account of accounts) {
           if (account.endpoint) {
-            const items = await fetchNaverAccount(account.label, account.endpoint, account.key);
+            const missing = [
+              [account.key, "API Key / Token"],
+              [account.secretKey, "Secret Key"],
+              [account.customerId, "Customer ID"]
+            ].filter(([value]) => !value).map(([, label]) => label);
+            if (missing.length) throw new Error(`${account.label}: ${missing.join(", ")} 값을 입력하세요.`);
+            const items = await fetchNaverAccount(account.label, account.endpoint, account.key, account.secretKey, account.customerId);
             if (account.matchSource) merged.push(...items);
             log(`${account.label} Naver API 데이터 ${items.length}건을 불러왔습니다.`);
           } else if (account.clientId) {
-            log(`${account.label} (Client ID: ${account.clientId}) 연동 설정이 확인되었습니다.`);
+            if (!account.clientSecret) throw new Error("네이버 API HUB Client Secret을 입력하세요.");
+            hubCredentialsReady = true;
+            log(`${account.label} 인증 정보가 저장되어 있습니다. 실제 데이터 호출에는 API Endpoint 또는 프록시가 필요합니다.`);
           }
         }
         if (merged.length) {
@@ -2767,9 +2825,8 @@
           log(`쇼핑검색광고 계정 API 통합 데이터 ${merged.length}건을 매칭 기준에 반영했습니다.`);
           alert(`API 데이터 연동 성공: ${merged.length.toLocaleString("ko-KR")}건의 데이터를 불러와 반영했습니다.`);
           analyze();
-        } else {
-          log("네이버 API 연동 정보 저장이 확인되었습니다.");
-          alert("네이버 API HUB 연동 설정이 성공적으로 확인되었습니다.");
+        } else if (hubCredentialsReady) {
+          alert("네이버 API HUB 인증 정보는 정상적으로 저장되어 있습니다.\n\n설정 저장은 인증 정보를 보관하는 기능이며 데이터를 자동 호출하지 않습니다. 현재 API 데이터 가져오기는 쇼핑검색광고 Endpoint가 입력된 경우에만 실제 데이터를 요청합니다.");
         }
       } catch (error) {
         log(`API 가져오기 실패: ${error.message}`);
@@ -2779,14 +2836,33 @@
       }
     }
 
-    function saveSettings() {
+    function updateSettingsSaveStatus(message, type = "") {
+      const status = $("apiSaveStatus");
+      if (!status) return;
+      status.textContent = message;
+      status.className = `settings-save-status${type ? ` ${type}` : ""}`;
+    }
+
+    function saveSettings({ notify = true } = {}) {
       if (!requireEdit("설정 저장")) return;
-      const ids = ["surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd", "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint", "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey", "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1", "naverEndpoint2", "naverApiKey2", "naverClientId", "naverClientSecret"];
-      const config = Object.fromEntries(ids.map((id) => [id, $(id) ? $(id).value : ""]));
-      config.scheduleTimes = getScheduleTimes();
-      localStorage.setItem("keywordMonitorConfig", JSON.stringify(config));
-      log("설정을 브라우저 localStorage에 저장했습니다.");
-      alert("설정이 성공적으로 저장되었습니다.");
+      try {
+        const config = Object.fromEntries(SETTINGS_IDS.map((id) => [id, $(id) ? $(id).value : ""]));
+        config.scheduleTimes = getScheduleTimes();
+        config.savedAt = new Date().toISOString();
+        const serialized = JSON.stringify(config);
+        localStorage.setItem(SETTINGS_STORAGE_KEY, serialized);
+        localStorage.setItem(SETTINGS_BACKUP_KEY, serialized);
+        if (localStorage.getItem(SETTINGS_STORAGE_KEY) !== serialized) {
+          throw new Error("브라우저 저장소 검증에 실패했습니다.");
+        }
+        const savedTime = new Date(config.savedAt).toLocaleString("ko-KR");
+        updateSettingsSaveStatus(`✓ 이 브라우저에 저장됨 · ${savedTime}`, "saved");
+        log("설정을 브라우저 저장소에 저장하고 검증했습니다.");
+        if (notify) alert("설정이 이 브라우저에 저장되었습니다.\nAPI 데이터는 자동으로 호출되지 않으며 [API 데이터 가져오기] 버튼으로 별도 실행합니다.");
+      } catch (error) {
+        updateSettingsSaveStatus(`저장 실패 · ${error.message}`, "error");
+        if (notify) alert(`설정 저장에 실패했습니다: ${error.message}`);
+      }
     }
 
     function switchSideTab(tabName) {
@@ -2798,20 +2874,43 @@
     }
 
     function loadSettings() {
-      const raw = localStorage.getItem("keywordMonitorConfig");
-      if (!raw) return;
+      const primary = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      const backup = localStorage.getItem(SETTINGS_BACKUP_KEY);
+      const candidates = [primary, backup].filter(Boolean);
+      if (!candidates.length) {
+        updateSettingsSaveStatus("아직 이 브라우저에 저장된 설정이 없습니다.");
+        return;
+      }
       try {
-        const config = JSON.parse(raw);
+        let config = null;
+        for (const raw of candidates) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") {
+              config = parsed;
+              break;
+            }
+          } catch {}
+        }
+        if (!config) throw new Error("저장된 설정을 읽을 수 없습니다.");
         if (config.naverEndpoint && !config.naverEndpoint1) config.naverEndpoint1 = config.naverEndpoint;
         if (config.naverApiKey && !config.naverApiKey1) config.naverApiKey1 = config.naverApiKey;
-        Object.entries(config).forEach(([id, value]) => {
-          if ($(id)) $(id).value = value;
+        SETTINGS_IDS.forEach((id) => {
+          if ($(id) && Object.prototype.hasOwnProperty.call(config, id)) $(id).value = config[id] ?? "";
         });
         restoreScheduleTimes(config.scheduleTimes);
         updateAlertStateFields();
-      } catch {
-        localStorage.removeItem("keywordMonitorConfig");
+        const savedTime = config.savedAt ? new Date(config.savedAt).toLocaleString("ko-KR") : "저장 시간 정보 없음";
+        updateSettingsSaveStatus(`✓ 저장된 설정 불러옴 · ${savedTime}`, "saved");
+      } catch (error) {
+        updateSettingsSaveStatus(`설정 불러오기 실패 · ${error.message}`, "error");
       }
+    }
+
+    function scheduleSettingsAutosave() {
+      if (!canEdit()) return;
+      clearTimeout(state.settingsSaveTimer);
+      state.settingsSaveTimer = setTimeout(() => saveSettings({ notify: false }), 250);
     }
 
     function bindEvent(id, type, fn) {
@@ -2839,6 +2938,14 @@
     bindEvent("excelUpload", "change", handleExcelUpload);
     bindEvent("monitorTabBtn", "click", () => switchSideTab("monitor"));
     bindEvent("apiTabBtn", "click", () => switchSideTab("api"));
+
+    SETTINGS_IDS.forEach((id) => {
+      bindEvent(id, "input", scheduleSettingsAutosave);
+      bindEvent(id, "change", scheduleSettingsAutosave);
+    });
+    window.addEventListener("pagehide", () => {
+      if (canEdit()) saveSettings({ notify: false });
+    });
 
     bindEvent("headerAccessBtn", "click", openAccessModal);
     bindEvent("closeAccessModalBtn", "click", closeAccessModal);
