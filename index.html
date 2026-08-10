@@ -289,6 +289,20 @@
     .settings-save-status.saved { color: #15803d; }
     .settings-save-status.error { color: #b91c1c; }
 
+    .api-errors {
+      display: none;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      background: #fff7f7;
+      color: #991b1b;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .api-errors.visible { display: block; }
+
     .modal-user-table {
       width: 100%;
       border-collapse: collapse;
@@ -1497,55 +1511,17 @@
 
           <div class="api-card">
             <div class="api-card-title">네이버 쇼핑검색광고 계정 API 1 <span class="api-tag">Search Ad</span></div>
-            <div class="field">
-              <label for="naverEndpoint1">Endpoint</label>
-              <input id="naverEndpoint1" placeholder="계정 1 API 또는 사내 프록시 URL">
-            </div>
-            <div class="field">
-              <label for="naverApiKey1">API Key / Token</label>
-              <input id="naverApiKey1" type="password" placeholder="계정 1 토큰">
-            </div>
-            <div class="field">
-              <label for="naverSecretKey1">Secret Key</label>
-              <input id="naverSecretKey1" type="password" placeholder="계정 1 Secret Key">
-            </div>
-            <div class="field">
-              <label for="naverCustomerId1">Customer ID</label>
-              <input id="naverCustomerId1" placeholder="계정 1 Customer ID">
-            </div>
+            <div class="note">Endpoint, API Key, Secret Key, Customer ID는 브라우저에 저장하지 않고 Netlify 환경변수에서 서버 함수가 사용합니다.</div>
           </div>
 
           <div class="api-card">
             <div class="api-card-title">네이버 쇼핑검색광고 계정 API 2 <span class="api-tag">Search Ad</span></div>
-            <div class="field">
-              <label for="naverEndpoint2">Endpoint</label>
-              <input id="naverEndpoint2" placeholder="계정 2 API 또는 사내 프록시 URL">
-            </div>
-            <div class="field">
-              <label for="naverApiKey2">API Key / Token</label>
-              <input id="naverApiKey2" type="password" placeholder="계정 2 토큰">
-            </div>
-            <div class="field">
-              <label for="naverSecretKey2">Secret Key</label>
-              <input id="naverSecretKey2" type="password" placeholder="계정 2 Secret Key">
-            </div>
-            <div class="field">
-              <label for="naverCustomerId2">Customer ID</label>
-              <input id="naverCustomerId2" placeholder="계정 2 Customer ID">
-            </div>
+            <div class="note">Endpoint, API Key, Secret Key, Customer ID는 브라우저에 저장하지 않고 Netlify 환경변수에서 서버 함수가 사용합니다.</div>
           </div>
 
           <div class="api-card">
             <div class="api-card-title">네이버 API HUB <span class="api-tag">Naver Open API</span></div>
-            <div class="field">
-              <label for="naverClientId">Client ID</label>
-              <input id="naverClientId" placeholder="네이버 개발자센터 Client ID">
-            </div>
-            <div class="field">
-              <label for="naverClientSecret">Client Secret</label>
-              <input id="naverClientSecret" type="password" placeholder="네이버 개발자센터 Client Secret">
-            </div>
-            <div class="note">Client ID/Secret은 연결 정보로 저장됩니다. 설정 저장만으로 API 데이터가 자동 호출되지는 않으며, 현재 데이터 가져오기는 위 쇼핑검색광고 Endpoint를 대상으로 실행됩니다.</div>
+            <div class="note">Client ID와 Client Secret은 Netlify 환경변수에서만 사용합니다. 쇼핑인사이트는 화장품/미용(50000002)과 건강식품(50000023)을 서버에서 통합 조회합니다.</div>
           </div>
         </div>
         <div class="toolbar" style="margin-top:14px;">
@@ -1565,12 +1541,14 @@
       <section class="panel">
         <h2>모니터링 요약</h2>
         <div class="stats">
+          <div class="stat"><b id="statSearchAd">0</b><span class="muted">네이버 검색광고</span></div>
           <div class="stat"><b id="statDatalab">0</b><span class="muted">네이버 검색어트렌드</span></div>
           <div class="stat"><b id="statShoppingInsight">0</b><span class="muted">네이버 쇼핑인사이트</span></div>
           <div class="stat"><b id="statNews">0</b><span class="muted">네이버 뉴스</span></div>
           <div class="stat"><b id="statMatches">0</b><span class="muted">일치 키워드</span></div>
           <div class="stat"><b id="statLastRun">-</b><span class="muted">마지막 분석 시간</span></div>
         </div>
+        <div id="apiErrors" class="api-errors" role="alert"></div>
       </section>
 
       <section class="panel">
@@ -1665,28 +1643,15 @@
     const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
     const SETTINGS_STORAGE_KEY = "keywordMonitorConfig";
     const SETTINGS_BACKUP_KEY = "keywordMonitorConfigBackup";
+    const LEGACY_SECRET_IDS = [
+      "naverApiKey", "naverApiKey1", "naverApiKey2", "naverSecretKey1", "naverSecretKey2",
+      "naverCustomerId1", "naverCustomerId2", "naverClientId", "naverClientSecret"
+    ];
     const SETTINGS_IDS = [
       "surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd",
       "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
       "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
-      "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
-      "naverSecretKey1", "naverCustomerId1", "naverEndpoint2", "naverApiKey2",
-      "naverSecretKey2", "naverCustomerId2", "naverClientId", "naverClientSecret"
-    ];
-
-    const sampleInstagram = [
-      { keyword: "아크멜로 비타 세럼", today: 12840, yesterday: 94, sources: { comments: 8210, feed: 3022, hashtags: 1608 } },
-      { keyword: "아크멜로비타세럼", today: 10380, yesterday: 51, sources: { comments: 6900, feed: 2350, hashtags: 1130 } },
-      { keyword: "모닝글로우 쿠션", today: 18810, yesterday: 220, sources: { comments: 12010, feed: 4210, hashtags: 2590 } },
-      { keyword: "그냥 인기 해시태그", today: 15120, yesterday: 9870, sources: { comments: 8000, feed: 4020, hashtags: 3100 } },
-      { keyword: "루미네 바디미스트", today: 11420, yesterday: 40, sources: { comments: 7100, feed: 2510, hashtags: 1810 } }
-    ];
-
-    const sampleNaver = [
-      { account: "계정1", campaign: "스킨케어_상반기", adGroup: "세럼", brand: "아크멜로", product: "아크멜로 비타 세럼" },
-      { account: "계정1", campaign: "베이스_신제품", adGroup: "쿠션", brand: "모닝글로우", product: "모닝글로우 커버 쿠션" },
-      { account: "계정2", campaign: "바디_상시", adGroup: "미스트", brand: "루미네", product: "루미네 퍼퓸 바디미스트" },
-      { account: "계정2", campaign: "헤어_상시", adGroup: "샴푸", brand: "오르디", product: "오르디 단백질 샴푸" }
+      "alertState", "alertChannel", "alertInterval", "alertRule"
     ];
 
     function log(message) {
@@ -1904,9 +1869,7 @@
         "surgeThreshold", "matchThreshold", "yesterdayMax", "collectionStart", "collectionEnd",
         "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
         "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
-        "alertState", "alertChannel", "alertInterval", "alertRule", "naverEndpoint1", "naverApiKey1",
-        "naverSecretKey1", "naverCustomerId1", "naverEndpoint2", "naverApiKey2",
-        "naverSecretKey2", "naverCustomerId2", "naverClientId", "naverClientSecret"
+        "alertState", "alertChannel", "alertInterval", "alertRule"
       ];
       editableIds.forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
@@ -2374,43 +2337,93 @@
       return best;
     }
 
-    function analyze() {
-      try {
-        const instagram = parseJson("instagramData");
-        const naver = parseJson("naverData");
-        const surgeThreshold = Number($("surgeThreshold").value || 10000);
-        const matchThreshold = Number($("matchThreshold").value || 60);
-        const yesterdayMax = Number($("yesterdayMax").value || 300);
+    function clearAnalysisUI(message = "실제 API 분석 결과가 없습니다.") {
+      state.results = [];
+      ["statSearchAd", "statDatalab", "statShoppingInsight", "statNews", "statMatches"].forEach((id) => { $(id).textContent = "0"; });
+      $("statLastRun").textContent = "-";
+      $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
+      $("resultBody").innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(message)}</td></tr>`;
+    }
 
-        const surges = instagram.filter((row) => Number(row.today || 0) >= surgeThreshold && Number(row.yesterday || 0) <= yesterdayMax);
-        const results = surges.map((row) => {
-          const match = bestNaverMatch(row.keyword, naver);
-          const matched = match && match.score >= matchThreshold;
+    function showApiErrors(errors = {}) {
+      const panel = $("apiErrors");
+      const entries = Object.entries(errors).filter(([, message]) => message);
+      panel.classList.toggle("visible", entries.length > 0);
+      panel.innerHTML = entries.length
+        ? `<strong>API 호출 오류</strong><br>${entries.map(([api, message]) => `${escapeHtml(api)}: ${escapeHtml(message)}`).join("<br>")}`
+        : "";
+    }
+
+    function analysisKeywords(naverItems) {
+      return [...new Set(naverItems.flatMap((item) => [item.product, item.brand])
+        .map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 10);
+    }
+
+    async function analyze() {
+      if (!requireOperate("분석 실행")) return;
+      clearAnalysisUI("네이버 API 데이터를 불러오는 중입니다.");
+      showApiErrors();
+      $("runBtn").disabled = true;
+      try {
+        const naver = parseJson("naverData");
+        const keywords = analysisKeywords(naver);
+
+        const response = await fetch("/.netlify/functions/naver-analysis", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            keywords,
+            startDate: $("collectionStart").value,
+            endDate: $("collectionEnd").value
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `분석 API HTTP ${response.status}`);
+        if (Object.values(payload.errors || {}).some(Boolean)) {
+          clearAnalysisUI("일부 네이버 API 호출에 실패하여 불완전한 분석 결과를 표시하지 않습니다.");
+          showApiErrors(payload.errors);
+          log("일부 네이버 API 호출 실패로 분석 결과를 폐기했습니다.");
+          return;
+        }
+        if (!Array.isArray(payload.rows) || !payload.rows.length) throw new Error("네이버 API가 분석 가능한 데이터를 반환하지 않았습니다.");
+
+        const actualNaverItems = [...naver, ...(payload.searchAdItems || [])];
+        const matchThreshold = Number($("matchThreshold").value || 60);
+        const rows = (payload.rows || []).map((row) => {
+          const match = bestNaverMatch(row.keyword, actualNaverItems);
           return {
             keyword: row.keyword,
-            today: Number(row.today || 0),
-            yesterday: Number(row.yesterday || 0),
-            lift: Number(row.today || 0) - Number(row.yesterday || 0),
-            sources: row.sources || {},
+            today: Number(row.datalabCurrent || 0),
+            yesterday: Number(row.datalabPrevious || 0),
+            lift: Number(row.datalabCurrent || 0) - Number(row.datalabPrevious || 0),
+            sources: {
+              datalab: row.datalabCurrent,
+              shoppingInsight: row.shoppingInsightCurrent,
+              news: row.newsTotal
+            },
             match,
-            matched
+            matched: Boolean(match && match.score >= matchThreshold)
           };
-        }).filter((row) => row.matched)
-          .sort((a, b) => b.today - a.today || b.match.score - a.match.score);
-
+        });
+        const surges = rows.filter((row) => row.lift > 0).sort((a, b) => b.lift - a.lift).slice(0, 10);
+        const results = rows.filter((row) => row.matched).sort((a, b) => b.lift - a.lift);
         state.results = results;
-        render(instagram.length, surges.length, results, surges);
-        log(`분석 완료: Instagram ${instagram.length}건, 급등 후보 ${surges.length}건, Naver 매칭 ${results.length}건`);
+        render(payload.counts || {}, results, surges);
+        log(`실제 네이버 API 분석 완료: 키워드 ${rows.length}건, 매칭 ${results.length}건`);
       } catch (error) {
-        log(error.message);
-        alert(error.message);
+        clearAnalysisUI("API 호출에 실패하여 분석 결과를 표시하지 않습니다.");
+        showApiErrors({ "분석 실행": error.message });
+        log(`분석 실패: ${error.message}`);
+      } finally {
+        $("runBtn").disabled = false;
       }
     }
 
-    function render(total, surges, results, surgeRows = []) {
-      $("statDatalab").textContent = total.toLocaleString("ko-KR");
-      $("statShoppingInsight").textContent = surges.toLocaleString("ko-KR");
-      $("statNews").textContent = countNewsSignals(results).toLocaleString("ko-KR");
+    function render(counts, results, surgeRows = []) {
+      $("statSearchAd").textContent = Number(counts.searchAd || 0).toLocaleString("ko-KR");
+      $("statDatalab").textContent = Number(counts.datalab || 0).toLocaleString("ko-KR");
+      $("statShoppingInsight").textContent = Number(counts.shoppingInsight || 0).toLocaleString("ko-KR");
+      $("statNews").textContent = Number(counts.news || 0).toLocaleString("ko-KR");
       $("statMatches").textContent = results.length.toLocaleString("ko-KR");
       $("statLastRun").innerHTML = formatDateTime(new Date());
       renderTrendChart(surgeRows);
@@ -2446,13 +2459,13 @@
     }
 
     function sourceSummary(row) {
-      const datalab = Number(row.sources.datalab || row.today || 0);
-      const shoppingInsight = Number(row.sources.shoppingInsight || row.sources.shopping || row.lift || 0);
+      const datalab = Number(row.sources.datalab || 0);
+      const shoppingInsight = Number(row.sources.shoppingInsight || 0);
       const news = Number(row.sources.news || 0);
       return [
-        `검색어트렌드 ${datalab.toLocaleString("ko-KR")}`,
-        `쇼핑인사이트 ${shoppingInsight.toLocaleString("ko-KR")}`,
-        `뉴스 ${news.toLocaleString("ko-KR")}`
+        `검색어트렌드 비율 ${datalab.toLocaleString("ko-KR")}`,
+        `쇼핑인사이트 비율 ${shoppingInsight.toLocaleString("ko-KR")}`,
+        `뉴스 검색 결과 ${news.toLocaleString("ko-KR")}건`
       ].join("<br>");
     }
 
@@ -2466,9 +2479,8 @@
     }
 
     function downloadExcel() {
-      if (!state.results.length) analyze();
       if (!state.results.length) {
-        alert("다운로드할 모니터링 결과가 없습니다.");
+        alert("다운로드할 실제 API 분석 결과가 없습니다. 먼저 [분석 실행]을 완료하세요.");
         return;
       }
 
@@ -2763,77 +2775,8 @@
       }
     }
 
-    function extractItems(data) {
-      if (Array.isArray(data)) return data;
-      return data.items || data.data || data.keywords || data.ads || [];
-    }
-
-    async function fetchNaverAccount(accountLabel, endpoint, key, secretKey, customerId) {
-      const headers = {};
-      if (key) {
-        headers.Authorization = `Bearer ${key}`;
-        headers["X-API-KEY"] = key;
-      }
-      if (secretKey) headers["X-Secret-Key"] = secretKey;
-      if (customerId) {
-        headers["X-Customer"] = customerId;
-        headers["X-Customer-ID"] = customerId;
-      }
-      const response = await fetch(endpoint, {
-        headers
-      });
-      if (!response.ok) throw new Error(`${accountLabel} HTTP ${response.status}`);
-      const data = await response.json();
-      return extractItems(data).map((item) => ({ account: item.account || accountLabel, ...item }));
-    }
-
     async function fetchApiData() {
-      if (!requireOperate("API 데이터 가져오기")) return;
-      const accounts = [
-        { label: "쇼핑검색광고 계정1", endpoint: $("naverEndpoint1").value.trim(), key: $("naverApiKey1").value.trim(), secretKey: $("naverSecretKey1").value.trim(), customerId: $("naverCustomerId1").value.trim(), matchSource: true },
-        { label: "쇼핑검색광고 계정2", endpoint: $("naverEndpoint2").value.trim(), key: $("naverApiKey2").value.trim(), secretKey: $("naverSecretKey2").value.trim(), customerId: $("naverCustomerId2").value.trim(), matchSource: true },
-        { label: "네이버 API HUB", clientId: $("naverClientId")?.value.trim(), clientSecret: $("naverClientSecret")?.value.trim(), matchSource: false }
-      ].filter((account) => account.endpoint || account.clientId);
-
-      if (!accounts.length) {
-        alert("연동할 API 정보를 하나 이상 입력하세요 (쇼핑검색광고 Endpoint 또는 네이버 API HUB Client ID/Secret).");
-        return;
-      }
-      try {
-        $("apiBtn").disabled = true;
-        const merged = [];
-        let hubCredentialsReady = false;
-        for (const account of accounts) {
-          if (account.endpoint) {
-            const missing = [
-              [account.key, "API Key / Token"],
-              [account.secretKey, "Secret Key"],
-              [account.customerId, "Customer ID"]
-            ].filter(([value]) => !value).map(([, label]) => label);
-            if (missing.length) throw new Error(`${account.label}: ${missing.join(", ")} 값을 입력하세요.`);
-            const items = await fetchNaverAccount(account.label, account.endpoint, account.key, account.secretKey, account.customerId);
-            if (account.matchSource) merged.push(...items);
-            log(`${account.label} Naver API 데이터 ${items.length}건을 불러왔습니다.`);
-          } else if (account.clientId) {
-            if (!account.clientSecret) throw new Error("네이버 API HUB Client Secret을 입력하세요.");
-            hubCredentialsReady = true;
-            log(`${account.label} 인증 정보가 저장되어 있습니다. 실제 데이터 호출에는 API Endpoint 또는 프록시가 필요합니다.`);
-          }
-        }
-        if (merged.length) {
-          $("naverData").value = JSON.stringify(merged, null, 2);
-          log(`쇼핑검색광고 계정 API 통합 데이터 ${merged.length}건을 매칭 기준에 반영했습니다.`);
-          alert(`API 데이터 연동 성공: ${merged.length.toLocaleString("ko-KR")}건의 데이터를 불러와 반영했습니다.`);
-          analyze();
-        } else if (hubCredentialsReady) {
-          alert("네이버 API HUB 인증 정보는 정상적으로 저장되어 있습니다.\n\n설정 저장은 인증 정보를 보관하는 기능이며 데이터를 자동 호출하지 않습니다. 현재 API 데이터 가져오기는 쇼핑검색광고 Endpoint가 입력된 경우에만 실제 데이터를 요청합니다.");
-        }
-      } catch (error) {
-        log(`API 가져오기 실패: ${error.message}`);
-        alert(`API 연동 실패: ${error.message}\n\n브라우저 직접 호출 시 CORS가 차단될 수 있으므로 사내 프록시 URL 또는 엑셀 업로드를 활용하세요.`);
-      } finally {
-        $("apiBtn").disabled = false;
-      }
+      await analyze();
     }
 
     function updateSettingsSaveStatus(message, type = "") {
@@ -2873,6 +2816,26 @@
       $("apiTabBtn").classList.toggle("active", api);
     }
 
+    function purgeLegacyBrowserSecrets() {
+      [SETTINGS_STORAGE_KEY, SETTINGS_BACKUP_KEY].forEach((storageKey) => {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        try {
+          const config = JSON.parse(raw);
+          let changed = false;
+          LEGACY_SECRET_IDS.forEach((id) => {
+            if (Object.prototype.hasOwnProperty.call(config, id)) {
+              delete config[id];
+              changed = true;
+            }
+          });
+          if (changed) localStorage.setItem(storageKey, JSON.stringify(config));
+        } catch {
+          localStorage.removeItem(storageKey);
+        }
+      });
+    }
+
     function loadSettings() {
       const primary = localStorage.getItem(SETTINGS_STORAGE_KEY);
       const backup = localStorage.getItem(SETTINGS_BACKUP_KEY);
@@ -2893,8 +2856,6 @@
           } catch {}
         }
         if (!config) throw new Error("저장된 설정을 읽을 수 없습니다.");
-        if (config.naverEndpoint && !config.naverEndpoint1) config.naverEndpoint1 = config.naverEndpoint;
-        if (config.naverApiKey && !config.naverApiKey1) config.naverApiKey1 = config.naverApiKey;
         SETTINGS_IDS.forEach((id) => {
           if ($(id) && Object.prototype.hasOwnProperty.call(config, id)) $(id).value = config[id] ?? "";
         });
@@ -2964,13 +2925,14 @@
     });
 
     restoreSession();
+    purgeLegacyBrowserSecrets();
     loadSettings();
     if (!getScheduleTimes().length) restoreScheduleTimes(["09:00"]);
     setDefaultCollectionDates();
     updateScheduleModeFields();
-    $("instagramData").value = JSON.stringify(sampleInstagram, null, 2);
-    $("naverData").value = JSON.stringify(sampleNaver, null, 2);
-    analyze();
+    $("instagramData").value = "[]";
+    $("naverData").value = "[]";
+    clearAnalysisUI("분석 실행 전입니다. 실제 API 데이터를 설정한 뒤 분석을 실행하세요.");
     renderDownloadHistory();
     applyAuthState();
   </script>

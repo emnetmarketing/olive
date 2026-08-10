@@ -103,3 +103,20 @@ python -m unittest discover -s tests -v
 ```
 
 실제 Supabase와 네이버 API의 통합 검증에는 별도의 테스트 프로젝트와 API 인증값이 필요합니다. 테스트 인증값은 GitHub나 테스트 출력에 기록하지 마세요.
+
+## 8. Netlify 운영 API 환경변수
+
+정적 대시보드의 네이버 인증정보는 브라우저나 Git 저장소에 저장하지 않습니다. Netlify Site configuration → Environment variables에 다음 값을 등록합니다.
+
+- `NAVER_CLIENT_ID`
+- `NAVER_CLIENT_SECRET`
+- `NAVER_SEARCHAD_ENDPOINT_1` (선택, 기본값 `https://api.searchad.naver.com`)
+- `NAVER_SEARCHAD_API_KEY_1`
+- `NAVER_SEARCHAD_SECRET_KEY_1`
+- `NAVER_SEARCHAD_CUSTOMER_ID_1`
+- `NAVER_SEARCHAD_ENDPOINT_2` (선택)
+- `NAVER_SEARCHAD_API_KEY_2`
+- `NAVER_SEARCHAD_SECRET_KEY_2`
+- `NAVER_SEARCHAD_CUSTOMER_ID_2`
+
+`index.html`은 수집 기간과 비민감 키워드만 `/.netlify/functions/naver-analysis`로 전달합니다. 서버 함수는 쇼핑인사이트의 화장품/미용(`50000002`)과 건강식품(`50000023`)을 통합 조회하고, 환경변수에서 Open API 및 Search Ad 인증정보를 읽습니다. Search Ad 요청에는 HMAC-SHA256 `X-Signature`를 생성합니다.
