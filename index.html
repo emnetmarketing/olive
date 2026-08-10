@@ -2406,7 +2406,7 @@
           };
         });
         const surges = rows.filter((row) => row.lift > 0).sort((a, b) => b.lift - a.lift).slice(0, 10);
-        const results = rows.filter((row) => row.matched).sort((a, b) => b.lift - a.lift);
+        const results = rows.filter((row) => row.lift > 0 && row.matched).sort((a, b) => b.lift - a.lift);
         state.results = results;
         render(payload.counts || {}, results, surges);
         log(`실제 네이버 API 분석 완료: 키워드 ${rows.length}건, 매칭 ${results.length}건`);

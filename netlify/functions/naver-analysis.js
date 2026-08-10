@@ -175,6 +175,25 @@ function addSeries(target, results) {
   }
 }
 
+function balancedAccountKeywords(items, limit = 10) {
+  const groups = new Map();
+  for (const item of items) {
+    const account = String(item.account || "계정 미지정");
+    if (!groups.has(account)) groups.set(account, []);
+    const product = String(item.product || item.brand || "").trim();
+    if (product && !groups.get(account).includes(product)) groups.get(account).push(product);
+  }
+  const queues = [...groups.values()];
+  const selected = [];
+  for (let index = 0; selected.length < limit && queues.some((queue) => index < queue.length); index += 1) {
+    for (const queue of queues) {
+      if (index < queue.length && !selected.includes(queue[index])) selected.push(queue[index]);
+      if (selected.length === limit) break;
+    }
+  }
+  return selected;
+}
+
 function mergeSeriesMax(target, results, category) {
   for (const result of results || []) {
     const keyword = String(result.title || result.keyword || "").trim();
@@ -225,7 +244,7 @@ exports.handler = async (event) => {
 
   const keywords = [...new Set([
     ...requestedKeywords,
-    ...searchAdItems.map((item) => item.product)
+    ...balancedAccountKeywords(searchAdItems, 10)
   ])].slice(0, 10);
   if (!keywords.length) return json(400, { error: "검색광고 응답 또는 업로드 데이터에서 실제 분석 키워드를 찾지 못했습니다.", errors });
 
