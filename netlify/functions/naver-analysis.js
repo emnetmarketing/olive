@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 
-const NAVER_OPEN_API = "https://openapi.naver.com";
+const NAVER_API_HUB = "https://naverapihub.apigw.ntruss.com";
 const NAVER_SEARCHAD_API = "https://api.searchad.naver.com";
 const SHOPPING_CATEGORIES = [
   { name: "화장품/미용", id: "50000002" },
@@ -41,13 +41,13 @@ async function openApiRequest(path, { method = "GET", params, body }) {
   const clientSecret = String(process.env.NAVER_CLIENT_SECRET || "").trim();
   if (!clientId || !clientSecret) throw new Error("Netlify 환경변수 NAVER_CLIENT_ID/NAVER_CLIENT_SECRET이 설정되지 않았습니다.");
 
-  const url = new URL(path, NAVER_OPEN_API);
+  const url = new URL(path, NAVER_API_HUB);
   if (params) Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
   const response = await fetch(url, {
     method,
     headers: {
-      "X-Naver-Client-Id": clientId,
-      "X-Naver-Client-Secret": clientSecret,
+      "X-NCP-APIGW-API-KEY-ID": clientId,
+      "X-NCP-APIGW-API-KEY": clientSecret,
       ...(body ? { "Content-Type": "application/json" } : {})
     },
     body: body ? JSON.stringify(body) : undefined
@@ -234,7 +234,7 @@ exports.handler = async (event) => {
   const news = new Map();
   try {
     for (const batch of chunks(keywords, 5)) {
-      const payload = await openApiRequest("/v1/datalab/search", {
+      const payload = await openApiRequest("/search-trend/v1/search", {
         method: "POST",
         body: { startDate, endDate, timeUnit: "date", keywordGroups: batch.map((keyword) => ({ groupName: keyword, keywords: [keyword] })) }
       });
@@ -243,19 +243,18 @@ exports.handler = async (event) => {
   } catch (error) { errors["네이버 검색어트렌드"] = error.message; }
 
   try {
-    for (const category of SHOPPING_CATEGORIES) {
-      for (const batch of chunks(keywords, 5)) {
-        const payload = await openApiRequest("/v1/datalab/shopping/category/keywords", {
-          method: "POST",
-          body: { startDate, endDate, timeUnit: "date", category: category.id, keyword: batch.map((keyword) => ({ name: keyword, param: [keyword] })) }
-        });
-        mergeSeriesMax(shoppingInsight, payload.results, category);
+    const payload = await openApiRequest("/shopping/v1/categories", {
+      method: "POST",
+      body: {
+        startDate, endDate, timeUnit: "date",
+        category: SHOPPING_CATEGORIES.map((category) => ({ name: category.name, param: [category.id] }))
       }
-    }
+    });
+    addSeries(shoppingInsight, payload.results);
   } catch (error) { errors["네이버 쇼핑인사이트"] = error.message; }
 
   const newsResults = await Promise.allSettled(keywords.map(async (keyword) => {
-    const payload = await openApiRequest("/v1/search/news.json", { params: { query: keyword, display: 1, start: 1, sort: "date" } });
+    const payload = await openApiRequest("/search/v1/news", { params: { query: keyword, display: 1, start: 1, sort: "date" } });
     return [keyword, Number(payload.total || 0)];
   }));
   const newsFailures = [];
@@ -265,13 +264,18 @@ exports.handler = async (event) => {
   });
   if (newsFailures.length) errors["네이버 뉴스"] = newsFailures.join(" / ");
 
+  const shoppingCategoryPairs = [...shoppingInsight.values()];
+  const combinedShopping = {
+    current: Math.max(0, ...shoppingCategoryPairs.map((value) => value.current)),
+    previous: Math.max(0, ...shoppingCategoryPairs.map((value) => value.previous))
+  };
   const rows = keywords.map((keyword) => ({
     keyword,
     datalabCurrent: datalab.get(keyword)?.current ?? null,
     datalabPrevious: datalab.get(keyword)?.previous ?? null,
-    shoppingInsightCurrent: shoppingInsight.get(keyword)?.current ?? null,
-    shoppingInsightPrevious: shoppingInsight.get(keyword)?.previous ?? null,
-    shoppingCategories: shoppingInsight.get(keyword)?.categories || [],
+    shoppingInsightCurrent: shoppingCategoryPairs.length ? combinedShopping.current : null,
+    shoppingInsightPrevious: shoppingCategoryPairs.length ? combinedShopping.previous : null,
+    shoppingCategories: SHOPPING_CATEGORIES.map((category) => category.name),
     newsTotal: news.get(keyword) ?? null
   }));
   return json(200, {

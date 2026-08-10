@@ -119,4 +119,4 @@ python -m unittest discover -s tests -v
 - `NAVER_SEARCHAD_SECRET_KEY_2`
 - `NAVER_SEARCHAD_CUSTOMER_ID_2`
 
-`index.html`은 수집 기간과 비민감 키워드만 `/.netlify/functions/naver-analysis`로 전달합니다. 서버 함수는 쇼핑인사이트의 화장품/미용(`50000002`)과 건강식품(`50000023`)을 통합 조회하고, 환경변수에서 Open API 및 Search Ad 인증정보를 읽습니다. Search Ad 요청에는 HMAC-SHA256 `X-Signature`를 생성합니다.
+`index.html`은 수집 기간과 비민감 키워드만 `/.netlify/functions/naver-analysis`로 전달합니다. 서버 함수는 NAVER API HUB(`naverapihub.apigw.ntruss.com`)에서 쇼핑인사이트의 화장품/미용(`50000002`)과 건강식품(`50000023`)을 통합 조회하고, 환경변수에서 API HUB 및 Search Ad 인증정보를 읽습니다. API HUB에는 `X-NCP-APIGW-API-KEY-ID`/`X-NCP-APIGW-API-KEY`, Search Ad에는 HMAC-SHA256 `X-Signature`를 사용합니다.
