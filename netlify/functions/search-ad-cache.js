@@ -9,7 +9,7 @@ const SHOPPING_TYPES = new Set(["SHOPPING_PRODUCT_AD", "CATALOG_AD", "SHOPPING_B
 const DISABLED_STATUSES = new Set(["DELETED", "PAUSED", "SUSPENDED", "OFF"]);
 
 function store() {
-  return getStore({ name: STORE_NAME, consistency: "strong" });
+  return getStore(STORE_NAME);
 }
 
 function connect(event) {
