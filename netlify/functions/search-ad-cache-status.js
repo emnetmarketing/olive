@@ -1,10 +1,11 @@
-const { readCache, readStatus } = require("./search-ad-cache");
+const { connect, readCache, readStatus } = require("./search-ad-cache");
 
 function json(statusCode, body) {
   return { statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) };
 }
 
-exports.handler = async () => {
+exports.handler = async (event) => {
+  connect(event);
   try {
     const [cache, status] = await Promise.all([readCache(), readStatus()]);
     return json(200, {

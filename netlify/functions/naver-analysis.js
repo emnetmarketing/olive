@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { readCache } = require("./search-ad-cache");
+const { connect, readCache } = require("./search-ad-cache");
 
 const NAVER_API_HUB = "https://naverapihub.apigw.ntruss.com";
 const NAVER_SEARCHAD_API = "https://api.searchad.naver.com";
@@ -261,6 +261,7 @@ function mergeSeriesMax(target, results, category) {
 }
 
 exports.handler = async (event) => {
+  connect(event);
   if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
   let input;
   try { input = JSON.parse(event.body || "{}"); }

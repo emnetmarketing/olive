@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { getStore } = require("@netlify/blobs");
+const { connectLambda, getStore } = require("@netlify/blobs");
 
 const SEARCH_AD_API = "https://api.searchad.naver.com";
 const STORE_NAME = "search-ad-products";
@@ -10,6 +10,10 @@ const DISABLED_STATUSES = new Set(["DELETED", "PAUSED", "SUSPENDED", "OFF"]);
 
 function store() {
   return getStore({ name: STORE_NAME, consistency: "strong" });
+}
+
+function connect(event) {
+  if (event?.blobs) connectLambda(event);
 }
 
 function accounts() {
@@ -152,5 +156,6 @@ async function acquireJob() {
 module.exports = {
   accounts, isActive, searchAdGet, productFromAd, uniqueProducts,
   readCache, readStatus, writeStatus, acquireJob, store,
+  connect,
   CACHE_KEY, STATUS_KEY
 };

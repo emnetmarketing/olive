@@ -1,10 +1,11 @@
-const { acquireJob, writeStatus } = require("./search-ad-cache");
+const { acquireJob, connect, writeStatus } = require("./search-ad-cache");
 
 function json(statusCode, body) {
   return { statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) };
 }
 
 exports.handler = async (event) => {
+  connect(event);
   if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
   let acquiredStatus = null;
   try {

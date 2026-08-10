@@ -1,6 +1,6 @@
 const {
   accounts, isActive, searchAdGet, productFromAd, uniqueProducts,
-  readStatus, writeStatus, store, CACHE_KEY
+  connect, readStatus, writeStatus, store, CACHE_KEY
 } = require("./search-ad-cache");
 
 const CONCURRENCY = 4;
@@ -37,6 +37,7 @@ async function updateProgress(jobId, patch) {
 }
 
 exports.handler = async (event) => {
+  connect(event);
   let jobId = "";
   try { jobId = String(JSON.parse(event.body || "{}").jobId || ""); } catch { return; }
   const initial = await readStatus();
