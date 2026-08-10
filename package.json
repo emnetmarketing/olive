@@ -1,0 +1,11 @@
+{
+  "name": "olive-trend-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/test_*.js"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.0.0"
+  }
+}

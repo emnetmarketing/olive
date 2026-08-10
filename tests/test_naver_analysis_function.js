@@ -7,6 +7,16 @@ process.env.NAVER_SEARCHAD_CUSTOMER_ID_1 = "customer";
 process.env.NAVER_SEARCHAD_API_KEY_2 = "api-key-2";
 process.env.NAVER_SEARCHAD_SECRET_KEY_2 = "secret-key-2";
 process.env.NAVER_SEARCHAD_CUSTOMER_ID_2 = "customer-2";
+const cacheModule = require("../netlify/functions/search-ad-cache.js");
+cacheModule.readCache = async () => ({
+  refreshedAt: "2026-08-10T00:00:00.000Z",
+  items: [
+    { account: "쇼핑검색광고 계정1", accountNumber: 1, product: "실제키워드", productId: "product-1", adId: "ad-1", adGroupId: "group-1", active: true },
+    { account: "쇼핑검색광고 계정2", accountNumber: 2, product: "계정2실제키워드", productId: "product-2", adId: "ad-2", adGroupId: "group-2", active: true }
+  ],
+  accountCounts: { "쇼핑검색광고 계정1": 1, "쇼핑검색광고 계정2": 1 },
+  uniqueProducts: 2, processedAdgroups: 2289, totalAdgroups: 2289, totalCreatives: 3000
+});
 const { handler } = require("../netlify/functions/naver-analysis.js");
 
 const requestedPaths = [];
@@ -16,11 +26,7 @@ global.fetch = async (url, options = {}) => {
   requestedPaths.push(parsed.pathname);
   if (parsed.hostname === "naverapihub.apigw.ntruss.com") apiHubHeaders.push(options.headers);
   let payload;
-  if (parsed.pathname === "/ncc/product-groups") {
-    payload = options.headers["X-Customer"] === "customer-2"
-      ? [{ name: "계정2실제키워드", brandName: "계정2브랜드", nccProductGroupId: "product-group-2", numberOfAdgroups: 1 }]
-      : [{ name: "실제키워드", brandName: "실제브랜드", nccProductGroupId: "product-group-1", numberOfAdgroups: 2 }];
-  } else if (parsed.pathname === "/search-trend/v1/search") {
+  if (parsed.pathname === "/search-trend/v1/search") {
     payload = { results: [{ title: "실제키워드", data: [{ ratio: 10 }, { ratio: 25 }] }] };
   } else if (parsed.pathname === "/shopping/v1/categories") {
     payload = { results: [
@@ -47,13 +53,15 @@ global.fetch = async (url, options = {}) => {
   assert.equal(body.rows[0].datalabPrevious, 10);
   assert.equal(body.rows[0].shoppingInsightCurrent, 30);
   assert.equal(body.rows[0].newsTotal, 7);
-  assert.equal(body.searchAdItems[0].productGroupId, "product-group-1");
+  assert.equal(body.rows[0].match.item.productId, "product-1");
+  assert.equal(body.rows[0].matched, true);
+  assert.equal("searchAdItems" in body, false);
   assert.ok(body.rows.some((row) => row.keyword === "계정2실제키워드"));
   assert.deepEqual(body.categories.map((category) => category.id), ["50000002", "50000023"]);
   assert.ok(apiHubHeaders.every((headers) => headers["X-NCP-APIGW-API-KEY-ID"] === "client"));
   assert.ok(apiHubHeaders.every((headers) => headers["X-NCP-APIGW-API-KEY"] === "secret"));
   assert.ok(apiHubHeaders.every((headers) => !("X-Naver-Client-Id" in headers)));
-  assert.equal(requestedPaths.filter((path) => path === "/ncc/product-groups").length, 2);
+  assert.equal(requestedPaths.filter((path) => path.startsWith("/ncc/")).length, 0);
   assert.equal(requestedPaths.filter((path) => path === "/search-trend/v1/search").length, 1);
   assert.equal(requestedPaths.filter((path) => path === "/shopping/v1/categories").length, 1);
   assert.equal(requestedPaths.filter((path) => path === "/search/v1/news").length, 2);

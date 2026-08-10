@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { readCache } = require("./search-ad-cache");
 
 const NAVER_API_HUB = "https://naverapihub.apigw.ntruss.com";
 const NAVER_SEARCHAD_API = "https://api.searchad.naver.com";
@@ -111,14 +112,14 @@ async function searchAdProducts(account) {
     return ["SHOPPING", "CATALOG", "SHOPPING_BRAND"].some((value) => type.includes(value))
       && campaign.status !== "DELETED" && campaign.userLock !== true;
   });
-  const selectedCampaigns = shoppingCampaigns.slice(0, 3);
+  const selectedCampaigns = shoppingCampaigns;
   const groupResults = await mapWithConcurrency(selectedCampaigns, 3, (campaign) =>
     searchAdGet(account, "/ncc/adgroups", { nccCampaignId: campaign.nccCampaignId })
       .then((groups) => ({ campaign, groups })));
   const allGroups = groupResults.flatMap(({ campaign, groups }) => (Array.isArray(groups) ? groups : [])
     .filter((group) => group.status !== "DELETED" && group.userLock !== true)
     .map((group) => ({ campaign, group })));
-  const selectedGroups = allGroups.slice(0, 5);
+  const selectedGroups = allGroups;
   const adResults = await mapWithConcurrency(selectedGroups, 2, ({ campaign, group }) =>
     searchAdGet(account, "/ncc/ads", { nccAdgroupId: group.nccAdgroupId })
       .then((ads) => ({ campaign, group, ads })));
@@ -137,7 +138,7 @@ async function searchAdProducts(account) {
     items,
     meta: {
       source: "shopping-ads",
-      limited: shoppingCampaigns.length > selectedCampaigns.length || allGroups.length > selectedGroups.length,
+      limited: false,
       shoppingCampaigns: shoppingCampaigns.length,
       inspectedCampaigns: selectedCampaigns.length,
       activeAdgroups: allGroups.length,
@@ -194,6 +195,57 @@ function balancedAccountKeywords(items, limit = 10) {
   return selected;
 }
 
+function normalize(value) {
+  return String(value || "").toLocaleLowerCase("ko-KR").replace(/[^0-9a-z가-힣]/g, "");
+}
+
+function tokens(value) {
+  return String(value || "").toLocaleLowerCase("ko-KR").split(/[^0-9a-z가-힣]+/).filter(Boolean);
+}
+
+function levenshtein(a, b) {
+  const left = normalize(a);
+  const right = normalize(b);
+  const row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const saved = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (left[i - 1] === right[j - 1] ? 0 : 1));
+      previous = saved;
+    }
+  }
+  return row[right.length];
+}
+
+function similarity(a, b) {
+  const compactA = normalize(a);
+  const compactB = normalize(b);
+  const maxLength = Math.max(compactA.length, compactB.length);
+  if (!maxLength) return 0;
+  const charScore = (1 - levenshtein(a, b) / maxLength) * 100;
+  const left = new Set(tokens(a));
+  const right = new Set(tokens(b));
+  let intersection = 0;
+  left.forEach((item) => { if (right.has(item)) intersection += 1; });
+  const union = new Set([...left, ...right]).size;
+  const tokenScore = union ? (intersection / union) * 100 : 0;
+  const containsBoost = compactA.includes(compactB) || compactB.includes(compactA) ? 12 : 0;
+  return Math.min(100, Math.round(charScore * 0.68 + tokenScore * 0.32 + containsBoost));
+}
+
+function bestMatch(keyword, items) {
+  let best = null;
+  for (const item of items) {
+    for (const candidate of [item.product, item.brand, `${item.brand || ""} ${item.product || ""}`.trim()].filter(Boolean)) {
+      const score = similarity(keyword, candidate);
+      if (!best || score > best.score) best = { item, candidate, score };
+    }
+  }
+  return best;
+}
+
 function mergeSeriesMax(target, results, category) {
   for (const result of results || []) {
     const keyword = String(result.title || result.keyword || "").trim();
@@ -218,29 +270,29 @@ exports.handler = async (event) => {
   const endDate = String(input.endDate || "").trim();
   const requestedKeywords = [...new Set((Array.isArray(input.keywords) ? input.keywords : [])
     .map((value) => String(value || "").trim()).filter(Boolean))];
+  const uploadedItems = Array.isArray(input.uploadedItems) ? input.uploadedItems : [];
+  const matchThreshold = Number(input.matchThreshold || 60);
   if (!startDate || !endDate) return json(400, { error: "수집 시작일과 종료일이 필요합니다." });
 
   const errors = {};
   const searchAdItems = [];
   const searchAdCounts = {};
   const searchAdMeta = {};
-  const accounts = searchAdAccounts();
-  if (!accounts.length) {
-    errors["네이버 검색광고"] = "Netlify Search Ad 환경변수가 설정되지 않았습니다.";
-  } else {
-    const accountResults = await Promise.allSettled(accounts.map(searchAdProducts));
-    accountResults.forEach((result, index) => {
-      const label = accounts[index].label;
-      if (result.status === "fulfilled") {
-        searchAdItems.push(...result.value.items);
-        searchAdCounts[label] = result.value.items.length;
-        searchAdMeta[label] = result.value.meta;
-      } else {
-        errors[label] = result.reason?.message || `${label} 호출 실패`;
-        searchAdCounts[label] = 0;
-      }
-    });
+  let searchAdCache;
+  try { searchAdCache = await readCache(); }
+  catch (error) { return json(500, { error: `Search Ad 상품 캐시 조회 실패: ${error.message}` }); }
+  if (!searchAdCache?.items?.length) {
+    return json(409, { error: "Search Ad 전체 상품 데이터가 없습니다. 먼저 'Search Ad 상품 새로고침'을 실행해주세요." });
   }
+  searchAdItems.push(...searchAdCache.items);
+  Object.assign(searchAdCounts, searchAdCache.accountCounts || {});
+  searchAdMeta.cache = {
+    source: "netlify-blobs", refreshedAt: searchAdCache.refreshedAt,
+    processedAdgroups: searchAdCache.processedAdgroups,
+    totalAdgroups: searchAdCache.totalAdgroups,
+    totalCreatives: searchAdCache.totalCreatives,
+    uniqueProducts: searchAdCache.uniqueProducts
+  };
 
   const keywords = [...new Set([
     ...requestedKeywords,
@@ -288,17 +340,23 @@ exports.handler = async (event) => {
     current: Math.max(0, ...shoppingCategoryPairs.map((value) => value.current)),
     previous: Math.max(0, ...shoppingCategoryPairs.map((value) => value.previous))
   };
-  const rows = keywords.map((keyword) => ({
-    keyword,
-    datalabCurrent: datalab.get(keyword)?.current ?? null,
-    datalabPrevious: datalab.get(keyword)?.previous ?? null,
-    shoppingInsightCurrent: shoppingCategoryPairs.length ? combinedShopping.current : null,
-    shoppingInsightPrevious: shoppingCategoryPairs.length ? combinedShopping.previous : null,
-    shoppingCategories: SHOPPING_CATEGORIES.map((category) => category.name),
-    newsTotal: news.get(keyword) ?? null
-  }));
+  const comparisonItems = [...searchAdItems, ...uploadedItems];
+  const rows = keywords.map((keyword) => {
+    const match = bestMatch(keyword, comparisonItems);
+    return {
+      keyword,
+      datalabCurrent: datalab.get(keyword)?.current ?? null,
+      datalabPrevious: datalab.get(keyword)?.previous ?? null,
+      shoppingInsightCurrent: shoppingCategoryPairs.length ? combinedShopping.current : null,
+      shoppingInsightPrevious: shoppingCategoryPairs.length ? combinedShopping.previous : null,
+      shoppingCategories: SHOPPING_CATEGORIES.map((category) => category.name),
+      newsTotal: news.get(keyword) ?? null,
+      match,
+      matched: Boolean(match && match.score >= matchThreshold)
+    };
+  });
   return json(200, {
-    rows, searchAdItems,
+    rows,
     counts: { searchAd: searchAdItems.length, datalab: datalab.size, shoppingInsight: shoppingInsight.size, news: news.size },
     errors,
     categories: SHOPPING_CATEGORIES,

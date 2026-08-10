@@ -7,3 +7,5 @@ data/
 __pycache__/
 .pytest_cache/
 .coverage
+node_modules/
+.netlify/
