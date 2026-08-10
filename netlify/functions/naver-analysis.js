@@ -21,6 +21,14 @@ function chunks(values, size) {
   return result;
 }
 
+async function mapWithConcurrency(values, concurrency, mapper) {
+  const output = [];
+  for (const batch of chunks(values, concurrency)) {
+    output.push(...await Promise.all(batch.map(mapper)));
+  }
+  return output;
+}
+
 async function responseJson(response, apiName) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -105,14 +113,20 @@ function findProductName(value) {
 async function searchAdProducts(account) {
   const campaigns = await searchAdGet(account, "/ncc/campaigns");
   if (!Array.isArray(campaigns)) throw new Error(`${account.label} 캠페인 응답 형식 오류`);
-  const groupResults = await Promise.all(campaigns.map((campaign) =>
+  const shoppingCampaigns = campaigns.filter((campaign) => {
+    const type = String(campaign.campaignTp || campaign.type || "").toUpperCase();
+    return ["SHOPPING", "CATALOG", "SHOPPING_BRAND"].some((value) => type.includes(value))
+      && campaign.status !== "DELETED" && campaign.userLock !== true;
+  });
+  const groupResults = await mapWithConcurrency(shoppingCampaigns, 3, (campaign) =>
     searchAdGet(account, "/ncc/adgroups", { nccCampaignId: campaign.nccCampaignId })
-      .then((groups) => ({ campaign, groups }))));
+      .then((groups) => ({ campaign, groups })));
   const groups = groupResults.flatMap(({ campaign, groups }) => (Array.isArray(groups) ? groups : [])
+    .filter((group) => group.status !== "DELETED" && group.userLock !== true)
     .map((group) => ({ campaign, group })));
-  const adResults = await Promise.all(groups.map(({ campaign, group }) =>
+  const adResults = await mapWithConcurrency(groups, 3, ({ campaign, group }) =>
     searchAdGet(account, "/ncc/ads", { nccAdgroupId: group.nccAdgroupId })
-      .then((ads) => ({ campaign, group, ads }))));
+      .then((ads) => ({ campaign, group, ads })));
 
   return adResults.flatMap(({ campaign, group, ads }) => (Array.isArray(ads) ? ads : [])
     .filter((ad) => ["SHOPPING_PRODUCT_AD", "CATALOG_AD", "SHOPPING_BRAND_AD"].includes(ad.type))

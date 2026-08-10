@@ -12,7 +12,7 @@ global.fetch = async (url) => {
   requestedPaths.push(parsed.pathname);
   let payload;
   if (parsed.pathname === "/ncc/campaigns") {
-    payload = [{ name: "실제키워드", nccCampaignId: "campaign-1" }];
+    payload = [{ name: "실제키워드", nccCampaignId: "campaign-1", campaignTp: "SHOPPING", status: "ELIGIBLE", userLock: false }];
   } else if (parsed.pathname === "/ncc/adgroups") {
     payload = [{ name: "실제 광고그룹", nccAdgroupId: "group-1" }];
   } else if (parsed.pathname === "/ncc/ads") {
