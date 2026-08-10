@@ -30,18 +30,18 @@ async function loadGroups(account, metrics) {
   return groups;
 }
 
-async function updateProgress(jobId, patch) {
-  const current = await readStatus();
-  if (current?.jobId !== jobId || current.state !== "running") throw new Error("동기화 작업 소유권을 확인할 수 없습니다.");
-  return writeStatus({ ...current, ...patch, updatedAt: new Date().toISOString() });
-}
-
 exports.handler = async (event) => {
   connect(event);
-  let jobId = "";
-  try { jobId = String(JSON.parse(event.body || "{}").jobId || ""); } catch { return; }
-  const initial = await readStatus();
+  let input;
+  try { input = JSON.parse(event.body || "{}"); } catch { return; }
+  const jobId = String(input.jobId || "");
+  const initial = await readStatus() || input.status;
   if (!jobId || initial?.jobId !== jobId || initial.state !== "running") return;
+  let workingStatus = { ...initial };
+  const persistStatus = async (patch) => {
+    workingStatus = { ...workingStatus, ...patch, updatedAt: new Date().toISOString() };
+    await writeStatus(workingStatus);
+  };
 
   const metrics = { apiCalls: Number(initial.apiCalls || 0), retries: Number(initial.retries || 0) };
   const started = Date.parse(initial.startedAt) || Date.now();
@@ -60,22 +60,16 @@ exports.handler = async (event) => {
     const plans = [];
     for (const account of configuredAccounts) plans.push({ account, groups: await loadGroups(account, metrics) });
     totalAdgroups = plans.reduce((sum, plan) => sum + plan.groups.length, 0);
-    const plannedStatus = await readStatus();
-    for (const plan of plans) plannedStatus.accountProgress[String(plan.account.number)].total = plan.groups.length;
-    await writeStatus({
-      ...plannedStatus, totalAdgroups, apiCalls: metrics.apiCalls, retries: metrics.retries,
+    for (const plan of plans) workingStatus.accountProgress[String(plan.account.number)].total = plan.groups.length;
+    await persistStatus({
+      totalAdgroups, apiCalls: metrics.apiCalls, retries: metrics.retries,
       message: `Search Ad 상품 동기화 중 · ${processedAdgroups.toLocaleString("ko-KR")} / ${totalAdgroups.toLocaleString("ko-KR")} 광고그룹 처리`,
-      updatedAt: new Date().toISOString()
     });
 
     for (let accountIndex = 0; accountIndex < plans.length; accountIndex += 1) {
       if (accountIndex < Number(checkpoint.accountIndex || 0)) continue;
       const { account, groups } = plans[accountIndex];
-      const status = await readStatus();
-      status.apiCalls = metrics.apiCalls;
-      status.retries = metrics.retries;
-      status.message = `${account.label} 상품 소재 조회 중`;
-      await writeStatus({ ...status, updatedAt: new Date().toISOString() });
+      await persistStatus({ apiCalls: metrics.apiCalls, retries: metrics.retries, message: `${account.label} 상품 소재 조회 중` });
 
       const accountItems = allItems.filter((item) => item.accountNumber === account.number);
       const startGroupIndex = accountIndex === Number(checkpoint.accountIndex || 0) ? Number(checkpoint.groupIndex || 0) : 0;
@@ -98,17 +92,15 @@ exports.handler = async (event) => {
         }
         processedAdgroups += batch.length;
         if (processedAdgroups % PROGRESS_INTERVAL < batch.length || processedAdgroups === totalAdgroups) {
-          const current = await readStatus();
-          current.accountProgress[String(account.number)].processed += batch.length;
-          await updateProgress(jobId, {
-            processedAdgroups, totalAdgroups, accountProgress: current.accountProgress,
+          workingStatus.accountProgress[String(account.number)].processed += batch.length;
+          await persistStatus({
+            processedAdgroups, totalAdgroups, accountProgress: workingStatus.accountProgress,
             apiCalls: metrics.apiCalls, retries: metrics.retries,
             message: `Search Ad 상품 동기화 중 · ${processedAdgroups.toLocaleString("ko-KR")} / ${totalAdgroups.toLocaleString("ko-KR")} 광고그룹 처리`
           });
         } else {
-          const current = await readStatus();
-          current.accountProgress[String(account.number)].processed += batch.length;
-          await writeStatus({ ...current, processedAdgroups, apiCalls: metrics.apiCalls, retries: metrics.retries, updatedAt: new Date().toISOString() });
+          workingStatus.accountProgress[String(account.number)].processed += batch.length;
+          await persistStatus({ processedAdgroups, accountProgress: workingStatus.accountProgress, apiCalls: metrics.apiCalls, retries: metrics.retries });
         }
         const nextGroupIndex = groupIndex + batch.length;
         const nextCheckpoint = {
@@ -120,10 +112,10 @@ exports.handler = async (event) => {
           await store().setJSON(jobKey, nextCheckpoint);
         }
         if (Date.now() - invocationStarted >= INVOCATION_BUDGET_MS) {
-          await updateProgress(jobId, { message: `Search Ad 상품 동기화 계속 진행 중 · ${processedAdgroups.toLocaleString("ko-KR")} / ${totalAdgroups.toLocaleString("ko-KR")} 광고그룹 처리` });
+          await persistStatus({ message: `Search Ad 상품 동기화 계속 진행 중 · ${processedAdgroups.toLocaleString("ko-KR")} / ${totalAdgroups.toLocaleString("ko-KR")} 광고그룹 처리` });
           const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
           const response = await fetch(`${baseUrl}/.netlify/functions/search-ad-refresh-background`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId })
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId, status: workingStatus })
           });
           if (!response.ok && response.status !== 202) throw new Error(`후속 Background Function 시작 실패: HTTP ${response.status}`);
           return;
@@ -153,8 +145,8 @@ exports.handler = async (event) => {
     };
     await store().setJSON(CACHE_KEY, cache);
     await store().delete(jobKey);
-    await writeStatus({
-      ...await readStatus(), state: "completed", message: "Search Ad 상품 동기화 완료",
+    await persistStatus({
+      state: "completed", message: "Search Ad 상품 동기화 완료",
       updatedAt: refreshedAt, completedAt: refreshedAt, processedAdgroups, totalAdgroups,
       accountCounts, uniqueProducts: unique.length, totalCreatives,
       beforeDeduplication: eligibleProducts, apiCalls: metrics.apiCalls,
@@ -162,8 +154,8 @@ exports.handler = async (event) => {
     });
   } catch (error) {
     const failedAt = new Date().toISOString();
-    await writeStatus({
-      ...await readStatus(), state: "failed", message: "Search Ad 상품 동기화 실패",
+    await persistStatus({
+      state: "failed", message: "Search Ad 상품 동기화 실패",
       updatedAt: failedAt, failedAt, processedAdgroups, totalAdgroups,
       totalCreatives, beforeDeduplication: eligibleProducts, apiCalls: metrics.apiCalls, retries: metrics.retries,
       durationMs: Date.now() - started,

@@ -15,7 +15,7 @@ exports.handler = async (event) => {
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
     if (!baseUrl) throw new Error("Netlify URL 환경변수를 확인할 수 없습니다.");
     const response = await fetch(`${baseUrl}/.netlify/functions/search-ad-refresh-background`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: result.status.jobId })
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: result.status.jobId, status: result.status })
     });
     if (!response.ok && response.status !== 202) throw new Error(`Background Function 시작 실패: HTTP ${response.status}`);
     return json(202, { message: "Search Ad 상품 동기화를 시작했습니다.", status: result.status });

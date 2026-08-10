@@ -139,7 +139,9 @@ async function writeStatus(status) {
 async function acquireJob() {
   const current = await readStatus();
   const updatedAt = Date.parse(current?.updatedAt || "");
-  const stale = !Number.isFinite(updatedAt) || Date.now() - updatedAt > 30 * 60 * 1000;
+  const age = Number.isFinite(updatedAt) ? Date.now() - updatedAt : Infinity;
+  const abandonedStart = current?.message === "Search Ad 상품 동기화 준비 중" && Number(current?.processedAdgroups || 0) === 0 && age > 90 * 1000;
+  const stale = !Number.isFinite(updatedAt) || age > 30 * 60 * 1000 || abandonedStart;
   if (current?.state === "running" && !stale) return { acquired: false, status: current };
   const now = new Date().toISOString();
   const status = {
@@ -149,8 +151,7 @@ async function acquireJob() {
     apiCalls: 0, retries: 0, errors: []
   };
   await writeStatus(status);
-  const verified = await readStatus();
-  return verified?.jobId === status.jobId ? { acquired: true, status } : { acquired: false, status: verified };
+  return { acquired: true, status };
 }
 
 module.exports = {
