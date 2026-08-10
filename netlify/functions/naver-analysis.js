@@ -21,14 +21,6 @@ function chunks(values, size) {
   return result;
 }
 
-async function mapWithConcurrency(values, concurrency, mapper) {
-  const output = [];
-  for (const batch of chunks(values, concurrency)) {
-    output.push(...await Promise.all(batch.map(mapper)));
-  }
-  return output;
-}
-
 async function responseJson(response, apiName) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -92,55 +84,19 @@ async function searchAdGet(account, path, params) {
   return responseJson(response, account.label);
 }
 
-function findProductName(value) {
-  let ad = value;
-  if (typeof ad === "string") {
-    try { ad = JSON.parse(ad); }
-    catch { return ad.trim(); }
-  }
-  if (!ad || typeof ad !== "object") return "";
-  const preferredKeys = ["productName", "productTitle", "title", "headline", "subject", "name"];
-  for (const key of preferredKeys) {
-    if (typeof ad[key] === "string" && ad[key].trim()) return ad[key].trim();
-  }
-  for (const nested of Object.values(ad)) {
-    const found = findProductName(nested);
-    if (found) return found;
-  }
-  return "";
-}
-
 async function searchAdProducts(account) {
-  const campaigns = await searchAdGet(account, "/ncc/campaigns");
-  if (!Array.isArray(campaigns)) throw new Error(`${account.label} 캠페인 응답 형식 오류`);
-  const shoppingCampaigns = campaigns.filter((campaign) => {
-    const type = String(campaign.campaignTp || campaign.type || "").toUpperCase();
-    return ["SHOPPING", "CATALOG", "SHOPPING_BRAND"].some((value) => type.includes(value))
-      && campaign.status !== "DELETED" && campaign.userLock !== true;
-  });
-  const groupResults = await mapWithConcurrency(shoppingCampaigns, 3, (campaign) =>
-    searchAdGet(account, "/ncc/adgroups", { nccCampaignId: campaign.nccCampaignId })
-      .then((groups) => ({ campaign, groups })));
-  const groups = groupResults.flatMap(({ campaign, groups }) => (Array.isArray(groups) ? groups : [])
-    .filter((group) => group.status !== "DELETED" && group.userLock !== true)
-    .map((group) => ({ campaign, group })));
-  const adResults = await mapWithConcurrency(groups, 3, ({ campaign, group }) =>
-    searchAdGet(account, "/ncc/ads", { nccAdgroupId: group.nccAdgroupId })
-      .then((ads) => ({ campaign, group, ads })));
-
-  return adResults.flatMap(({ campaign, group, ads }) => (Array.isArray(ads) ? ads : [])
-    .filter((ad) => ["SHOPPING_PRODUCT_AD", "CATALOG_AD", "SHOPPING_BRAND_AD"].includes(ad.type))
-    .map((ad) => ({
+  const productGroups = await searchAdGet(account, "/ncc/product-groups");
+  if (!Array.isArray(productGroups)) throw new Error(`${account.label} 상품그룹 응답 형식 오류`);
+  return productGroups.map((group) => ({
       account: account.label,
-      campaign: String(campaign.name || "").trim(),
-      adGroup: String(group.name || "").trim(),
-      brand: "",
-      product: findProductName(ad.ad),
-      campaignId: campaign.nccCampaignId,
-      adGroupId: group.nccAdgroupId,
-      adId: ad.nccAdId,
-      adType: ad.type
-    })).filter((item) => item.product));
+      campaign: "쇼핑검색광고 상품그룹",
+      adGroup: `${Number(group.numberOfAdgroups || 0)}개 광고그룹 사용`,
+      brand: String(group.brandName || "").trim(),
+      product: String(group.name || "").trim(),
+      productGroupId: group.nccProductGroupId,
+      registrationMethod: group.registrationMethod,
+      registeredProductType: group.registeredProductType
+    })).filter((item) => item.product || item.brand);
 }
 
 function latestPair(data) {

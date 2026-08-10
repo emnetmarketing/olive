@@ -11,12 +11,8 @@ global.fetch = async (url) => {
   const parsed = new URL(url);
   requestedPaths.push(parsed.pathname);
   let payload;
-  if (parsed.pathname === "/ncc/campaigns") {
-    payload = [{ name: "실제키워드", nccCampaignId: "campaign-1", campaignTp: "SHOPPING", status: "ELIGIBLE", userLock: false }];
-  } else if (parsed.pathname === "/ncc/adgroups") {
-    payload = [{ name: "실제 광고그룹", nccAdgroupId: "group-1" }];
-  } else if (parsed.pathname === "/ncc/ads") {
-    payload = [{ type: "SHOPPING_PRODUCT_AD", nccAdId: "ad-1", ad: JSON.stringify({ productName: "실제키워드" }) }];
+  if (parsed.pathname === "/ncc/product-groups") {
+    payload = [{ name: "실제키워드", brandName: "실제브랜드", nccProductGroupId: "product-group-1", numberOfAdgroups: 2 }];
   } else if (parsed.pathname === "/v1/datalab/search") {
     payload = { results: [{ title: "실제키워드", data: [{ ratio: 10 }, { ratio: 25 }] }] };
   } else if (parsed.pathname === "/v1/datalab/shopping/category/keywords") {
@@ -41,16 +37,14 @@ global.fetch = async (url) => {
   assert.equal(body.rows[0].datalabPrevious, 10);
   assert.equal(body.rows[0].shoppingInsightCurrent, 30);
   assert.equal(body.rows[0].newsTotal, 7);
-  assert.equal(body.searchAdItems[0].adId, "ad-1");
+  assert.equal(body.searchAdItems[0].productGroupId, "product-group-1");
   assert.deepEqual(body.categories.map((category) => category.id), ["50000002", "50000023"]);
   assert.deepEqual(requestedPaths.sort(), [
     "/v1/datalab/search",
     "/v1/datalab/shopping/category/keywords",
     "/v1/datalab/shopping/category/keywords",
     "/v1/search/news.json",
-    "/ncc/campaigns",
-    "/ncc/adgroups",
-    "/ncc/ads"
+    "/ncc/product-groups"
   ].sort());
   console.log("Netlify Naver analysis function flow OK");
 })().catch((error) => {
