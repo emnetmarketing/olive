@@ -21,6 +21,12 @@ function chunks(values, size) {
   return result;
 }
 
+async function mapWithConcurrency(values, concurrency, mapper) {
+  const output = [];
+  for (const batch of chunks(values, concurrency)) output.push(...await Promise.all(batch.map(mapper)));
+  return output;
+}
+
 async function responseJson(response, apiName) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -87,7 +93,7 @@ async function searchAdGet(account, path, params) {
 async function searchAdProducts(account) {
   const productGroups = await searchAdGet(account, "/ncc/product-groups");
   if (!Array.isArray(productGroups)) throw new Error(`${account.label} 상품그룹 응답 형식 오류`);
-  return productGroups.map((group) => ({
+  const registeredGroups = productGroups.map((group) => ({
       account: account.label,
       campaign: "쇼핑검색광고 상품그룹",
       adGroup: `${Number(group.numberOfAdgroups || 0)}개 광고그룹 사용`,
@@ -97,6 +103,64 @@ async function searchAdProducts(account) {
       registrationMethod: group.registrationMethod,
       registeredProductType: group.registeredProductType
     })).filter((item) => item.product || item.brand);
+  if (registeredGroups.length) return { items: registeredGroups, meta: { source: "product-groups", limited: false } };
+
+  const campaigns = await searchAdGet(account, "/ncc/campaigns");
+  const shoppingCampaigns = (Array.isArray(campaigns) ? campaigns : []).filter((campaign) => {
+    const type = String(campaign.campaignTp || campaign.type || "").toUpperCase();
+    return ["SHOPPING", "CATALOG", "SHOPPING_BRAND"].some((value) => type.includes(value))
+      && campaign.status !== "DELETED" && campaign.userLock !== true;
+  });
+  const selectedCampaigns = shoppingCampaigns.slice(0, 3);
+  const groupResults = await mapWithConcurrency(selectedCampaigns, 3, (campaign) =>
+    searchAdGet(account, "/ncc/adgroups", { nccCampaignId: campaign.nccCampaignId })
+      .then((groups) => ({ campaign, groups })));
+  const allGroups = groupResults.flatMap(({ campaign, groups }) => (Array.isArray(groups) ? groups : [])
+    .filter((group) => group.status !== "DELETED" && group.userLock !== true)
+    .map((group) => ({ campaign, group })));
+  const selectedGroups = allGroups.slice(0, 5);
+  const adResults = await mapWithConcurrency(selectedGroups, 2, ({ campaign, group }) =>
+    searchAdGet(account, "/ncc/ads", { nccAdgroupId: group.nccAdgroupId })
+      .then((ads) => ({ campaign, group, ads })));
+  const items = adResults.flatMap(({ campaign, group, ads }) => (Array.isArray(ads) ? ads : [])
+    .filter((ad) => ["SHOPPING_PRODUCT_AD", "CATALOG_AD", "SHOPPING_BRAND_AD"].includes(ad.type))
+    .map((ad) => ({
+      account: account.label,
+      campaign: String(campaign.name || "").trim(),
+      adGroup: String(group.name || "").trim(),
+      brand: "",
+      product: findProductName(ad.ad),
+      adId: ad.nccAdId,
+      adType: ad.type
+    })).filter((item) => item.product));
+  return {
+    items,
+    meta: {
+      source: "shopping-ads",
+      limited: shoppingCampaigns.length > selectedCampaigns.length || allGroups.length > selectedGroups.length,
+      shoppingCampaigns: shoppingCampaigns.length,
+      inspectedCampaigns: selectedCampaigns.length,
+      activeAdgroups: allGroups.length,
+      inspectedAdgroups: selectedGroups.length
+    }
+  };
+}
+
+function findProductName(value) {
+  let ad = value;
+  if (typeof ad === "string") {
+    try { ad = JSON.parse(ad); }
+    catch { return ad.trim(); }
+  }
+  if (!ad || typeof ad !== "object") return "";
+  for (const key of ["productName", "productTitle", "title", "headline", "subject", "name"]) {
+    if (typeof ad[key] === "string" && ad[key].trim()) return ad[key].trim();
+  }
+  for (const nested of Object.values(ad)) {
+    const found = findProductName(nested);
+    if (found) return found;
+  }
+  return "";
 }
 
 function latestPair(data) {
@@ -140,6 +204,7 @@ exports.handler = async (event) => {
   const errors = {};
   const searchAdItems = [];
   const searchAdCounts = {};
+  const searchAdMeta = {};
   const accounts = searchAdAccounts();
   if (!accounts.length) {
     errors["네이버 검색광고"] = "Netlify Search Ad 환경변수가 설정되지 않았습니다.";
@@ -148,8 +213,9 @@ exports.handler = async (event) => {
     accountResults.forEach((result, index) => {
       const label = accounts[index].label;
       if (result.status === "fulfilled") {
-        searchAdItems.push(...result.value);
-        searchAdCounts[label] = result.value.length;
+        searchAdItems.push(...result.value.items);
+        searchAdCounts[label] = result.value.items.length;
+        searchAdMeta[label] = result.value.meta;
       } else {
         errors[label] = result.reason?.message || `${label} 호출 실패`;
         searchAdCounts[label] = 0;
@@ -213,6 +279,7 @@ exports.handler = async (event) => {
     counts: { searchAd: searchAdItems.length, datalab: datalab.size, shoppingInsight: shoppingInsight.size, news: news.size },
     errors,
     categories: SHOPPING_CATEGORIES,
-    searchAdCounts
+    searchAdCounts,
+    searchAdMeta
   });
 };
