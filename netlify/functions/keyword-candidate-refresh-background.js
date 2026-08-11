@@ -6,6 +6,7 @@ const { connect, store, readCandidateStatus, writeCandidateStatus, CACHE_KEY } =
 // unchanged and uses its own concurrency setting.
 const CONCURRENCY = 8;
 const MAX_SEEDS = 500;
+const MAX_CACHED_CANDIDATES = 20000;
 const MIN_MONTHLY_SEARCH = 100;
 const STOP_WORDS = new Set(["기획", "증정", "단독", "세트", "리필", "본품", "무료", "배송", "정품", "올리브영", "공식", "NEW"]);
 const HEALTH_WORDS = ["유산균", "콜라겐", "비타민", "영양제", "오메가", "프로틴", "단백질", "홍삼", "건강", "효소", "루테인", "마그네슘", "아연", "철분", "밀크씨슬"];
@@ -175,7 +176,15 @@ exports.handler = async (event) => {
       }
     }
 
-    const candidates = [...candidateMap.values()].filter((item) => item.sources.includes("searchad-query") || Number(item.monthlyTotalSearches || 0) >= MIN_MONTHLY_SEARCH);
+    const candidates = [...candidateMap.values()]
+      .filter((item) => item.sources.includes("searchad-query") || Number(item.monthlyTotalSearches || 0) >= MIN_MONTHLY_SEARCH)
+      .sort((a, b) => {
+        const actualPriority = Number(b.sources.includes("searchad-query")) - Number(a.sources.includes("searchad-query"));
+        return actualPriority || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)
+          || Number(b.impressions30d || 0) - Number(a.impressions30d || 0);
+      })
+      .slice(0, MAX_CACHED_CANDIDATES);
+    candidateMap.clear();
     if (!candidates.length) throw new Error("Search Ad 실제 유입 검색어와 keywordstool에서 유효한 후보를 생성하지 못했습니다.");
     const refreshedAt = new Date().toISOString();
     const cache = {
