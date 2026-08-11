@@ -1,4 +1,4 @@
-const { connect, store: analysisStore, readJob, writeJob } = require("./trend-analysis-cache");
+const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { evaluateMatch, buildProductIndex, findBestMatch } = require("./product-matching");
@@ -361,6 +361,7 @@ exports.handler = async (event) => {
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5),
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
+    await writeLastSuccess(job);
   } catch (error) {
     await persist({ state: "failed", message: "분석 실패", failedAt: new Date().toISOString(), durationMs: Date.now() - started, errors: [error.message] });
   }

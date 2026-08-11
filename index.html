@@ -1647,7 +1647,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
-      operatingSettings: null, operatingSettingsLoaded: false };
+      operatingSettings: null, operatingSettingsLoaded: false, accessUsers: [], accessUsersLoaded: false };
     const DEFAULT_MASTER_EMAIL = "huni@emnet.co.kr";
     const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
     const SETTINGS_STORAGE_KEY = "keywordMonitorConfig";
@@ -1672,17 +1672,8 @@
       try {
         const storedUsers = JSON.parse(localStorage.getItem("monitoringAccessUsers") || "[]");
         if (!Array.isArray(storedUsers)) return [];
-        const masterEmail = getMasterEmail();
-
-        // 지정된 계정만 마스터로 유지하고, 과거 자동 생성된 마스터 권한은 회수한다.
         const normalizedUsers = storedUsers.map((user) => {
           const email = normalizeEmail(user.email);
-          if (email === masterEmail) {
-            return { ...user, email, role: "master", status: "approved" };
-          }
-          if (user.role === "master") {
-            return { ...user, email, role: "operator", status: "pending" };
-          }
           if (user.role === "viewer") return { ...user, email, role: "operator" };
           return { ...user, email };
         }).filter((user) => user.email);
@@ -1701,6 +1692,31 @@
       localStorage.setItem("monitoringAccessUsers", JSON.stringify(users));
     }
 
+    async function loadAccessUsers() {
+      const response = await fetch("/.netlify/functions/access-management", { cache: "no-store" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `접근 관리 HTTP ${response.status}`);
+      state.accessUsers = Array.isArray(payload.users) ? payload.users : [];
+      state.accessUsersLoaded = true;
+      const sharedByEmail = new Map(state.accessUsers.map((user) => [normalizeEmail(user.email), user]));
+      const localUsers = getUsers().map((user) => sharedByEmail.has(normalizeEmail(user.email))
+        ? { ...user, ...sharedByEmail.get(normalizeEmail(user.email)), password: user.password }
+        : user);
+      setUsers(localUsers);
+      return state.accessUsers;
+    }
+
+    async function postAccessAction(input) {
+      const response = await fetch("/.netlify/functions/access-management", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `접근 관리 HTTP ${response.status}`);
+      state.accessUsers = Array.isArray(payload.registry?.users) ? payload.registry.users : Array.isArray(payload.users) ? payload.users : state.accessUsers;
+      state.accessUsersLoaded = true;
+      return payload;
+    }
+
     function normalizeEmail(value) {
       return String(value || "").trim().toLowerCase();
     }
@@ -1709,7 +1725,7 @@
       return normalizeEmail(localStorage.getItem(MASTER_EMAIL_STORAGE_KEY) || DEFAULT_MASTER_EMAIL);
     }
 
-    function requestAccess() {
+    async function requestAccess() {
       const email = normalizeEmail($("loginEmail").value);
       const password = $("loginPassword").value.trim();
       const name = email.split("@")[0] || email;
@@ -1723,43 +1739,31 @@
         return;
       }
 
-      const users = getUsers();
-      const existing = users.find((user) => user.email === email);
-      if (existing) {
-        if (existing.status === "approved") {
-          alert("이미 승인된 계정입니다. 이메일과 비밀번호로 로그인하세요.");
-        } else if (existing.status === "rejected") {
+      try {
+        const payload = await postAccessAction({ action: "request", email, name });
+        const sharedUser = payload.user;
+        const users = getUsers();
+        const localUser = users.find((user) => normalizeEmail(user.email) === email);
+        if (localUser) Object.assign(localUser, sharedUser, { password });
+        else users.push({ ...sharedUser, password });
+        setUsers(users);
+        if (sharedUser.status === "approved") {
+          state.currentUser = { ...sharedUser };
+          sessionStorage.setItem("monitoringCurrentUser", sharedUser.email);
+          applyAuthState();
+          loadLastSuccessfulAnalysis();
+          alert(email === DEFAULT_MASTER_EMAIL ? "지정된 마스터(관리자) 계정으로 등록되었습니다." : "이미 승인된 계정입니다. 로그인했습니다.");
+        } else if (sharedUser.status === "rejected") {
           alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
         } else {
-          alert("이미 접근 신청이 접수되었습니다. 마스터 승인을 기다려주세요.");
+          alert("접근 신청이 접수되었습니다. 마스터 승인 후 이메일과 비밀번호로 로그인할 수 있습니다.");
         }
-        return;
-      }
-
-      const isMasterAccount = email === getMasterEmail();
-      const newUser = {
-        email,
-        name,
-        password,
-        role: isMasterAccount ? "master" : "operator",
-        status: isMasterAccount ? "approved" : "pending",
-        requestedAt: new Date().toISOString()
-      };
-
-      users.push(newUser);
-      setUsers(users);
-
-      if (isMasterAccount) {
-        alert("지정된 마스터(관리자) 계정으로 등록되었습니다.");
-        state.currentUser = newUser;
-        sessionStorage.setItem("monitoringCurrentUser", newUser.email);
-        applyAuthState();
-      } else {
-        alert("접근 신청이 접수되었습니다. 마스터 승인 후 이메일과 비밀번호로 로그인할 수 있습니다.");
+      } catch (error) {
+        alert("접근 신청에 실패했습니다: " + error.message);
       }
     }
 
-    function login() {
+    async function login() {
       const email = normalizeEmail($("loginEmail").value);
       const password = $("loginPassword").value.trim();
 
@@ -1772,40 +1776,48 @@
         return;
       }
 
+      try {
+        await loadAccessUsers();
+      } catch (error) {
+        alert("권한 정보를 확인하지 못했습니다: " + error.message);
+        return;
+      }
       const users = getUsers();
       if (!users.length) {
         alert("등록된 계정이 없습니다. 이메일, 비밀번호, 이름을 작성 후 [접근 신청]을 진행해 주세요.");
         return;
       }
 
-      const user = users.find((item) => item.email === email);
-      if (!user) {
-        alert("등록되지 않은 이메일입니다. 이름과 비밀번호를 작성한 후 [접근 신청]을 진행해 주세요.");
+      const localUser = users.find((item) => item.email === email);
+      const sharedUser = state.accessUsers.find((item) => normalizeEmail(item.email) === email);
+      if (!localUser || !sharedUser) {
+        alert("이 브라우저에 로그인 정보가 없습니다. 최초 접근 신청을 진행한 브라우저에서 로그인해주세요.");
         return;
       }
 
-      if (user.password && user.password !== password) {
+      if (localUser.password && localUser.password !== password) {
         alert("비밀번호가 일치하지 않습니다.");
         return;
       }
 
-      if (!user.password) {
-        user.password = password;
+      if (!localUser.password) {
+        localUser.password = password;
         setUsers(users);
       }
 
-      if (user.status === "rejected") {
+      if (sharedUser.status === "rejected") {
         alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
         return;
       }
-      if (user.status !== "approved") {
+      if (sharedUser.status !== "approved") {
         alert("아직 승인되지 않은 계정입니다. 마스터의 승인을 기다려주세요.");
         return;
       }
 
-      state.currentUser = user;
-      sessionStorage.setItem("monitoringCurrentUser", user.email);
+      state.currentUser = { ...sharedUser };
+      sessionStorage.setItem("monitoringCurrentUser", sharedUser.email);
       applyAuthState();
+      loadLastSuccessfulAnalysis();
     }
 
     function logout() {
@@ -1817,7 +1829,8 @@
     function restoreSession() {
       const email = normalizeEmail(sessionStorage.getItem("monitoringCurrentUser"));
       if (!email) return;
-      const user = getUsers().find((item) => item.email === email && item.status === "approved");
+      const localUser = getUsers().find((item) => item.email === email);
+      const user = localUser && state.accessUsers.find((item) => normalizeEmail(item.email) === email && item.status === "approved");
       if (user) state.currentUser = user;
     }
 
@@ -1850,7 +1863,7 @@
     }
 
     function roleOptions(user) {
-      if (user.email === getMasterEmail()) {
+      if (user.role === "master") {
         return '<option value="master" selected>마스터</option>';
       }
       return `
@@ -1915,7 +1928,7 @@
     }
 
     function updatePendingBadge() {
-      const users = getUsers();
+      const users = state.accessUsers;
       const pendingCount = users.filter((u) => u.status === "pending").length;
       const badge = $("pendingBadge");
       if (badge) {
@@ -1928,9 +1941,10 @@
       }
     }
 
-    function openAccessModal() {
+    async function openAccessModal() {
       if (!isMaster()) return;
       $("accessModal").hidden = false;
+      try { await loadAccessUsers(); } catch (error) { alert(`접근 신청 목록 조회 실패: ${error.message}`); }
       renderModalUserList();
     }
 
@@ -1939,7 +1953,7 @@
     }
 
     function renderModalUserList() {
-      const users = [...getUsers()].sort((a, b) => {
+      const users = [...state.accessUsers].sort((a, b) => {
         const statusOrder = { pending: 0, approved: 1, rejected: 2 };
         return (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
       });
@@ -2009,7 +2023,7 @@
     function renderAccessUsers() {
       const list = $("accessUserList");
       if (!list) return;
-      const users = getUsers();
+      const users = state.accessUsers;
       if (!users.length) {
         list.innerHTML = '<div class="download-history-empty">접근 신청자가 없습니다.</div>';
         return;
@@ -2037,62 +2051,51 @@
       });
     }
 
-    function approveUser(email) {
+    async function approveUser(email) {
       if (!isMaster()) return;
-      const users = getUsers().map((user) => user.email === email ? { ...user, status: "approved" } : user);
-      setUsers(users);
+      try { await postAccessAction({ action: "approve", email }); } catch (error) { alert("사용자 승인 실패: " + error.message); return; }
       renderAccessUsers();
       renderModalUserList();
       updatePendingBadge();
     }
 
-    function rejectUser(email) {
+    async function rejectUser(email) {
       if (!isMaster()) return;
-      const users = getUsers().map((user) => user.email === email ? { ...user, status: "rejected" } : user);
-      setUsers(users);
+      try { await postAccessAction({ action: "reject", email }); } catch (error) { alert("사용자 거절 실패: " + error.message); return; }
       renderAccessUsers();
       renderModalUserList();
       updatePendingBadge();
     }
 
-    function updateUserRole(email, role) {
+    async function updateUserRole(email, role) {
       if (!isMaster()) return;
       const normalizedTarget = normalizeEmail(email);
-      if (normalizedTarget === getMasterEmail() || !["operator", "editor"].includes(role)) return;
-      const users = getUsers().map((user) => user.email === normalizedTarget ? { ...user, role } : user);
-      setUsers(users);
+      const target = state.accessUsers.find((user) => normalizeEmail(user.email) === normalizedTarget);
+      if (target?.role === "master" || !["operator", "editor"].includes(role)) return;
+      try { await postAccessAction({ action: "role", email: normalizedTarget, role }); } catch (error) { alert("역할 변경 실패: " + error.message); return; }
       renderAccessUsers();
       renderModalUserList();
     }
 
-    function transferMaster(email) {
+    async function transferMaster(email) {
       if (!isMaster()) return;
       const targetEmail = normalizeEmail(email);
-      const currentMasterEmail = getMasterEmail();
-      const users = getUsers();
-      const targetUser = users.find((user) => user.email === targetEmail && user.status === "approved");
-      if (!targetUser || targetEmail === currentMasterEmail) return;
+      const targetUser = state.accessUsers.find((user) => user.email === targetEmail && user.status === "approved");
+      if (!targetUser || targetUser.role === "master") return;
       if (!confirm(`마스터 권한을 '${targetEmail}' 계정에 위임하시겠습니까?\n위임 후 현재 계정은 편집 권한으로 변경됩니다.`)) return;
 
-      const updatedUsers = users.map((user) => {
-        if (user.email === targetEmail) return { ...user, role: "master", status: "approved" };
-        if (user.email === currentMasterEmail) return { ...user, role: "editor", status: "approved" };
-        return user.role === "master" ? { ...user, role: "operator" } : user;
-      });
-
+      try { await postAccessAction({ action: "transfer-master", email: targetEmail }); } catch (error) { alert("마스터 위임 실패: " + error.message); return; }
       localStorage.setItem(MASTER_EMAIL_STORAGE_KEY, targetEmail);
-      setUsers(updatedUsers);
-      state.currentUser = updatedUsers.find((user) => user.email === state.currentUser?.email) || null;
+      state.currentUser = state.accessUsers.find((user) => user.email === state.currentUser?.email) || null;
       closeAccessModal();
       applyAuthState();
       alert(`마스터 권한이 ${targetEmail} 계정으로 위임되었습니다.`);
     }
 
-    function deleteUser(email) {
+    async function deleteUser(email) {
       if (!isMaster()) return;
       if (!confirm(`'${email}' 계정을 삭제하시겠습니까?`)) return;
-      const users = getUsers().filter((user) => user.email !== email);
-      setUsers(users);
+      try { await postAccessAction({ action: "delete", email }); } catch (error) { alert("사용자 삭제 실패: " + error.message); return; }
       renderAccessUsers();
       renderModalUserList();
       updatePendingBadge();
@@ -2304,7 +2307,8 @@
         if (!response.ok) throw new Error(payload.error || `분석 시작 HTTP ${response.status}`);
         await pollAnalysis(payload.jobId);
       } catch (error) {
-        clearAnalysisUI("분석 실행에 실패하여 결과를 표시하지 않습니다.");
+        clearAnalysisUI("분석 실행에 실패했습니다. 마지막 정상 결과를 복원하는 중입니다.");
+        await loadLastSuccessfulAnalysis();
         showApiErrors({ "분석 실행": error.message });
         finishAnalysisControls();
       }
@@ -2315,6 +2319,39 @@
       $("instantRunBtn").disabled = !canOperate();
       if (analysisPollTimer) clearTimeout(analysisPollTimer);
       analysisPollTimer = null;
+    }
+
+    function displayCompletedAnalysis(job, { restored = false } = {}) {
+      const results = (job.results || []).map((row) => ({
+        ...row, today: Number(row.estimatedLatest || 0), yesterday: Number(row.estimatedBaseline || 0),
+        lift: Number(row.estimatedSurgeCount || 0), matched: true,
+        sources: { datalab: row.trendSlope, shoppingInsight: row.shoppingRise, news: row.news?.total || 0 }
+      }));
+      state.results = results;
+      const diagnosticPanel = $("analysisDiagnosticPanel");
+      diagnosticPanel.style.display = job.diagnostic ? "block" : "none";
+      $("analysisDiagnosticText").textContent = job.diagnostic ? JSON.stringify(job.diagnostic, null, 2) : "";
+      $("latestDataDate").textContent = `최신 데이터 기준일: ${job.latestDataDate || "확인 불가"}`;
+      render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount,
+        news: results.filter((row) => row.news).length }, results, results.slice(0, 10), job.completedAt);
+      $("analysisProgressPanel").classList.toggle("visible", !restored);
+      $("analysisProgressText").textContent = `${restored ? "마지막 정상 결과 복원" : "분석 완료"} · ${job.mode === "instant" ? "즉시 분석" : "기간 분석"} · 후보 ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")}건 · 결과 ${results.length.toLocaleString("ko-KR")}건 · 기준 ${Number(job.surgeThreshold).toLocaleString("ko-KR")} / ${job.matchThreshold}%`;
+      return results;
+    }
+
+    async function loadLastSuccessfulAnalysis(mode = "latest") {
+      try {
+        const response = await fetch(`/.netlify/functions/trend-analysis-latest?mode=${encodeURIComponent(mode)}`, { cache: "no-store" });
+        if (response.status === 404) return null;
+        const job = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(job.error || `마지막 분석 결과 HTTP ${response.status}`);
+        if (job.state !== "completed") return null;
+        displayCompletedAnalysis(job, { restored: true });
+        return job;
+      } catch (error) {
+        showApiErrors({ "마지막 분석 결과": error.message });
+        return null;
+      }
     }
 
     async function pollAnalysis(jobId) {
@@ -2328,22 +2365,12 @@
           return;
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
-        const results = (job.results || []).map((row) => ({
-          ...row, today: Number(row.estimatedLatest || 0), yesterday: Number(row.estimatedBaseline || 0),
-          lift: Number(row.estimatedSurgeCount || 0), matched: true,
-          sources: { datalab: row.trendSlope, shoppingInsight: row.shoppingRise, news: row.news?.total || 0 }
-        }));
-        state.results = results;
-        const diagnosticPanel = $("analysisDiagnosticPanel");
-        diagnosticPanel.style.display = job.diagnostic ? "block" : "none";
-        $("analysisDiagnosticText").textContent = job.diagnostic ? JSON.stringify(job.diagnostic, null, 2) : "";
-        $("latestDataDate").textContent = `최신 데이터 기준일: ${job.latestDataDate || "확인 불가"}`;
-        render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount, news: results.filter((row) => row.news).length }, results, results.slice(0, 10));
-        $("analysisProgressText").textContent = `분석 완료 · 후보 ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")}건 · 결과 ${results.length.toLocaleString("ko-KR")}건`;
+        const results = displayCompletedAnalysis(job);
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
         finishAnalysisControls();
       } catch (error) {
-        clearAnalysisUI("분석 작업에 실패하여 결과를 표시하지 않습니다.");
+        clearAnalysisUI("분석 작업에 실패했습니다. 마지막 정상 결과를 복원하는 중입니다.");
+        await loadLastSuccessfulAnalysis();
         showApiErrors({ "분석 실행": error.message });
         $("analysisProgressText").textContent = `분석 실패: ${error.message}`;
         finishAnalysisControls();
@@ -2460,13 +2487,13 @@
       }
     }
 
-    function render(counts, results, surgeRows = []) {
+    function render(counts, results, surgeRows = [], completedAt = null) {
       $("statSearchAd").textContent = Number(counts.searchAd || 0).toLocaleString("ko-KR");
       $("statDatalab").textContent = Number(counts.datalab || 0).toLocaleString("ko-KR");
       $("statShoppingInsight").textContent = Number(counts.shoppingInsight || 0).toLocaleString("ko-KR");
       $("statNews").textContent = Number(counts.news || 0).toLocaleString("ko-KR");
       $("statMatches").textContent = results.length.toLocaleString("ko-KR");
-      $("statLastRun").innerHTML = formatDateTime(new Date());
+      $("statLastRun").innerHTML = formatDateTime(completedAt ? new Date(completedAt) : new Date());
       renderTrendChart(surgeRows);
 
       const body = $("resultBody");
@@ -2970,18 +2997,22 @@
       if (e.key === "Enter" && $("loginPassword").value) login();
     });
 
-    restoreSession();
-    purgeLegacyBrowserSecrets();
-    loadSettings();
-    loadOperatingSettings();
-    if (!getScheduleTimes().length) restoreScheduleTimes(["09:00"]);
-    setDefaultCollectionDates();
-    updateScheduleModeFields();
-    clearAnalysisUI("분석 실행 전입니다. 실제 API 데이터를 설정한 뒤 분석을 실행하세요.");
-    loadSearchAdCacheStatus();
-    loadCandidateStatus();
-    renderDownloadHistory();
-    applyAuthState();
+    async function initializeApp() {
+      purgeLegacyBrowserSecrets();
+      loadSettings();
+      await Promise.allSettled([loadAccessUsers(), loadOperatingSettings()]);
+      restoreSession();
+      if (!getScheduleTimes().length) restoreScheduleTimes(["09:00"]);
+      setDefaultCollectionDates();
+      updateScheduleModeFields();
+      clearAnalysisUI("저장된 마지막 정상 분석 결과를 확인하는 중입니다.");
+      loadSearchAdCacheStatus();
+      loadCandidateStatus();
+      renderDownloadHistory();
+      applyAuthState();
+      if (state.currentUser) await loadLastSuccessfulAnalysis();
+    }
+    initializeApp();
   </script>
 </body>
 </html>
