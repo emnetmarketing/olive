@@ -16,4 +16,18 @@ const products = [{ product: "메디힐 비타민씨 세럼", brand: "메디힐"
 const index = _test.buildIndex(products);
 const match = _test.bestMatch("비타민씨 세럼", products, index);
 assert.ok(match.score >= 60);
+
+const diagnosticCandidates = [
+  { keyword: "비타민씨 세럼", monthlyPcSearches: 1000, monthlyMobileSearches: 9000, monthlyTotalSearches: 10000, impressions30d: 200, clicks30d: 5, sources: ["searchad-query"], category: "beauty" },
+  { keyword: "콜라겐", monthlyPcSearches: 2000, monthlyMobileSearches: 18000, monthlyTotalSearches: 20000, impressions30d: 0, clicks30d: 0, sources: ["keywordstool"], category: "health" }
+];
+const stats = _test.summaryStats(diagnosticCandidates);
+assert.equal(stats.count, 2);
+assert.equal(stats.averageMonthlySearches, 15000);
+assert.equal(stats.medianSearchAdImpressions, 100);
+assert.equal(stats.newSearchAdQueryRate, 0.5);
+const diagnostic = _test.surgeDiagnostic(diagnosticCandidates[0], instant, estimated);
+assert.equal(diagnostic.monthlyTotalSearches, 10000);
+assert.equal(Math.round(diagnostic.ratioSum), 120);
+assert.equal(diagnostic.ratios.length, 30);
 console.log("Trend estimation, surge calculation, and indexed matching OK");

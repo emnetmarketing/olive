@@ -1551,6 +1551,10 @@
         <div id="analysisProgressPanel" class="api-errors" style="margin-bottom:16px;">
           <strong>분석 진행 상태</strong><br><span id="analysisProgressText"></span>
         </div>
+        <details id="analysisDiagnosticPanel" style="display:none;margin-bottom:16px;">
+          <summary><strong>분석 진단 보기</strong></summary>
+          <pre id="analysisDiagnosticText" style="max-height:420px;overflow:auto;white-space:pre-wrap;font-size:12px;"></pre>
+        </details>
         <div id="latestDataDate" class="muted" style="margin-bottom:12px;">최신 데이터 기준일: -</div>
         <div class="stats">
           <div class="stat"><b id="statSearchAd">0</b><span class="muted">네이버 검색광고</span></div>
@@ -2378,6 +2382,8 @@
       }
       clearAnalysisUI("실제 API 분석 작업을 시작하는 중입니다.");
       showApiErrors();
+      $("analysisDiagnosticPanel").style.display = "none";
+      $("analysisDiagnosticText").textContent = "";
       $("runBtn").disabled = true;
       $("instantRunBtn").disabled = true;
       $("analysisProgressPanel").classList.add("visible");
@@ -2422,6 +2428,9 @@
           sources: { datalab: row.trendSlope, shoppingInsight: row.shoppingRise, news: row.news?.total || 0 }
         }));
         state.results = results;
+        const diagnosticPanel = $("analysisDiagnosticPanel");
+        diagnosticPanel.style.display = job.diagnostic ? "block" : "none";
+        $("analysisDiagnosticText").textContent = job.diagnostic ? JSON.stringify(job.diagnostic, null, 2) : "";
         $("latestDataDate").textContent = `최신 데이터 기준일: ${job.latestDataDate || "확인 불가"}`;
         render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount, news: results.filter((row) => row.news).length }, results, results.slice(0, 10));
         $("analysisProgressText").textContent = `분석 완료 · 후보 ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")}건 · 결과 ${results.length.toLocaleString("ko-KR")}건`;
