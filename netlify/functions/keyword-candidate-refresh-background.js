@@ -1,7 +1,10 @@
 const { accounts, isActive, searchAdGet, readCache: readProductCache } = require("./search-ad-cache");
 const { connect, store, readCandidateStatus, writeCandidateStatus, CACHE_KEY } = require("./keyword-candidate-cache");
 
-const CONCURRENCY = 4;
+// Keep Search Ad calls bounded, but finish comfortably inside Netlify's
+// background-function execution window. Product synchronization remains
+// unchanged and uses its own concurrency setting.
+const CONCURRENCY = 8;
 const MAX_SEEDS = 500;
 const MIN_MONTHLY_SEARCH = 100;
 const STOP_WORDS = new Set(["기획", "증정", "단독", "세트", "리필", "본품", "무료", "배송", "정품", "올리브영", "공식", "NEW"]);
