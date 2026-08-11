@@ -23,6 +23,9 @@ assert.ok(inferredBrandOnly.score < 60);
 assert.equal(inferredBrandOnly.judgment, "브랜드 관련");
 const inferredBrandLine = evaluateMatch("라로슈포제 에빠끌라", { brand: "", product: "라로슈포제 에빠끌라 AI" });
 assert.ok(inferredBrandLine.score >= 70);
+const numericBrandOnly = evaluateMatch("블랑101", { brand: "", product: "블랑101 고농축 세탁세제 1L" });
+assert.ok(numericBrandOnly.score < 60);
+assert.equal(numericBrandOnly.judgment, "브랜드 관련");
 
 const genericType = evaluateMatch("유산균", { brand: "종근당", product: "종근당 락토핏 유산균" });
 assert.equal(genericType.signals.productTypeMatch, true);
