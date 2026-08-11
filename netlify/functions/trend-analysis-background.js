@@ -6,6 +6,7 @@ const { evaluateMatch, buildProductIndex, findBestMatch } = require("./product-m
 const API_HUB = "https://naverapihub.apigw.ntruss.com";
 const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
 const MAX_ACTIVE_CANDIDATES = 5000;
+const CANDIDATE_GROUP_QUOTAS = { new: 1500, highVolume: 1250, recentChange: 1000, priorSurge: 750, domainEvidence: 500 };
 
 function chunks(values, size) { const out = []; for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size)); return out; }
 async function responseJson(response, name) {
@@ -108,7 +109,11 @@ function summaryStats(items) {
     count: items.length,
     averageMonthlySearches: Math.round(average(monthly)), medianMonthlySearches: Math.round(median(monthly)),
     averageSearchAdImpressions: Math.round(average(impressions)), medianSearchAdImpressions: Math.round(median(impressions)),
-    newSearchAdQueryRate: items.length ? items.filter((item) => item.isNewSearchQuery).length / items.length : 0
+    newSearchAdQueryRate: items.length ? items.filter((item) => item.isNewSearchQuery).length / items.length : 0,
+    beautyRate: items.length ? items.filter((item) => item.category === "beauty").length / items.length : 0,
+    healthRate: items.length ? items.filter((item) => item.category === "health").length / items.length : 0,
+    actualSearchAdQueryRate: items.length ? items.filter((item) => item.sources.includes("searchad-query")).length / items.length : 0,
+    keywordToolRate: items.length ? items.filter((item) => item.sources.includes("keywordstool")).length / items.length : 0
   };
 }
 function candidateDiagnostic(item) {
@@ -129,6 +134,55 @@ function surgeDiagnostic(item, metrics, series) {
 function analysisPriority(item, priorSignal) {
   return Number(item.priorityScore || 0) + Math.log10(Number(priorSignal?.estimatedSurgeCount || 0) + 1) * 6;
 }
+function domainEvidenceScore(item) {
+  const evidence = String(item.categoryEvidence || "");
+  return evidence === "keyword" ? 3 : evidence === "adgroup-product" ? 2 : evidence === "keywordstool-seed" ? 1 : 0;
+}
+function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_CANDIDATES) {
+  const selected = []; const selectedKeys = new Set();
+  const addGroup = (quota, predicate, compare) => {
+    let added = 0;
+    for (const item of candidates.filter(predicate).sort(compare)) {
+      if (added >= quota) break;
+      const key = item.keyword.toLocaleLowerCase("ko-KR");
+      if (selectedKeys.has(key)) continue;
+      selected.push(item); selectedKeys.add(key); added += 1;
+    }
+    return added;
+  };
+  const scoreSort = (a, b) => analysisPriority(b, priorSignals.get(b.keyword)) - analysisPriority(a, priorSignals.get(a.keyword))
+    || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0);
+  const groupCounts = {
+    new: addGroup(CANDIDATE_GROUP_QUOTAS.new, (item) => item.isNewSearchQuery,
+      (a, b) => Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)
+        || Number(b.impressionDelta || 0) - Number(a.impressionDelta || 0) || scoreSort(a, b)),
+    highVolume: addGroup(CANDIDATE_GROUP_QUOTAS.highVolume, () => true,
+      (a, b) => Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0) || scoreSort(a, b)),
+    recentChange: addGroup(CANDIDATE_GROUP_QUOTAS.recentChange,
+      (item) => Number(item.impressionDelta || 0) > 0 || Number(item.clicks30d || 0) > 0,
+      (a, b) => Number(b.impressionDelta || 0) - Number(a.impressionDelta || 0)
+        || Number(b.clicks30d || 0) - Number(a.clicks30d || 0) || scoreSort(a, b)),
+    priorSurge: addGroup(CANDIDATE_GROUP_QUOTAS.priorSurge,
+      (item) => Number(priorSignals.get(item.keyword)?.estimatedSurgeCount || 0) > 0,
+      (a, b) => Number(priorSignals.get(b.keyword)?.estimatedSurgeCount || 0) - Number(priorSignals.get(a.keyword)?.estimatedSurgeCount || 0) || scoreSort(a, b)),
+    domainEvidence: addGroup(CANDIDATE_GROUP_QUOTAS.domainEvidence, (item) => domainEvidenceScore(item) > 0,
+      (a, b) => domainEvidenceScore(b) - domainEvidenceScore(a)
+        || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0) || scoreSort(a, b))
+  };
+  let compositeFill = 0;
+  for (const item of candidates.slice().sort(scoreSort)) {
+    if (selected.length >= limit) break;
+    const key = item.keyword.toLocaleLowerCase("ko-KR");
+    if (selectedKeys.has(key)) continue;
+    selected.push(item); selectedKeys.add(key); compositeFill += 1;
+  }
+  const qualifyingGroupCount = (item) => Number(Boolean(item.isNewSearchQuery)) + 1
+    + Number(Number(item.impressionDelta || 0) > 0 || Number(item.clicks30d || 0) > 0)
+    + Number(Number(priorSignals.get(item.keyword)?.estimatedSurgeCount || 0) > 0) + Number(domainEvidenceScore(item) > 0);
+  return { selected, excluded: candidates.filter((item) => !selectedKeys.has(item.keyword.toLocaleLowerCase("ko-KR"))),
+    diagnostics: { quotas: CANDIDATE_GROUP_QUOTAS, selectedByGroup: { ...groupCounts, compositeFill },
+      multiGroupOverlap: selected.filter((item) => qualifyingGroupCount(item) > 1).length } };
+}
 
 exports.handler = async (event) => {
   connect(event);
@@ -146,15 +200,13 @@ exports.handler = async (event) => {
     const relevantCandidates = allCandidates.filter((item) => item.category === "beauty" || item.category === "health");
     const unknownCandidates = allCandidates.filter((item) => item.category === "unknown");
     const monthlyPresent = allCandidates.filter((item) => item.monthlyTotalSearches !== null && item.monthlyTotalSearches !== undefined && Number.isFinite(Number(item.monthlyTotalSearches)));
-    const eligibleBeforeLimit = relevantCandidates.filter((item) => Number(item.monthlyTotalSearches || 0) >= job.surgeThreshold)
-      .sort((a, b) => analysisPriority(b, priorSignals.get(b.keyword)) - analysisPriority(a, priorSignals.get(a.keyword))
-        || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)
-        || Number(b.impressions30d || 0) - Number(a.impressions30d || 0));
-    const eligible = eligibleBeforeLimit.slice(0, MAX_ACTIVE_CANDIDATES);
-    const excludedByLimit = eligibleBeforeLimit.slice(MAX_ACTIVE_CANDIDATES);
+    const eligibleBeforeLimit = relevantCandidates.filter((item) => Number(item.monthlyTotalSearches || 0) >= job.surgeThreshold);
+    const selection = selectAnalysisCandidates(eligibleBeforeLimit, priorSignals);
+    const eligible = selection.selected;
+    const excludedByLimit = selection.excluded;
     if (!eligible.length) throw new Error("급등수 기준을 계산할 수 있는 월간 검색량 후보가 없습니다.");
     const cutDiagnostic = {
-      included: summaryStats(eligible), excluded: summaryStats(excludedByLimit),
+      included: summaryStats(eligible), excluded: summaryStats(excludedByLimit), selectionGroups: selection.diagnostics,
       excludedTopMonthly100: excludedByLimit.slice().sort((a, b) => Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)).slice(0, 100).map(candidateDiagnostic),
       excludedTopNewQueries100: excludedByLimit.filter((item) => item.sources.includes("searchad-query"))
         .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, 100).map(candidateDiagnostic)
@@ -283,4 +335,4 @@ exports.handler = async (event) => {
 };
 
 exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
-  evaluateMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority };
+  evaluateMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore };

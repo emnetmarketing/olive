@@ -19,4 +19,8 @@ assert.ok(_test.candidatePriority({ category: "health", monthlyTotalSearches: 10
 const pool = new Map(Array.from({ length: 10 }, (_, index) => [`k${index}`, { keyword: `k${index}`, category: index < 5 ? "health" : "unknown", monthlyTotalSearches: 1000 + index, impressions30d: 0, sources: ["keywordstool"] }]));
 assert.equal(_test.pruneCandidateMap(pool, 5), 5);
 assert.ok([...pool.values()].every((item) => item.category === "health"));
+const previous = new Map([["old", { impressions30d: 100000 }]]);
+const newLowExposure = { keyword: "new", category: "beauty", categoryEvidence: "adgroup-product", impressions30d: 1, firstSeenAt: new Date().toISOString() };
+const oldHighExposure = { keyword: "old", category: "beauty", categoryEvidence: "adgroup-product", impressions30d: 100000, firstSeenAt: "2020-01-01" };
+assert.ok(_test.volumeBackfillPriority(newLowExposure, previous) > _test.volumeBackfillPriority(oldHighExposure, previous));
 console.log("Keyword candidate normalization and seed extraction OK");

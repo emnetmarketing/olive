@@ -10,7 +10,7 @@ const MAX_CACHED_CANDIDATES = 20000;
 // Leave enough time for the final 20k-candidate Blob write inside the
 // background-function execution window. Remaining missing values keep the
 // explicit `not-requested` status and can be covered by the next manual run.
-const MAX_VOLUME_BACKFILL = 200;
+const MAX_VOLUME_BACKFILL = 500;
 const MIN_MONTHLY_SEARCH = 100;
 const STOP_WORDS = new Set(["기획", "증정", "단독", "세트", "리필", "본품", "무료", "배송", "정품", "올리브영", "공식", "NEW"]);
 const HEALTH_WORDS = ["유산균", "프로바이오틱스", "프리바이오틱스", "콜라겐", "비타민", "영양제", "건강식품", "오메가", "프로틴", "단백질", "단백바", "쉐이크", "홍삼", "건강", "효소", "루테인", "마그네슘", "아연", "철분", "밀크씨슬", "글루타치온", "비오틴", "베르베린"];
@@ -61,7 +61,19 @@ function candidatePriority(item, now = Date.now()) {
   const ageDays = Math.max(0, (now - Date.parse(item.firstSeenAt || new Date(now).toISOString())) / 86400000);
   return (item.category === "unknown" ? 0 : 100) + Math.log10(monthly + 1) * 12 + (ageDays <= 14 ? 14 : 0)
     + Math.max(-8, Math.min(18, Math.sign(delta) * Math.log10(Math.abs(delta) + 1) * 5))
-    + (item.sources.includes("keywordstool") ? 8 : 0) + Math.log10(impressions + 1) * 2;
+    + (item.sources.includes("keywordstool") ? 8 : 0) + Math.log10(impressions + 1) * 0.5;
+}
+function volumeBackfillPriority(item, previousCandidates, now = Date.now()) {
+  const key = item.keyword.toLocaleLowerCase("ko-KR");
+  const previous = previousCandidates.get(key);
+  const isNew = !previous;
+  const delta = Number(item.impressions30d || 0) - Number(previous?.impressions30d || 0);
+  const ageDays = Math.max(0, (now - Date.parse(item.firstSeenAt || new Date(now).toISOString())) / 86400000);
+  const evidence = String(item.categoryEvidence || "");
+  const contextScore = evidence === "keyword" ? 3 : evidence === "adgroup-product" ? 2 : evidence === "keywordstool-seed" ? 1 : 0;
+  return (isNew || ageDays <= 14 ? 1000 : 0) + (item.category === "unknown" ? 0 : 500)
+    + Math.max(0, Math.log10(Math.max(0, delta) + 1) * 50) + contextScore * 25
+    + Math.log10(Number(item.impressions30d || 0) + 1) * 0.5;
 }
 function pruneCandidateMap(candidateMap, limit = 30000) {
   if (candidateMap.size <= limit) return 0;
@@ -256,7 +268,8 @@ exports.handler = async (event) => {
     pruneCandidateMap(candidateMap);
     const volumeBackfill = [...candidateMap.values()].filter((item) => item.sources.includes("searchad-query")
       && item.category !== "unknown" && item.monthlyTotalSearches == null && !requestedSeeds.has(item.keyword.toLocaleLowerCase("ko-KR")))
-      .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, MAX_VOLUME_BACKFILL).map((item) => item.keyword);
+      .sort((a, b) => volumeBackfillPriority(b, previousCandidates) - volumeBackfillPriority(a, previousCandidates)
+        || Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, MAX_VOLUME_BACKFILL).map((item) => item.keyword);
     let processedBackfill = 0;
     await persist({ totalVolumeBackfill: volumeBackfill.length, processedVolumeBackfill: 0,
       message: `월간검색량 누락 후보 보강 중 · 0 / ${volumeBackfill.length.toLocaleString("ko-KR")}` });
@@ -322,4 +335,4 @@ exports.handler = async (event) => {
   }
 };
 
-exports._test = { normalize, classify, numericVolume, productSeeds, statsRows, toolRows, buildGroupContexts, candidatePriority, pruneCandidateMap };
+exports._test = { normalize, classify, numericVolume, productSeeds, statsRows, toolRows, buildGroupContexts, candidatePriority, pruneCandidateMap, volumeBackfillPriority };

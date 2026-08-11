@@ -35,4 +35,15 @@ assert.equal(diagnostic.monthlyTotalSearches, 10000);
 assert.equal(Math.round(diagnostic.ratioSum), 120);
 assert.equal(diagnostic.ratios.length, 30);
 assert.ok(_test.analysisPriority({ priorityScore: 50 }, { estimatedSurgeCount: 5000 }) > _test.analysisPriority({ priorityScore: 50 }, null));
+const selectionPool = Array.from({ length: 6500 }, (_, index) => ({
+  keyword: `candidate-${index}`, category: index % 2 ? "beauty" : "health", categoryEvidence: "keyword",
+  monthlyTotalSearches: 500 + index, impressions30d: index, clicks30d: index % 7, impressionDelta: index % 9,
+  isNewSearchQuery: index < 1700, sources: index % 3 ? ["searchad-query"] : ["keywordstool"], priorityScore: index % 100
+}));
+const selectedCandidates = _test.selectAnalysisCandidates(selectionPool, new Map(), 5000);
+assert.equal(selectedCandidates.selected.length, 5000);
+assert.equal(selectedCandidates.excluded.length, 1500);
+assert.ok(selectedCandidates.selected.filter((item) => item.isNewSearchQuery).length >= 1500);
+assert.equal(selectedCandidates.diagnostics.selectedByGroup.new, 1500);
+assert.ok(selectedCandidates.selected.some((item) => item.keyword === "candidate-6499"));
 console.log("Trend estimation, surge calculation, and indexed matching OK");
