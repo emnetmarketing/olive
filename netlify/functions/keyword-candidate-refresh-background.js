@@ -7,6 +7,10 @@ const { connect, store, readCandidateCache, readCandidateStatus, writeCandidateS
 const CONCURRENCY = 8;
 const MAX_SEEDS = 500;
 const MAX_CACHED_CANDIDATES = 20000;
+// Leave enough time for the final 20k-candidate Blob write inside the
+// background-function execution window. Remaining missing values keep the
+// explicit `not-requested` status and can be covered by the next manual run.
+const MAX_VOLUME_BACKFILL = 1000;
 const MIN_MONTHLY_SEARCH = 100;
 const STOP_WORDS = new Set(["기획", "증정", "단독", "세트", "리필", "본품", "무료", "배송", "정품", "올리브영", "공식", "NEW"]);
 const HEALTH_WORDS = ["유산균", "프로바이오틱스", "프리바이오틱스", "콜라겐", "비타민", "영양제", "건강식품", "오메가", "프로틴", "단백질", "단백바", "쉐이크", "홍삼", "건강", "효소", "루테인", "마그네슘", "아연", "철분", "밀크씨슬", "글루타치온", "비오틴", "베르베린"];
@@ -165,9 +169,9 @@ exports.handler = async (event) => {
               monthlyTotalSearches: previous?.monthlyTotalSearches ?? null, monthlyVolumeStatus: previous?.monthlyVolumeStatus || (previous?.monthlyTotalSearches != null ? "available" : null) };
             if (!existing.sources.includes("searchad-query")) existing.sources.push("searchad-query");
             if (!existing.accountNumbers.includes(account.number)) existing.accountNumbers.push(account.number);
-            if (!existing.relatedAdgroupIds.includes(group.nccAdgroupId) && existing.relatedAdgroupIds.length < 10) existing.relatedAdgroupIds.push(group.nccAdgroupId);
-            for (const product of context.products) if (!existing.relatedProducts.includes(product) && existing.relatedProducts.length < 8) existing.relatedProducts.push(product);
-            for (const brand of context.brands) if (!existing.relatedBrands.includes(brand) && existing.relatedBrands.length < 8) existing.relatedBrands.push(brand);
+            if (!existing.relatedAdgroupIds.includes(group.nccAdgroupId) && existing.relatedAdgroupIds.length < 3) existing.relatedAdgroupIds.push(group.nccAdgroupId);
+            for (const product of context.products) if (!existing.relatedProducts.includes(product) && existing.relatedProducts.length < 3) existing.relatedProducts.push(product);
+            for (const brand of context.brands) if (!existing.relatedBrands.includes(brand) && existing.relatedBrands.length < 3) existing.relatedBrands.push(brand);
             if (existing.category === "unknown" && category !== "unknown") { existing.category = category; existing.categoryEvidence = categoryCounts(keyword)[category] ? "keyword" : "adgroup-product"; }
             existing.impressions30d += Number(row.impCnt || 0);
             existing.clicks30d += Number(row.clkCnt || 0);
@@ -240,7 +244,7 @@ exports.handler = async (event) => {
 
     const volumeBackfill = [...candidateMap.values()].filter((item) => item.sources.includes("searchad-query")
       && item.category !== "unknown" && item.monthlyTotalSearches == null && !requestedSeeds.has(item.keyword.toLocaleLowerCase("ko-KR")))
-      .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, 3000).map((item) => item.keyword);
+      .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, MAX_VOLUME_BACKFILL).map((item) => item.keyword);
     let processedBackfill = 0;
     await persist({ totalVolumeBackfill: volumeBackfill.length, processedVolumeBackfill: 0,
       message: `월간검색량 누락 후보 보강 중 · 0 / ${volumeBackfill.length.toLocaleString("ko-KR")}` });
