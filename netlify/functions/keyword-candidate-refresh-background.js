@@ -63,6 +63,16 @@ function candidatePriority(item, now = Date.now()) {
     + Math.max(-8, Math.min(18, Math.sign(delta) * Math.log10(Math.abs(delta) + 1) * 5))
     + (item.sources.includes("keywordstool") ? 8 : 0) + Math.log10(impressions + 1) * 2;
 }
+function pruneCandidateMap(candidateMap, limit = 30000) {
+  if (candidateMap.size <= limit) return 0;
+  const keep = new Set([...candidateMap.values()]
+    .sort((a, b) => candidatePriority(b) - candidatePriority(a)
+      || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0))
+    .slice(0, limit).map((item) => item.keyword.toLocaleLowerCase("ko-KR")));
+  let removed = 0;
+  for (const key of candidateMap.keys()) if (!keep.has(key)) { candidateMap.delete(key); removed += 1; }
+  return removed;
+}
 
 function numericVolume(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -236,12 +246,14 @@ exports.handler = async (event) => {
         }
       }
       processedSeeds += batch.length;
+      if (processedSeeds % 100 < batch.length && candidateMap.size > 40000) pruneCandidateMap(candidateMap);
       if (processedSeeds % 25 < batch.length || processedSeeds === seeds.length) {
         await persist({ processedSeeds, apiCalls: metrics.apiCalls, retries: metrics.retries,
           message: `keywordstool 후보 확장 중 · ${processedSeeds.toLocaleString("ko-KR")} / ${seeds.length.toLocaleString("ko-KR")} seed` });
       }
     }
 
+    pruneCandidateMap(candidateMap);
     const volumeBackfill = [...candidateMap.values()].filter((item) => item.sources.includes("searchad-query")
       && item.category !== "unknown" && item.monthlyTotalSearches == null && !requestedSeeds.has(item.keyword.toLocaleLowerCase("ko-KR")))
       .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, MAX_VOLUME_BACKFILL).map((item) => item.keyword);
@@ -310,4 +322,4 @@ exports.handler = async (event) => {
   }
 };
 
-exports._test = { normalize, classify, numericVolume, productSeeds, statsRows, toolRows, buildGroupContexts, candidatePriority };
+exports._test = { normalize, classify, numericVolume, productSeeds, statsRows, toolRows, buildGroupContexts, candidatePriority, pruneCandidateMap };

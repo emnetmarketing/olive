@@ -16,4 +16,7 @@ const contexts = _test.buildGroupContexts([{ accountNumber: 1, adGroupId: "g1", 
 assert.match(contexts.get("1:g1").text, /유산균/);
 assert.ok(_test.candidatePriority({ category: "health", monthlyTotalSearches: 10000, impressions30d: 1, impressionDelta: 1, firstSeenAt: new Date().toISOString(), sources: ["keywordstool"] }) >
   _test.candidatePriority({ category: "unknown", monthlyTotalSearches: 10000, impressions30d: 100000, impressionDelta: 0, firstSeenAt: "2020-01-01", sources: ["searchad-query"] }));
+const pool = new Map(Array.from({ length: 10 }, (_, index) => [`k${index}`, { keyword: `k${index}`, category: index < 5 ? "health" : "unknown", monthlyTotalSearches: 1000 + index, impressions30d: 0, sources: ["keywordstool"] }]));
+assert.equal(_test.pruneCandidateMap(pool, 5), 5);
+assert.ok([...pool.values()].every((item) => item.category === "health"));
 console.log("Keyword candidate normalization and seed extraction OK");
