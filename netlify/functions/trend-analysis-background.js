@@ -239,6 +239,7 @@ exports.handler = async (event) => {
       if (score >= job.matchThreshold) funnel.matching.atUserThreshold += 1;
       if (match) matchedDiagnostics.push({ keyword: candidate.keyword, estimatedSurgeCount: Math.round(metrics.surgeCount),
         matchedProductName: match.item.product, matchScore: match.score, matchJudgment: match.judgment, matchReason: match.reason,
+        matchingCandidateCount: match.matchingCandidateCount, additionalMatches: match.additionalMatches,
         matchSignals: match.signals, account: match.item.account, productId: match.item.productId || match.item.id || null });
       if (!match || match.score < job.matchThreshold) continue;
       const shopping = shoppingMap.get(candidate.keyword) || [];

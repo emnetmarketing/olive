@@ -45,4 +45,27 @@ const index = buildProductIndex(products);
 const best = findBestMatch("나이아신아마이드20", products, index);
 assert.equal(best.item.account, "계정2");
 assert.ok(best.score >= 70);
+
+const concentrationProducts = [
+  { product: "오휘 데이쉴드 나이아신아마이드 5% 톤업 선", account: "계정2" },
+  { product: "구달 청귤 비타C 나이아신아마이드10 흔적앰플", account: "계정1" },
+  { product: "주미소 나이아신아마이드 10% 세럼 40ml", account: "계정1" },
+  { product: "디오디너리 나이아신아마이드 10%+징크 1%", account: "계정1" },
+  { product: "주미소 나이아신아마이드 20% 세럼 40ml", account: "계정1" },
+  { product: "더마팩토리 나이아신아마이드20% 세럼 30ml", account: "계정2" }
+];
+const concentrationIndex = buildProductIndex(concentrationProducts);
+const match5 = findBestMatch("나이아신아마이드5", concentrationProducts, concentrationIndex);
+const match10 = findBestMatch("나이아신아마이드10", concentrationProducts, concentrationIndex);
+const match20 = findBestMatch("나이아신아마이드20", concentrationProducts, concentrationIndex);
+assert.deepEqual([match5.matchingCandidateCount, match10.matchingCandidateCount, match20.matchingCandidateCount], [1, 3, 2]);
+assert.deepEqual([match5.score, match10.score, match20.score], [94, 88, 90]);
+assert.deepEqual([match5.additionalMatches.length, match10.additionalMatches.length, match20.additionalMatches.length], [0, 2, 1]);
+assert.ok([match5, match10, match20].every((match) => match.score < 100 && match.judgment === "강한 매칭"));
+
+const uniquelyIdentified = [{ brand: "라로슈포제", product: "라로슈포제 에빠끌라 B5", account: "계정1" }];
+const uniqueMatch = findBestMatch("라로슈포제 에빠끌라 B5", uniquelyIdentified, buildProductIndex(uniquelyIdentified));
+assert.equal(uniqueMatch.matchingCandidateCount, 1);
+assert.equal(uniqueMatch.uniqueIdentification, true);
+assert.equal(uniqueMatch.score, 100);
 console.log("Structured product matching signals and judgments OK");

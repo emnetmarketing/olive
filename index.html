@@ -1599,14 +1599,16 @@
                 <th>추정 최신/최대/기준</th>
                 <th>추정 급등수</th>
                 <th>출처</th>
-                <th>Naver 광고 항목</th>
+                <th>대표 매칭 상품</th>
+                <th>추가 매칭 상품</th>
+                <th>동일 강도 후보</th>
                 <th>일치율</th>
                 <th>매칭 판단</th>
                 <th>판단 근거</th>
               </tr>
             </thead>
             <tbody id="resultBody">
-              <tr><td colspan="8" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
+              <tr><td colspan="10" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
             </tbody>
           </table>
         </div>
@@ -2359,7 +2361,7 @@
       ["statSearchAd", "statDatalab", "statShoppingInsight", "statNews", "statMatches"].forEach((id) => { $(id).textContent = "0"; });
       $("statLastRun").textContent = "-";
       $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
-      $("resultBody").innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("resultBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2566,7 +2568,7 @@
 
       const body = $("resultBody");
       if (!results.length) {
-        body.innerHTML = '<tr><td colspan="8" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
         return;
       }
 
@@ -2583,6 +2585,10 @@
               <strong>${escapeHtml(item.product || item.brand || "-")}</strong><br>
               <span class="muted">${escapeHtml(item.account || "계정 미지정")} · ${escapeHtml(item.campaign || "-")} · ${escapeHtml(item.adGroup || "-")}</span>
             </td>
+            <td>${(row.match.additionalMatches || []).length
+              ? row.match.additionalMatches.map((candidate) => `<div><strong>${escapeHtml(candidate.item?.product || candidate.candidate || "-")}</strong><br><span class="muted">${escapeHtml(candidate.item?.account || "계정 미지정")} · ${Number(candidate.score || 0)}%</span></div>`).join("")
+              : '<span class="muted">없음</span>'}</td>
+            <td><strong>${Number(row.match.matchingCandidateCount || 1).toLocaleString("ko-KR")}개</strong></td>
             <td><span class="pill">${row.match.score}%</span></td>
             <td><strong>${escapeHtml(row.match.judgment || "관련성 낮음")}</strong></td>
             <td>${escapeHtml(row.match.reason || "식별 가능한 공통 특징 부족")}<br><span class="muted">비교값: ${escapeHtml(row.match.candidate)}</span></td>
@@ -2629,7 +2635,7 @@
     }
 
     function buildExcelExport() {
-      const headers = ["급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상승률(참고)", "출처", "계정", "브랜드", "제품", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
+      const headers = ["급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
         const item = row.match.item;
         return [
@@ -2644,6 +2650,8 @@
           item.account || "계정 미지정",
           item.brand || "",
           item.product || "",
+          (row.match.additionalMatches || []).map((candidate) => `${candidate.item?.product || candidate.candidate || ""} (${candidate.item?.account || "계정 미지정"}, ${Number(candidate.score || 0)}%)`).join(" / "),
+          Number(row.match.matchingCandidateCount || 1),
           item.campaign || "",
           item.adGroup || "",
           `${row.match.score}%`,

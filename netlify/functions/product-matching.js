@@ -75,7 +75,10 @@ function evaluateMatch(keyword, item) {
   if (identifyingMatches.size >= 3) score += 8;
   if (brandMatch && !productLineMatch && !ingredientMatch && !productTypeMatch && !specMatch) score = Math.min(score, 38);
   if (genericOnlyMatch) score = Math.min(score, PRODUCT_TYPES.has(meaningfulQuery[0]) ? 28 : 42);
-  score = Math.max(0, Math.min(100, Math.round(score)));
+  const rawScore = Math.max(0, Math.round(score));
+  if (ingredientMatch && concentrationMatch && !brandMatch && !productLineMatch) score = Math.min(rawScore, 94);
+  else score = Math.min(rawScore, 99);
+  score = Math.max(0, Math.round(score));
 
   const signals = { brandMatch, inferredBrandMatch: Boolean(inferredBrandToken || compactPrefixBrand), productLineMatch, productNameMatch, ingredientMatch, concentrationMatch,
     productTypeMatch, specMatch, tokenCoverage: Math.round(tokenCoverage * 100), genericOnlyMatch,
@@ -97,7 +100,7 @@ function evaluateMatch(keyword, item) {
   else if (genericOnlyMatch && productTypeMatch) judgment = "제품군 관련";
   else if (score >= 50 && !genericOnlyMatch) judgment = "관련 있음";
   else if (score >= 25) judgment = "약한 관련";
-  return { score, signals, judgment, reason: reasons.join(" / ") || "식별 가능한 공통 특징 부족" };
+  return { score, rawScore, signals, judgment, reason: reasons.join(" / ") || "식별 가능한 공통 특징 부족" };
 }
 
 function buildProductIndex(items) {
@@ -110,10 +113,32 @@ function buildProductIndex(items) {
 function findBestMatch(keyword, items, index) {
   const positions = new Set();
   for (const token of matchTokens(keyword)) for (const position of index.get(token) || []) positions.add(position);
-  const shortlist = [...positions].slice(0, 200).map((position) => items[position]);
-  let best = null;
-  for (const item of shortlist) { const evaluation = evaluateMatch(keyword, item); if (!best || evaluation.score > best.score) best = { item, candidate: item.product, ...evaluation }; }
-  return best;
+  const shortlist = [...positions].slice(0, 500).map((position) => items[position]);
+  const evaluated = shortlist.map((item, order) => ({ item, candidate: item.product, order, ...evaluateMatch(keyword, item) }))
+    .sort((a, b) => b.score - a.score || a.order - b.order);
+  if (!evaluated.length) return null;
+  const bestBase = evaluated[0];
+  const strongMatches = evaluated.filter((entry) => entry.score >= 60 && entry.score >= bestBase.score - 5
+    && (entry.signals.ingredientMatch && entry.signals.concentrationMatch
+      || entry.signals.brandMatch && entry.signals.productLineMatch
+      || entry.signals.productNameMatch));
+  const matchingCandidateCount = Math.max(1, strongMatches.length);
+  const adjustScore = (entry) => {
+    const signals = entry.signals;
+    const uniqueIdentification = matchingCandidateCount === 1 && signals.brandMatch && signals.productLineMatch
+      && (signals.specMatch || signals.concentrationMatch || signals.productNameMatch) && signals.tokenCoverage >= 80;
+    if (uniqueIdentification) return 100;
+    if (signals.ingredientMatch && signals.concentrationMatch && !signals.brandMatch && !signals.productLineMatch) {
+      const cap = matchingCandidateCount === 1 ? 94 : Math.max(84, 92 - (matchingCandidateCount - 1) * 2);
+      return Math.min(entry.score, cap);
+    }
+    if (matchingCandidateCount > 1) return Math.min(entry.score, Math.max(86, 96 - (matchingCandidateCount - 1) * 2));
+    return Math.min(entry.score, 99);
+  };
+  const ranked = (strongMatches.length ? strongMatches : [bestBase]).map((entry) => ({ ...entry, score: adjustScore(entry) }));
+  const best = ranked[0];
+  return { ...best, matchingCandidateCount, uniqueIdentification: best.score === 100,
+    additionalMatches: ranked.slice(1, 6).map(({ item, candidate, score, judgment, reason, signals }) => ({ item, candidate, score, judgment, reason, signals })) };
 }
 
 module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, auxiliarySimilarity, evaluateMatch, buildProductIndex, findBestMatch };
