@@ -2,6 +2,8 @@ const { connect, store: analysisStore, readJob, writeJob } = require("./trend-an
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { evaluateMatch, buildProductIndex, findBestMatch } = require("./product-matching");
+const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
+  normalizeKeyword, CALCULATION_VERSION } = require("./surge-history-cache");
 
 const API_HUB = "https://naverapihub.apigw.ntruss.com";
 const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
@@ -170,8 +172,9 @@ function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_C
       (a, b) => Number(b.impressionDelta || 0) - Number(a.impressionDelta || 0)
         || Number(b.clicks30d || 0) - Number(a.clicks30d || 0) || scoreSort(a, b)),
     priorSurge: addGroup(CANDIDATE_GROUP_QUOTAS.priorSurge,
-      (item) => Number(priorSignals.get(item.keyword)?.estimatedSurgeCount || 0) > 0,
-      (a, b) => Number(priorSignals.get(b.keyword)?.estimatedSurgeCount || 0) - Number(priorSignals.get(a.keyword)?.estimatedSurgeCount || 0) || scoreSort(a, b)),
+      (item) => Number(priorSignals.get(item.keyword)?.protectionPriority || 0) > 0 || Number(priorSignals.get(item.keyword)?.estimatedSurgeCount || 0) > 0,
+      (a, b) => Number(priorSignals.get(b.keyword)?.protectionPriority || 0) - Number(priorSignals.get(a.keyword)?.protectionPriority || 0)
+        || Number(priorSignals.get(b.keyword)?.estimatedSurgeCount || 0) - Number(priorSignals.get(a.keyword)?.estimatedSurgeCount || 0) || scoreSort(a, b)),
     domainEvidence: addGroup(CANDIDATE_GROUP_QUOTAS.domainEvidence, (item) => domainEvidenceScore(item) > 0,
       (a, b) => domainEvidenceScore(b) - domainEvidenceScore(a)
         || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0) || scoreSort(a, b))
@@ -200,11 +203,16 @@ exports.handler = async (event) => {
   const persist = async (patch) => { job = { ...job, ...patch, updatedAt: new Date().toISOString() }; await writeJob(job.jobId, job); };
   const started = Date.now();
   try {
-    const [candidateCache, productCache, priorSignalCache] = await Promise.all([
-      readCandidateCache(), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null)
+    const [candidateCache, productCache, priorSignalCache, surgeHistoryCache] = await Promise.all([
+      readCandidateCache(), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory()
     ]);
     const priorSignals = new Map((priorSignalCache?.items || []).map((item) => [item.keyword, item]));
     const allCandidates = candidateCache.candidates;
+    for (const candidate of allCandidates) {
+      const historyRecord = surgeHistoryCache.records.get(normalizeKeyword(candidate.keyword));
+      const historySignal = historyProtectionSignal(historyRecord, job.surgeThreshold);
+      if (historySignal) priorSignals.set(candidate.keyword, historySignal);
+    }
     const relevantCandidates = allCandidates.filter((item) => item.category === "beauty" || item.category === "health");
     const unknownCandidates = allCandidates.filter((item) => item.category === "unknown");
     const monthlyPresent = allCandidates.filter((item) => item.monthlyTotalSearches !== null && item.monthlyTotalSearches !== undefined && Number.isFinite(Number(item.monthlyTotalSearches)));
@@ -313,6 +321,20 @@ exports.handler = async (event) => {
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
         match, sources: candidate.sources, news: null });
     }
+    let surgeHistoryManifest = surgeHistoryCache.manifest;
+    if (job.mode === "instant") {
+      const latestHistoryCache = await readSurgeHistory();
+      upsertInstantHistory(latestHistoryCache.records, calculated.map((entry) => ({ keyword: entry.candidate.keyword,
+        latestDataDate: entry.metrics.latestPeriod, estimatedSurgeCount: entry.metrics.surgeCount,
+        estimatedBaseline: entry.metrics.baseline, estimatedLatest: entry.metrics.latest,
+        monthlySearches: entry.candidate.monthlyTotalSearches })), job.jobId, job.createdAt);
+      surgeHistoryManifest = await writeSurgeHistory(latestHistoryCache.records);
+      for (const row of rows) {
+        const historyRecord = latestHistoryCache.records.get(normalizeKeyword(row.keyword));
+        row.surgeHistoryState = deriveSurgeState(historyRecord, job.surgeThreshold, row.latestDataDate);
+        row.surgeCalculationVersion = CALCULATION_VERSION;
+      }
+    }
     const surgeTop30 = calculated.slice().sort((a, b) => b.metrics.surgeCount - a.metrics.surgeCount).slice(0, 30).map((item) => item.diagnosticRow);
     const matchTop30 = matchedDiagnostics.slice().sort((a, b) => b.matchScore - a.matchScore || b.estimatedSurgeCount - a.estimatedSurgeCount).slice(0, 30);
     const samplePool = calculated.slice(); const samples = []; const addSample = (type, entry) => {
@@ -336,7 +358,9 @@ exports.handler = async (event) => {
         endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });
     await persist({ state: "completed", message: "분석 완료", progress: 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length, results: rows, errors: [],
-      diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5) } });
+      diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5),
+        surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
+          shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
   } catch (error) {
     await persist({ state: "failed", message: "분석 실패", failedAt: new Date().toISOString(), durationMs: Date.now() - started, errors: [error.message] });
   }

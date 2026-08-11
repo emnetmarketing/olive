@@ -48,4 +48,11 @@ assert.ok(selectedCandidates.selected.filter((item) => _test.isRecentCandidate(i
 assert.equal(selectedCandidates.diagnostics.selectedByGroup.new, 1500);
 assert.ok(selectedCandidates.diagnostics.multiGroupOverlap > 0 && selectedCandidates.diagnostics.multiGroupOverlap < 5000);
 assert.ok(selectedCandidates.selected.some((item) => item.keyword === "candidate-6499"));
+const protectionPool = Array.from({ length: 6000 }, (_, index) => ({ keyword: `protected-${index}`,
+  monthlyTotalSearches: index ? 10000 + index : 500, priorityScore: index ? 100 : 0,
+  firstSeenAt: "2026-01-01T00:00:00.000Z", categoryEvidence: index ? "keyword" : "unknown",
+  impressionDelta: index ? 10 : 0, clicks30d: index ? 1 : 0, sources: ["keywordstool"] }));
+const protectedSignals = new Map([["protected-0", { estimatedSurgeCount: 900, protectionPriority: 1000 }]]);
+const protectedSelection = _test.selectAnalysisCandidates(protectionPool, protectedSignals, 5000);
+assert.ok(protectedSelection.selected.some((item) => item.keyword === "protected-0"));
 console.log("Trend estimation, surge calculation, and indexed matching OK");

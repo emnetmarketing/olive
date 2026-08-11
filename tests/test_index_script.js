@@ -12,6 +12,8 @@ assert.match(html, /fetch\("\/\.netlify\/functions\/trend-analysis-start"/);
 assert.match(html, /surgeThreshold, matchThreshold/);
 assert.match(html, /min="1" max="10000000" step="1" value="10000"/);
 assert.match(html, /analyze\("instant"\)/);
+assert.match(html, /formatSurgeHistory/);
+assert.match(html, /급등 이력/);
 assert.match(html, /검색어 후보 새로고침/);
 assert.match(html, /Search Ad 상품 새로고침/);
 assert.match(html, /fetch\("\/\.netlify\/functions\/search-ad-refresh"/);

@@ -1598,6 +1598,7 @@
                 <th>급등 키워드</th>
                 <th>추정 최신/최대/기준</th>
                 <th>추정 급등수</th>
+                <th>급등 이력</th>
                 <th>출처</th>
                 <th>대표 매칭 상품</th>
                 <th>추가 매칭 상품</th>
@@ -1608,7 +1609,7 @@
               </tr>
             </thead>
             <tbody id="resultBody">
-              <tr><td colspan="10" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
+              <tr><td colspan="11" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
             </tbody>
           </table>
         </div>
@@ -2361,7 +2362,7 @@
       ["statSearchAd", "statDatalab", "statShoppingInsight", "statNews", "statMatches"].forEach((id) => { $(id).textContent = "0"; });
       $("statLastRun").textContent = "-";
       $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
-      $("resultBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("resultBody").innerHTML = `<tr><td colspan="11" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2568,7 +2569,7 @@
 
       const body = $("resultBody");
       if (!results.length) {
-        body.innerHTML = '<tr><td colspan="10" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
+        body.innerHTML = '<tr><td colspan="11" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
         return;
       }
 
@@ -2580,6 +2581,7 @@
             <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
             <td>${row.today.toLocaleString("ko-KR")} / ${Number(row.estimatedPeak || row.today).toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
             <td>+${row.lift.toLocaleString("ko-KR")}</td>
+            <td>${formatSurgeHistory(row.surgeHistoryState)}</td>
             <td>${source}</td>
             <td>
               <strong>${escapeHtml(item.product || item.brand || "-")}</strong><br>
@@ -2595,6 +2597,17 @@
           </tr>
         `;
       }).join("");
+    }
+
+    function formatSurgeHistory(history) {
+      if (!history) return '<span class="muted">기간 분석은 일별 이력을 갱신하지 않습니다.</span>';
+      const recent = (history.recentHistory || []).slice(-7)
+        .map((item) => `${escapeHtml(String(item.date || "").slice(5))} ${Number(item.estimatedSurgeCount || 0) >= 0 ? "+" : ""}${Number(item.estimatedSurgeCount || 0).toLocaleString("ko-KR")}`)
+        .join(" → ");
+      return `<strong>${escapeHtml(history.statusText || "-")}</strong><br>
+        <span class="muted">최근 이력: ${recent || "없음"}<br>
+        누적 ${Number(history.surgeDaysCount || 0).toLocaleString("ko-KR")}일 · 연속 ${Number(history.consecutiveSurgeDays || 0).toLocaleString("ko-KR")}일<br>
+        급등수 기준 ${Number(history.threshold || 0).toLocaleString("ko-KR")}</span>`;
     }
 
     function countNewsSignals(results) {
