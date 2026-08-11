@@ -270,6 +270,14 @@ exports.handler = async (event) => {
       if (!item.monthlyVolumeStatus) item.monthlyVolumeStatus = failedSeeds.has(key) ? "request-failed"
         : requestedSeeds.has(key) ? "keywordtool-unavailable" : "not-requested";
       item.priorityScore = candidatePriority(item);
+      // Product/ad-group context has already been reduced to categoryEvidence.
+      // Do not persist repeated product strings for 20k candidates: they are
+      // not consumed by analysis and can push the final atomic Blob write past
+      // the background-function execution window.
+      delete item.relatedAdgroupIds;
+      delete item.relatedProducts;
+      delete item.relatedBrands;
+      delete item.seedRelations;
     }
     const candidates = [...candidateMap.values()]
       .filter((item) => item.sources.includes("searchad-query") || Number(item.monthlyTotalSearches || 0) >= MIN_MONTHLY_SEARCH)
