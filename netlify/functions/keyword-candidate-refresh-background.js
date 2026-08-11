@@ -1,5 +1,5 @@
 const { accounts, isActive, searchAdGet, readCache: readProductCache } = require("./search-ad-cache");
-const { connect, store, readCandidateCache, readCandidateStatus, writeCandidateStatus, CACHE_KEY } = require("./keyword-candidate-cache");
+const { connect, readCandidateCache, writeCandidateCache, readCandidateStatus, writeCandidateStatus } = require("./keyword-candidate-cache");
 
 // Keep Search Ad calls bounded, but finish comfortably inside Netlify's
 // background-function execution window. Product synchronization remains
@@ -300,7 +300,7 @@ exports.handler = async (event) => {
       seedCount: seeds.length, apiCalls: metrics.apiCalls, retries: metrics.retries,
       durationMs: Date.now() - started, warnings: errors.slice(0, 50)
     };
-    await store().setJSON(CACHE_KEY, cache);
+    await writeCandidateCache(cache);
     await persist({ state: "completed", message: "검색어 후보 새로고침 완료", completedAt: refreshedAt,
       candidateCount: cache.candidateCount, actualQueryCount: cache.actualQueryCount, keywordToolCount: cache.keywordToolCount,
       apiCalls: metrics.apiCalls, retries: metrics.retries, durationMs: cache.durationMs, errors: errors.slice(0, 50) });

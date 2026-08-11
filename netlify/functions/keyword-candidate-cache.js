@@ -2,16 +2,34 @@ const crypto = require("node:crypto");
 const { connectLambda, getStore } = require("@netlify/blobs");
 
 const STORE = "keyword-candidates";
-const CACHE_KEY = "current-v2";
+const CACHE_KEY = "current-v3";
 const LEGACY_CACHE_KEY = "current";
+const PREVIOUS_CACHE_KEY = "current-v2";
 // Version the mutable job status independently from the durable candidate
 // cache so retired background retries cannot overwrite a newer worker's lock.
-const STATUS_KEY = "status-v3";
+const STATUS_KEY = "status-v4";
 
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
-async function readCandidateCache() {
-  return await store().get(CACHE_KEY, { type: "json" }) || store().get(LEGACY_CACHE_KEY, { type: "json" });
+async function readCandidateCache(options = {}) {
+  const source = await store().get(CACHE_KEY, { type: "json" })
+    || await store().get(PREVIOUS_CACHE_KEY, { type: "json" })
+    || await store().get(LEGACY_CACHE_KEY, { type: "json" });
+  if (!source || options.summaryOnly || !source.shardKeys?.length) return source;
+  const shards = await Promise.all(source.shardKeys.map((key) => store().get(key, { type: "json" })));
+  return { ...source, candidates: shards.flatMap((shard) => shard?.candidates || []) };
+}
+async function writeCandidateCache(cache) {
+  const version = String(cache.refreshedAt || Date.now()).replace(/[^0-9]/g, "");
+  const shardKeys = [];
+  for (let offset = 0; offset < cache.candidates.length; offset += 2500) {
+    const key = `shards/${version}/${offset / 2500}`;
+    shardKeys.push(key);
+    await store().setJSON(key, { candidates: cache.candidates.slice(offset, offset + 2500) });
+  }
+  const manifest = { ...cache, candidates: undefined, shardKeys, shardCount: shardKeys.length };
+  await store().setJSON(CACHE_KEY, manifest);
+  return manifest;
 }
 async function readCandidateStatus() { return store().get(STATUS_KEY, { type: "json" }); }
 async function writeCandidateStatus(value) { await store().setJSON(STATUS_KEY, value); return value; }
@@ -34,6 +52,6 @@ async function acquireCandidateJob() {
 }
 
 module.exports = {
-  connect, store, readCandidateCache, readCandidateStatus, writeCandidateStatus,
+  connect, store, readCandidateCache, writeCandidateCache, readCandidateStatus, writeCandidateStatus,
   acquireCandidateJob, CACHE_KEY
 };

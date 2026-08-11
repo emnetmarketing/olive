@@ -4,7 +4,7 @@ const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "ap
 exports.handler = async (event) => {
   connect(event);
   try {
-    const [cache, status] = await Promise.all([readCandidateCache(), readCandidateStatus()]);
+    const [cache, status] = await Promise.all([readCandidateCache({ summaryOnly: true }), readCandidateStatus()]);
     return json(200, {
       cacheExists: Boolean(cache?.refreshedAt && Array.isArray(cache.candidates)),
       cache: cache ? {
