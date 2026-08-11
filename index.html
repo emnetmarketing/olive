@@ -392,14 +392,13 @@
     .btn-transfer:hover { background: #ddd6fe; }
 
     header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      align-items: start;
       gap: 24px;
-      min-height: 92px;
       max-width: 1480px;
       margin: 0 auto;
-      padding: 24px 22px 8px 326px;
+      padding: 24px 22px 12px;
       color: var(--ink);
     }
 
@@ -410,10 +409,9 @@
       font-weight: 900;
     }
 
-    header > div:first-child {
-      flex: 0 0 300px;
-      flex-shrink: 0;
-      min-width: 300px;
+    .header-title {
+      min-width: 0;
+      padding-top: 4px;
       white-space: nowrap;
     }
 
@@ -580,10 +578,25 @@
     }
 
     header .toolbar {
-      flex: 1;
-      flex-wrap: nowrap;
-      justify-content: flex-end;
+      flex-wrap: wrap;
+      justify-content: flex-start;
       min-width: 0;
+    }
+
+    .header-control-stack {
+      display: grid;
+      min-width: 0;
+      gap: 10px;
+    }
+
+    .header-toolbar {
+      width: 100%;
+      gap: 8px;
+    }
+
+    .header-management-controls {
+      padding-top: 10px;
+      border-top: 1px solid rgba(231, 236, 245, .9);
     }
 
     header button {
@@ -596,6 +609,8 @@
 
     .header-date-range {
       display: flex;
+      flex: 0 1 348px;
+      min-width: 320px;
       align-items: center;
       gap: 6px;
       padding: 3px 6px;
@@ -606,7 +621,7 @@
     }
 
     .header-date-range .field {
-      min-width: 118px;
+      min-width: 146px;
       margin-bottom: 0;
       gap: 2px;
     }
@@ -625,10 +640,9 @@
 
     .schedule-panel {
       display: none;
-      position: absolute;
-      right: 22px;
-      top: 82px;
+      position: static;
       width: min(420px, calc(100vw - 36px));
+      margin: 8px auto 0;
       padding: 16px;
       border: 1px solid var(--line);
       border-radius: 18px;
@@ -1242,37 +1256,15 @@
 
     @media (max-width: 1320px) {
       header {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 12px;
-        padding: 22px 22px 8px 326px;
-      }
-      header > div:first-child {
-        flex-basis: auto;
-        min-width: 0;
-      }
-      header .toolbar {
-        flex-wrap: wrap;
-        justify-content: flex-start;
-        width: 100%;
+        gap: 20px;
       }
     }
 
     @media (max-width: 1040px) {
       header {
-        align-items: flex-start;
-        flex-direction: column;
+        grid-template-columns: 1fr;
         gap: 14px;
-        padding: 22px 18px 8px;
-      }
-      header > div:first-child {
-        flex-basis: auto;
-        min-width: 0;
-      }
-      header .toolbar {
-        flex-wrap: wrap;
-        justify-content: flex-start;
-        width: 100%;
+        padding: 22px 18px 12px;
       }
       main { grid-template-columns: 1fr; }
       aside { position: static; }
@@ -1294,9 +1286,23 @@
         text-align: left;
       }
       .schedule-panel {
-        position: static;
         margin: 8px 18px 0;
         width: auto;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .header-date-range {
+        min-width: 0;
+        flex: 1 1 100%;
+        flex-direction: column;
+      }
+      .header-date-range .field {
+        width: 100%;
+      }
+      .header-toolbar button,
+      .header-toolbar .user-chip {
+        max-width: 100%;
       }
     }
   </style>
@@ -1324,30 +1330,34 @@
   </div>
 
   <header>
-    <div>
+    <div class="header-title">
       <span class="header-eyebrow">NAVER TREND MONITOR</span>
       <h1>네쇼검 트렌드 모니터</h1>
     </div>
-    <div class="toolbar">
-      <div class="header-date-range">
-        <div class="field">
-          <label for="collectionStart">수집 기간 시작일</label>
-          <input id="collectionStart" type="date">
+    <div class="header-control-stack">
+      <div class="toolbar header-toolbar header-analysis-controls">
+        <div class="header-date-range">
+          <div class="field">
+            <label for="collectionStart">수집 기간 시작일</label>
+            <input id="collectionStart" type="date">
+          </div>
+          <div class="field">
+            <label for="collectionEnd">수집 기간 종료일</label>
+            <input id="collectionEnd" type="date">
+          </div>
         </div>
-        <div class="field">
-          <label for="collectionEnd">수집 기간 종료일</label>
-          <input id="collectionEnd" type="date">
-        </div>
+        <button id="runBtn">▶ 분석 실행</button>
+        <button id="instantRunBtn" type="button">⚡ 즉시 분석</button>
       </div>
-      <button id="runBtn">▶ 분석 실행</button>
-      <button id="instantRunBtn" type="button">⚡ 즉시 분석</button>
-      <button id="refreshSearchAdBtn" class="secondary" type="button">↻ Search Ad 상품 새로고침</button>
-      <button id="refreshCandidatesBtn" class="secondary" type="button">↻ 검색어 후보 새로고침</button>
-      <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
-      <button id="teamsBtn" class="success">↗ Teams 전송</button>
-      <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">권한 관리 <span id="pendingBadge" class="badge-count">0</span></button>
-      <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
-      <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
+      <div class="toolbar header-toolbar header-management-controls">
+        <button id="refreshSearchAdBtn" class="secondary" type="button">↻ Search Ad 상품 새로고침</button>
+        <button id="refreshCandidatesBtn" class="secondary" type="button">↻ 검색어 후보 새로고침</button>
+        <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
+        <button id="teamsBtn" class="success">↗ Teams 전송</button>
+        <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">권한 관리 <span id="pendingBadge" class="badge-count">0</span></button>
+        <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
+        <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
+      </div>
     </div>
   </header>
 
