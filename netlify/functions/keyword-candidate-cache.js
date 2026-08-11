@@ -14,7 +14,10 @@ async function writeCandidateStatus(value) { await store().setJSON(STATUS_KEY, v
 async function acquireCandidateJob() {
   const current = await readCandidateStatus();
   const age = Date.now() - Date.parse(current?.updatedAt || 0);
-  if (current?.state === "running" && age < 30 * 60 * 1000) return { acquired: false, status: current };
+  // The background worker writes a heartbeat every 40 ad groups. A five-minute
+  // stale window prevents duplicate live jobs while allowing recovery after a
+  // deployment replacement or platform timeout leaves a running lock behind.
+  if (current?.state === "running" && age < 5 * 60 * 1000) return { acquired: false, status: current };
   const now = new Date().toISOString();
   const status = {
     jobId: crypto.randomUUID(), state: "running", message: "검색어 후보 새로고침 준비 중",
