@@ -3,7 +3,9 @@ const { connectLambda, getStore } = require("@netlify/blobs");
 
 const STORE = "keyword-candidates";
 const CACHE_KEY = "current";
-const STATUS_KEY = "status";
+// Version the mutable job status independently from the durable candidate
+// cache so retired background retries cannot overwrite a newer worker's lock.
+const STATUS_KEY = "status-v2";
 
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
