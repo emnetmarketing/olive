@@ -6,7 +6,7 @@ exports.handler = async (event) => {
   try {
     const [cache, status] = await Promise.all([readCandidateCache({ summaryOnly: true }), readCandidateStatus()]);
     return json(200, {
-      cacheExists: Boolean(cache?.refreshedAt && Array.isArray(cache.candidates)),
+      cacheExists: Boolean(cache?.refreshedAt && Number(cache.candidateCount || 0) > 0),
       cache: cache ? {
         refreshedAt: cache.refreshedAt, candidateCount: cache.candidateCount,
         actualQueryCount: cache.actualQueryCount, keywordToolCount: cache.keywordToolCount,
