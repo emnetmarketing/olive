@@ -110,6 +110,7 @@ function summaryStats(items) {
     averageMonthlySearches: Math.round(average(monthly)), medianMonthlySearches: Math.round(median(monthly)),
     averageSearchAdImpressions: Math.round(average(impressions)), medianSearchAdImpressions: Math.round(median(impressions)),
     newSearchAdQueryRate: items.length ? items.filter((item) => item.isNewSearchQuery).length / items.length : 0,
+    recent14DayQueryRate: items.length ? items.filter((item) => isRecentCandidate(item)).length / items.length : 0,
     beautyRate: items.length ? items.filter((item) => item.category === "beauty").length / items.length : 0,
     healthRate: items.length ? items.filter((item) => item.category === "health").length / items.length : 0,
     actualSearchAdQueryRate: items.length ? items.filter((item) => item.sources.includes("searchad-query")).length / items.length : 0,
@@ -138,6 +139,10 @@ function domainEvidenceScore(item) {
   const evidence = String(item.categoryEvidence || "");
   return evidence === "keyword" ? 3 : evidence === "adgroup-product" ? 2 : evidence === "keywordstool-seed" ? 1 : 0;
 }
+function isRecentCandidate(item, now = Date.now()) {
+  const firstSeen = Date.parse(item.firstSeenAt || "");
+  return Number.isFinite(firstSeen) && now - firstSeen <= 14 * 86400000;
+}
 function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_CANDIDATES) {
   const selected = []; const selectedKeys = new Set();
   const addGroup = (quota, predicate, compare) => {
@@ -152,8 +157,10 @@ function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_C
   };
   const scoreSort = (a, b) => analysisPriority(b, priorSignals.get(b.keyword)) - analysisPriority(a, priorSignals.get(a.keyword))
     || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0);
+  const highVolumeKeys = new Set(candidates.slice().sort((a, b) => Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0))
+    .slice(0, CANDIDATE_GROUP_QUOTAS.highVolume).map((item) => item.keyword.toLocaleLowerCase("ko-KR")));
   const groupCounts = {
-    new: addGroup(CANDIDATE_GROUP_QUOTAS.new, (item) => item.isNewSearchQuery,
+    new: addGroup(CANDIDATE_GROUP_QUOTAS.new, (item) => isRecentCandidate(item),
       (a, b) => Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)
         || Number(b.impressionDelta || 0) - Number(a.impressionDelta || 0) || scoreSort(a, b)),
     highVolume: addGroup(CANDIDATE_GROUP_QUOTAS.highVolume, () => true,
@@ -176,7 +183,8 @@ function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_C
     if (selectedKeys.has(key)) continue;
     selected.push(item); selectedKeys.add(key); compositeFill += 1;
   }
-  const qualifyingGroupCount = (item) => Number(Boolean(item.isNewSearchQuery)) + 1
+  const qualifyingGroupCount = (item) => Number(isRecentCandidate(item))
+    + Number(highVolumeKeys.has(item.keyword.toLocaleLowerCase("ko-KR")))
     + Number(Number(item.impressionDelta || 0) > 0 || Number(item.clicks30d || 0) > 0)
     + Number(Number(priorSignals.get(item.keyword)?.estimatedSurgeCount || 0) > 0) + Number(domainEvidenceScore(item) > 0);
   return { selected, excluded: candidates.filter((item) => !selectedKeys.has(item.keyword.toLocaleLowerCase("ko-KR"))),
@@ -335,4 +343,4 @@ exports.handler = async (event) => {
 };
 
 exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
-  evaluateMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore };
+  evaluateMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };
