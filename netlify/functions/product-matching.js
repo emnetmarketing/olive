@@ -51,7 +51,8 @@ function evaluateMatch(keyword, item) {
   const concentrationMatch = ingredientMatch && numberMatches.length > 0;
   const productTypeMatch = typeMatches.length > 0;
   const productLineMatch = productLineMatches.length > 0;
-  const specMatches = matchedTokens.filter((token) => /^\d+(?:\.\d+)?$/.test(token) || (/^[a-z]+\d+$/i.test(token) && !brandTokens.has(token)));
+  const specMatches = matchedTokens.filter((token) => !brandTokens.has(token)
+    && (/^\d+(?:\.\d+)?$/.test(token) || /^[a-z]+\d+$/i.test(token)));
   const specMatch = specMatches.length > 0;
   const identifyingMatches = new Set([...productLineMatches, ...ingredientMatches, ...numberMatches, ...specMatches]);
   const productNameMatch = tokenCoverage >= .8 && meaningfulQuery.length >= 2 && identifyingMatches.size >= 1;
