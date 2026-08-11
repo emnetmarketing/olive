@@ -84,7 +84,11 @@ exports.handler = async (event) => {
   connect(event);
   let input;
   try { input = JSON.parse(event.body || "{}"); } catch { return; }
-  const initial = await readCandidateStatus() || input.status;
+  const storedStatus = await readCandidateStatus();
+  // The singleton status Blob can briefly return the previous job immediately
+  // after a manual refresh starts. Prefer the trigger payload for the new job;
+  // later heartbeats still read and write the shared status normally.
+  const initial = storedStatus?.jobId === input.jobId ? storedStatus : input.status;
   if (!input.jobId || initial?.jobId !== input.jobId || initial.state !== "running") return;
   let status = { ...initial };
   const persist = async (patch) => {
