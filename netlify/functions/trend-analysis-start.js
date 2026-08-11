@@ -1,6 +1,7 @@
 const { connect, createJob, writeJob } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
+const { readOperatingSettings } = require("./operating-settings-cache");
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 
 function isoDate(date) { return date.toISOString().slice(0, 10); }
@@ -17,10 +18,7 @@ exports.handler = async (event) => {
   try {
     const input = JSON.parse(event.body || "{}");
     const mode = input.mode === "instant" ? "instant" : "period";
-    const surgeThreshold = Number(input.surgeThreshold);
-    const matchThreshold = Number(input.matchThreshold);
-    if (!Number.isInteger(surgeThreshold) || surgeThreshold < 1 || surgeThreshold > 10000000) return json(400, { error: "급등수 기준은 1~10,000,000 사이의 정수여야 합니다." });
-    if (!Number.isFinite(matchThreshold) || matchThreshold < 1 || matchThreshold > 100) return json(400, { error: "상품 일치율은 1~100 사이여야 합니다." });
+    const { surgeThreshold, matchThreshold } = await readOperatingSettings();
     let startDate = String(input.startDate || "");
     let endDate = String(input.endDate || "");
     if (mode === "instant") {

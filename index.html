@@ -997,14 +997,6 @@
       gap: 14px;
     }
 
-    .sample {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin: 8px 0 14px;
-      flex-wrap: wrap;
-    }
-
     .brand-card {
       display: flex;
       align-items: center;
@@ -1110,10 +1102,6 @@
     }
 
     .tab-panel[hidden] {
-      display: none;
-    }
-
-    .hidden-data {
       display: none;
     }
 
@@ -1312,7 +1300,7 @@
     <div class="auth-card">
       <span class="header-eyebrow">SECURE ACCESS</span>
       <h1>네쇼검 트렌드 모니터</h1>
-      <p>마스터가 승인한 사용자만 접근할 수 있습니다. 목업에서는 브라우저 저장소 기준으로 승인/권한 흐름을 확인합니다.</p>
+      <p>마스터가 승인한 사용자만 접근할 수 있습니다. V1에서는 브라우저 저장소 기준으로 승인 및 권한 상태를 관리합니다.</p>
       <div class="field">
         <label for="loginEmail">이메일</label>
         <input id="loginEmail" type="email" placeholder="name@company.com">
@@ -1418,20 +1406,15 @@
         <div class="grid" style="grid-template-columns:1fr 1fr;">
           <div class="field">
             <label for="surgeThreshold">급등수 기준</label>
-            <input id="surgeThreshold" type="number" min="1" max="10000000" step="1" value="10000">
+            <input id="surgeThreshold" type="number" min="1" max="10000000" step="1" value="300">
           </div>
           <div class="field">
             <label for="matchThreshold">일치율 기준(%)</label>
-            <input id="matchThreshold" type="number" min="1" max="100" value="60">
+            <input id="matchThreshold" type="number" min="1" max="100" value="40">
           </div>
         </div>
-
-        <div class="field">
-          <label for="excelUpload">브랜드/제품 엑셀 업로드</label>
-          <input id="excelUpload" type="file" accept=".xlsx,.xls,.csv">
-          <span class="muted">1행 헤더: A열 계정, B열 브랜드, C열 제품. 업로드하면 목업 데이터로 반영됩니다.</span>
-        </div>
-        <div id="uploadStatus" class="note">목업 검증은 엑셀 업로드 또는 샘플 데이터로 진행하세요.</div>
+        <button id="operatingSettingsSaveBtn" class="secondary" type="button">설정 저장</button>
+        <div id="operatingSettingsStatus" class="settings-save-status">공통 운영 설정을 불러오는 중입니다.</div>
       </div>
 
       <div id="apiPanel" class="tab-panel" hidden>
@@ -1541,11 +1524,6 @@
     </aside>
 
     <div class="workspace">
-      <div class="hidden-data">
-        <textarea id="instagramData" spellcheck="false"></textarea>
-        <textarea id="naverData" spellcheck="false"></textarea>
-      </div>
-
       <section class="panel">
         <h2>모니터링 요약</h2>
         <div id="searchAdCachePanel" class="api-errors visible" style="margin-bottom:16px;">
@@ -1668,7 +1646,8 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null };
+    const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
+      operatingSettings: null, operatingSettingsLoaded: false };
     const DEFAULT_MASTER_EMAIL = "huni@emnet.co.kr";
     const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
     const SETTINGS_STORAGE_KEY = "keywordMonitorConfig";
@@ -1677,8 +1656,9 @@
       "naverApiKey", "naverApiKey1", "naverApiKey2", "naverSecretKey1", "naverSecretKey2",
       "naverCustomerId1", "naverCustomerId2", "naverClientId", "naverClientSecret"
     ];
+    const LEGACY_LOCAL_THRESHOLD_IDS = ["surgeThreshold", "matchThreshold"];
     const SETTINGS_IDS = [
-      "surgeThreshold", "matchThreshold", "collectionStart", "collectionEnd",
+      "collectionStart", "collectionEnd",
       "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
       "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
       "alertState", "alertChannel", "alertInterval", "alertRule"
@@ -1896,7 +1876,7 @@
       if ($("headerAccessBtn")) $("headerAccessBtn").style.display = master ? "inline-flex" : "none";
 
       const editableIds = [
-        "surgeThreshold", "matchThreshold", "collectionStart", "collectionEnd",
+        "surgeThreshold", "matchThreshold",
         "scheduleMode", "scheduleWeekday", "scheduleDate", "teamsWebhook", "emailEndpoint",
         "emailRecipients", "emailApiKey", "kakaoEndpoint", "kakaoChannel", "kakaoApiKey",
         "alertState", "alertChannel", "alertInterval", "alertRule"
@@ -1904,14 +1884,20 @@
       editableIds.forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
       });
+      ["collectionStart", "collectionEnd"].forEach((id) => {
+        if ($(id)) $(id).disabled = !operable;
+      });
       updateAlertStateFields();
       Array.from(document.querySelectorAll(".schedule-time-input, .remove-schedule-time-btn")).forEach((el) => {
         el.disabled = !editable;
       });
-      ["saveBtn", "addScheduleTimeBtn"].forEach((id) => {
+      ["saveBtn", "operatingSettingsSaveBtn", "addScheduleTimeBtn", "refreshSearchAdBtn", "refreshCandidatesBtn", "scheduleBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
       });
-      ["runBtn", "instantRunBtn", "refreshSearchAdBtn", "refreshCandidatesBtn", "scheduleBtn", "apiBtn", "startScheduleBtn", "stopScheduleBtn", "excelUpload", "excelDownloadBtn", "downloadHistoryBtn", "teamsBtn"].forEach((id) => {
+      if ($("operatingSettingsSaveBtn")) $("operatingSettingsSaveBtn").style.display = editable ? "inline-flex" : "none";
+      if ($("apiTabBtn")) $("apiTabBtn").disabled = !editable;
+      if (!editable && !$("apiPanel").hidden) switchSideTab("monitor");
+      ["runBtn", "instantRunBtn", "excelDownloadBtn", "downloadHistoryBtn", "teamsBtn"].forEach((id) => {
         if ($(id)) $(id).disabled = !operable;
       });
     }
@@ -2113,7 +2099,7 @@
     }
 
     function toggleSchedulePanel() {
-      if (!requireOperate("자동 수집 설정 열기")) return;
+      if (!requireEdit("자동 수집 설정 열기")) return;
       $("schedulePanel").classList.toggle("open");
     }
 
@@ -2156,7 +2142,7 @@
     }
 
     function startScheduledCollection() {
-      if (!requireOperate("자동 수집 시작")) return;
+      if (!requireEdit("자동 수집 시작")) return;
       stopScheduledCollection(false);
       const nextRun = getNextRunDate(new Date());
       if (!nextRun) {
@@ -2274,99 +2260,6 @@
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
     }
 
-    function normalize(text) {
-      return String(text || "")
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}]+/gu, "")
-        .trim();
-    }
-
-    function tokens(text) {
-      return String(text || "")
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s#]+/gu, " ")
-        .split(/\s+/)
-        .map((x) => x.replace(/^#/, "").trim())
-        .filter(Boolean);
-    }
-
-    function levenshtein(a, b) {
-      a = normalize(a);
-      b = normalize(b);
-      if (a === b) return 0;
-      if (!a.length) return b.length;
-      if (!b.length) return a.length;
-      const row = Array.from({ length: b.length + 1 }, (_, i) => i);
-      for (let i = 1; i <= a.length; i += 1) {
-        let prev = row[0];
-        row[0] = i;
-        for (let j = 1; j <= b.length; j += 1) {
-          const temp = row[j];
-          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-          row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost);
-          prev = temp;
-        }
-      }
-      return row[b.length];
-    }
-
-    function charSimilarity(a, b) {
-      const aa = normalize(a);
-      const bb = normalize(b);
-      const maxLen = Math.max(aa.length, bb.length);
-      if (!maxLen) return 0;
-      return (1 - levenshtein(aa, bb) / maxLen) * 100;
-    }
-
-    function tokenSimilarity(a, b) {
-      const left = new Set(tokens(a));
-      const right = new Set(tokens(b));
-      if (!left.size || !right.size) return 0;
-      let intersection = 0;
-      left.forEach((item) => {
-        if (right.has(item)) intersection += 1;
-      });
-      const union = new Set([...left, ...right]).size;
-      return (intersection / union) * 100;
-    }
-
-    function similarity(a, b) {
-      const compactA = normalize(a);
-      const compactB = normalize(b);
-      const containsBoost = compactA && compactB && (compactA.includes(compactB) || compactB.includes(compactA)) ? 12 : 0;
-      return Math.min(100, Math.round(charSimilarity(a, b) * 0.68 + tokenSimilarity(a, b) * 0.32 + containsBoost));
-    }
-
-    function parseJson(id) {
-      const raw = $(id).value.trim();
-      if (!raw) return [];
-      try {
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) throw new Error("JSON 배열 형식이어야 합니다.");
-        return parsed;
-      } catch (error) {
-        throw new Error(`${id === "instagramData" ? "Instagram" : "Naver"} 데이터 파싱 실패: ${error.message}`);
-      }
-    }
-
-    function bestNaverMatch(keyword, naverItems) {
-      let best = null;
-      naverItems.forEach((item) => {
-        const candidates = [
-          item.product,
-          item.brand,
-          `${item.brand || ""} ${item.product || ""}`.trim()
-        ].filter(Boolean);
-        candidates.forEach((candidate) => {
-          const score = similarity(keyword, candidate);
-          if (!best || score > best.score) {
-            best = { item, candidate, score };
-          }
-        });
-      });
-      return best;
-    }
-
     function clearAnalysisUI(message = "실제 API 분석 결과가 없습니다.") {
       state.results = [];
       ["statSearchAd", "statDatalab", "statShoppingInsight", "statNews", "statMatches"].forEach((id) => { $(id).textContent = "0"; });
@@ -2388,10 +2281,9 @@
 
     async function analyze(mode = "period") {
       if (!requireOperate(mode === "instant" ? "즉시 분석" : "기간 분석")) return;
-      const surgeThreshold = Number($("surgeThreshold").value);
-      const matchThreshold = Number($("matchThreshold").value);
-      if (!Number.isInteger(surgeThreshold) || surgeThreshold < 1 || surgeThreshold > 10000000) {
-        showApiErrors({ "분석 설정": "급등수 기준은 1~10,000,000 사이의 정수여야 합니다." });
+      if (!state.operatingSettingsLoaded) await loadOperatingSettings();
+      if (!state.operatingSettings) {
+        showApiErrors({ "분석 설정": "공통 운영 설정을 불러오지 못해 분석을 시작할 수 없습니다." });
         return;
       }
       clearAnalysisUI("실제 API 분석 작업을 시작하는 중입니다.");
@@ -2405,7 +2297,7 @@
       try {
         const response = await fetch("/.netlify/functions/trend-analysis-start", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode, surgeThreshold, matchThreshold,
+          body: JSON.stringify({ mode,
             startDate: $("collectionStart").value, endDate: $("collectionEnd").value })
         });
         const payload = await response.json().catch(() => ({}));
@@ -2486,7 +2378,7 @@
             ? `동기화 완료 · 소재 ${Number(status.totalCreatives || 0).toLocaleString("ko-KR")}건 · 재시도 ${Number(status.retries || 0).toLocaleString("ko-KR")}회 · 소요 ${formatDuration(status.durationMs)}`
             : status.message || "대기 중";
       $("searchAdCacheProgress").textContent = details;
-      $("refreshSearchAdBtn").disabled = running || !canOperate();
+      $("refreshSearchAdBtn").disabled = running || !canEdit();
       if (running && !searchAdStatusTimer) searchAdStatusTimer = setInterval(loadSearchAdCacheStatus, 3000);
       if (!running && searchAdStatusTimer) {
         clearInterval(searchAdStatusTimer);
@@ -2506,7 +2398,7 @@
     }
 
     async function refreshSearchAdProducts() {
-      if (!requireOperate("Search Ad 상품 새로고침")) return;
+      if (!requireEdit("Search Ad 상품 새로고침")) return;
       $("refreshSearchAdBtn").disabled = true;
       $("searchAdCacheProgress").textContent = "Search Ad 상품 동기화를 시작하는 중입니다.";
       try {
@@ -2520,7 +2412,7 @@
         await loadSearchAdCacheStatus();
       } catch (error) {
         $("searchAdCacheProgress").textContent = `상품 새로고침 시작 실패: ${error.message}`;
-        $("refreshSearchAdBtn").disabled = !canOperate();
+        $("refreshSearchAdBtn").disabled = !canEdit();
       }
     }
 
@@ -2538,7 +2430,7 @@
         : status.state === "failed" ? `${status.message}: ${(status.errors || []).join(" / ")}`
           : status.state === "completed" ? `동기화 완료 · API ${Number(status.apiCalls || 0).toLocaleString("ko-KR")}회 · 재시도 ${Number(status.retries || 0)}회 · 경고 ${(status.errors || []).length.toLocaleString("ko-KR")}건 · 소요 ${formatDuration(status.durationMs)}`
             : status.message || "대기 중";
-      $("refreshCandidatesBtn").disabled = running || !canOperate();
+      $("refreshCandidatesBtn").disabled = running || !canEdit();
       if (running && !candidateStatusTimer) candidateStatusTimer = setInterval(loadCandidateStatus, 3000);
       if (!running && candidateStatusTimer) { clearInterval(candidateStatusTimer); candidateStatusTimer = null; }
     }
@@ -2553,7 +2445,7 @@
     }
 
     async function refreshKeywordCandidates() {
-      if (!requireOperate("검색어 후보 새로고침")) return;
+      if (!requireEdit("검색어 후보 새로고침")) return;
       $("refreshCandidatesBtn").disabled = true;
       $("candidateCacheProgress").textContent = "검색어 후보 동기화를 시작하는 중입니다.";
       try {
@@ -2564,7 +2456,7 @@
         await loadCandidateStatus();
       } catch (error) {
         $("candidateCacheProgress").textContent = `검색어 후보 새로고침 시작 실패: ${error.message}`;
-        $("refreshCandidatesBtn").disabled = !canOperate();
+        $("refreshCandidatesBtn").disabled = !canEdit();
       }
     }
 
@@ -2829,7 +2721,7 @@
         return `${index + 1}. ${row.keyword} - ${row.today.toLocaleString("ko-KR")}회, 전일 ${row.yesterday.toLocaleString("ko-KR")}회, Naver ${item.account || "계정 미지정"}: ${item.product || item.brand}, 일치율 ${row.match.score}%`;
       }).join("\n");
       return {
-        text: `NAVER 추정 급등 키워드 감지\n\n기준: 추정 급등수 ${Number($("surgeThreshold").value).toLocaleString("ko-KR")} 이상, 상품 일치율 ${$("matchThreshold").value}% 이상\n\n${rows || "전송할 매칭 결과가 없습니다."}`
+        text: `NAVER 추정 급등 키워드 감지\n\n기준: 추정 급등수 ${Number(state.operatingSettings?.surgeThreshold || 0).toLocaleString("ko-KR")} 이상, 상품 일치율 ${state.operatingSettings?.matchThreshold || 0}% 이상\n\n${rows || "전송할 매칭 결과가 없습니다."}`
       };
     }
 
@@ -2863,94 +2755,71 @@
       }
     }
 
-    function parseCsv(text) {
-      const rows = [];
-      let row = [];
-      let cell = "";
-      let quoted = false;
-      for (let i = 0; i < text.length; i += 1) {
-        const ch = text[i];
-        const next = text[i + 1];
-        if (ch === '"' && quoted && next === '"') {
-          cell += '"';
-          i += 1;
-        } else if (ch === '"') {
-          quoted = !quoted;
-        } else if (ch === "," && !quoted) {
-          row.push(cell);
-          cell = "";
-        } else if ((ch === "\n" || ch === "\r") && !quoted) {
-          if (ch === "\r" && next === "\n") i += 1;
-          row.push(cell);
-          rows.push(row);
-          row = [];
-          cell = "";
-        } else {
-          cell += ch;
-        }
-      }
-      row.push(cell);
-      rows.push(row);
-      return rows.filter((items) => items.some((item) => String(item || "").trim()));
-    }
-
-    function rowsToNaverItems(rows) {
-      return rows.slice(1).map((row, index) => ({
-        account: String(row[0] || "").trim() || "계정 미지정",
-        brand: String(row[1] || "").trim(),
-        product: String(row[2] || "").trim(),
-        campaign: "엑셀 업로드",
-        adGroup: `행 ${index + 2}`
-      })).filter((item) => item.brand || item.product);
-    }
-
-    function loadSheetJs() {
-      if (window.XLSX) return Promise.resolve();
-      return new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-        script.onload = resolve;
-        script.onerror = () => reject(new Error("엑셀 파서 로드 실패"));
-        document.head.appendChild(script);
-      });
-    }
-
-    async function handleExcelUpload(event) {
-      if (!requireOperate("엑셀 업로드")) {
-        event.target.value = "";
-        return;
-      }
-      const file = event.target.files && event.target.files[0];
-      if (!file) return;
-      try {
-        $("uploadStatus").textContent = `${file.name} 파일을 읽는 중입니다.`;
-        const extension = file.name.split(".").pop().toLowerCase();
-        let rows = [];
-        if (extension === "csv") {
-          rows = parseCsv(await file.text());
-        } else {
-          await loadSheetJs();
-          const buffer = await file.arrayBuffer();
-          const workbook = XLSX.read(buffer, { type: "array" });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
-        }
-
-        const items = rowsToNaverItems(rows);
-        if (!items.length) throw new Error("A:C열에서 읽을 수 있는 브랜드/제품 데이터가 없습니다.");
-        $("naverData").value = JSON.stringify(items, null, 2);
-        $("uploadStatus").textContent = `${file.name}에서 ${items.length.toLocaleString("ko-KR")}건을 불러왔습니다.`;
-        log(`엑셀 업로드 반영: ${items.length}건`);
-        analyze();
-      } catch (error) {
-        $("uploadStatus").textContent = `업로드 실패: ${error.message}`;
-        log(`엑셀 업로드 실패: ${error.message}`);
-        alert(`엑셀 업로드 실패: ${error.message}\n\n.xlsx/.xls 파싱은 브라우저에서 SheetJS CDN을 불러옵니다. 인터넷이 차단된 환경이면 CSV로 저장해 업로드하세요.`);
-      }
-    }
-
     async function fetchApiData() {
       await analyze();
+    }
+
+    function showOperatingSettingsStatus(message, type = "") {
+      const status = $("operatingSettingsStatus");
+      if (!status) return;
+      status.textContent = message;
+      status.className = `settings-save-status${type ? ` ${type}` : ""}`;
+    }
+
+    function applyOperatingSettings(settings) {
+      const surgeThreshold = Number(settings?.surgeThreshold);
+      const matchThreshold = Number(settings?.matchThreshold);
+      if (!Number.isInteger(surgeThreshold) || surgeThreshold < 1 || surgeThreshold > 10000000) throw new Error("서버 급등수 기준이 유효하지 않습니다.");
+      if (!Number.isFinite(matchThreshold) || matchThreshold < 1 || matchThreshold > 100) throw new Error("서버 일치율 기준이 유효하지 않습니다.");
+      state.operatingSettings = { surgeThreshold, matchThreshold, savedAt: settings.savedAt || null, source: settings.source || "blob" };
+      state.operatingSettingsLoaded = true;
+      $("surgeThreshold").value = String(surgeThreshold);
+      $("matchThreshold").value = String(matchThreshold);
+      return state.operatingSettings;
+    }
+
+    async function loadOperatingSettings() {
+      try {
+        const response = await fetch("/.netlify/functions/operating-settings", { headers: { "Accept": "application/json" } });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        const settings = applyOperatingSettings(payload.settings);
+        const savedText = settings.savedAt ? ` · ${new Date(settings.savedAt).toLocaleString("ko-KR")}` : " · 기본값";
+        showOperatingSettingsStatus(`✓ 공통 운영 설정 적용${savedText}`, "saved");
+        return settings;
+      } catch (error) {
+        state.operatingSettingsLoaded = true;
+        state.operatingSettings = null;
+        showOperatingSettingsStatus(`설정 불러오기 실패 · ${error.message}`, "error");
+        return null;
+      }
+    }
+
+    async function saveOperatingSettings() {
+      if (!requireEdit("운영 설정 저장")) return;
+      const previous = state.operatingSettings ? { ...state.operatingSettings } : null;
+      const surgeThreshold = Number($("surgeThreshold").value);
+      const matchThreshold = Number($("matchThreshold").value);
+      try {
+        if (!Number.isInteger(surgeThreshold) || surgeThreshold < 1 || surgeThreshold > 10000000) throw new Error("급등수 기준은 1~10,000,000 사이의 정수여야 합니다.");
+        if (!Number.isFinite(matchThreshold) || matchThreshold < 1 || matchThreshold > 100) throw new Error("일치율 기준은 1~100 사이여야 합니다.");
+        $("operatingSettingsSaveBtn").disabled = true;
+        showOperatingSettingsStatus("공통 운영 설정을 저장하는 중입니다.");
+        const response = await fetch("/.netlify/functions/operating-settings", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ surgeThreshold, matchThreshold })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        applyOperatingSettings(payload.settings);
+        showOperatingSettingsStatus(`✓ 설정이 저장되었습니다. · ${new Date(payload.settings.savedAt).toLocaleString("ko-KR")}`, "saved");
+        alert("설정이 저장되었습니다.");
+      } catch (error) {
+        if (previous) applyOperatingSettings(previous);
+        showOperatingSettingsStatus(`저장 실패 · ${error.message}`, "error");
+        alert(`설정 저장에 실패했습니다: ${error.message}`);
+      } finally {
+        $("operatingSettingsSaveBtn").disabled = !canEdit();
+      }
     }
 
     function updateSettingsSaveStatus(message, type = "") {
@@ -2997,7 +2866,7 @@
         try {
           const config = JSON.parse(raw);
           let changed = false;
-          LEGACY_SECRET_IDS.forEach((id) => {
+          [...LEGACY_SECRET_IDS, ...LEGACY_LOCAL_THRESHOLD_IDS].forEach((id) => {
             if (Object.prototype.hasOwnProperty.call(config, id)) {
               delete config[id];
               changed = true;
@@ -3068,12 +2937,12 @@
       saveSettings();
     });
     bindEvent("teamsBtn", "click", sendTeams);
+    bindEvent("operatingSettingsSaveBtn", "click", saveOperatingSettings);
     bindEvent("saveBtn", "click", saveSettings);
     bindEvent("apiBtn", "click", fetchApiData);
     bindEvent("excelDownloadBtn", "click", downloadExcel);
     bindEvent("downloadHistoryBtn", "click", toggleDownloadHistory);
     bindEvent("clearDownloadHistoryBtn", "click", clearDownloadHistory);
-    bindEvent("excelUpload", "change", handleExcelUpload);
     bindEvent("monitorTabBtn", "click", () => switchSideTab("monitor"));
     bindEvent("apiTabBtn", "click", () => switchSideTab("api"));
 
@@ -3104,11 +2973,10 @@
     restoreSession();
     purgeLegacyBrowserSecrets();
     loadSettings();
+    loadOperatingSettings();
     if (!getScheduleTimes().length) restoreScheduleTimes(["09:00"]);
     setDefaultCollectionDates();
     updateScheduleModeFields();
-    $("instagramData").value = "[]";
-    $("naverData").value = "[]";
     clearAnalysisUI("분석 실행 전입니다. 실제 API 데이터를 설정한 뒤 분석을 실행하세요.");
     loadSearchAdCacheStatus();
     loadCandidateStatus();
