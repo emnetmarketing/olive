@@ -24,7 +24,13 @@ function intersects(left, right) { return [...left].filter((token) => right.has(
 function evaluateMatch(keyword, item) {
   const product = String(item.product || ""); const brand = String(item.brand || "");
   const queryTokens = new Set(matchTokens(keyword)); const productTokens = new Set(matchTokens(`${brand} ${product}`));
-  const brandTokens = new Set(matchTokens(brand)); const brandCompact = compact(brand);
+  const explicitBrandTokens = matchTokens(brand);
+  const firstProductToken = matchTokens(product)[0] || "";
+  const inferredBrandToken = !explicitBrandTokens.length && firstProductToken && queryTokens.has(firstProductToken)
+    && !PRODUCT_TYPES.has(firstProductToken) && !INGREDIENTS.has(firstProductToken) && !GENERIC_WORDS.has(firstProductToken)
+    ? firstProductToken : "";
+  const brandTokens = new Set(explicitBrandTokens.length ? explicitBrandTokens : (inferredBrandToken ? [inferredBrandToken] : []));
+  const brandCompact = compact(brand || inferredBrandToken);
   const brandMatch = Boolean(brandCompact && compact(keyword).includes(brandCompact));
   const matchedTokens = intersects(queryTokens, productTokens);
   const ingredientTokens = new Set([...queryTokens].filter((token) => INGREDIENTS.has(token)));
@@ -66,7 +72,7 @@ function evaluateMatch(keyword, item) {
   if (genericOnlyMatch) score = Math.min(score, PRODUCT_TYPES.has(meaningfulQuery[0]) ? 28 : 42);
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  const signals = { brandMatch, productLineMatch, productNameMatch, ingredientMatch, concentrationMatch,
+  const signals = { brandMatch, inferredBrandMatch: Boolean(inferredBrandToken), productLineMatch, productNameMatch, ingredientMatch, concentrationMatch,
     productTypeMatch, specMatch, tokenCoverage: Math.round(tokenCoverage * 100), genericOnlyMatch,
     matchedTokens, productLineMatches, ingredientMatches, concentrationMatches: numberMatches, typeMatches, specMatches,
     levenshteinSimilarity: Math.round(charSimilarity) };
