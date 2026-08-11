@@ -17,12 +17,12 @@ assert.equal(isActive({ status: "ELIGIBLE", userLock: false }), true);
 assert.equal(uniqueProducts([active, { ...active, adId: "ad-2" }]).length, 1);
 
 const background = fs.readFileSync("netlify/functions/search-ad-refresh-background.js", "utf8");
-const analysis = fs.readFileSync("netlify/functions/naver-analysis.js", "utf8");
+const analysis = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
 const cacheModuleSource = fs.readFileSync("netlify/functions/search-ad-cache.js", "utf8");
 assert.equal(background.includes("slice(0, 3)"), false);
 assert.equal(background.includes("slice(0, 5)"), false);
 assert.match(background, /CONCURRENCY = 4/);
 assert.match(background, /setJSON\(CACHE_KEY, cache\)/);
-assert.match(analysis, /await readCache\(\)/);
+assert.match(analysis, /readProductCache\(\)/);
 assert.match(cacheModuleSource, /connectLambda\(event\)/);
 console.log("Search Ad cache and full synchronization helpers OK");

@@ -8,7 +8,11 @@ const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
 scripts.forEach((script) => new Function(script));
 assert.equal(html.includes("sampleInstagram"), false);
 assert.equal(html.includes("sampleNaver"), false);
-assert.match(html, /fetch\("\/\.netlify\/functions\/naver-analysis"/);
+assert.match(html, /fetch\("\/\.netlify\/functions\/trend-analysis-start"/);
+assert.match(html, /surgeThreshold, matchThreshold/);
+assert.match(html, /min="1" max="10000000" step="1" value="10000"/);
+assert.match(html, /analyze\("instant"\)/);
+assert.match(html, /검색어 후보 새로고침/);
 assert.match(html, /Search Ad 상품 새로고침/);
 assert.match(html, /fetch\("\/\.netlify\/functions\/search-ad-refresh"/);
 assert.match(html, /fetch\("\/\.netlify\/functions\/search-ad-cache-status"/);
