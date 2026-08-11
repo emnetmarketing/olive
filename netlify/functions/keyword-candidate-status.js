@@ -10,6 +10,7 @@ exports.handler = async (event) => {
       cache: cache ? {
         refreshedAt: cache.refreshedAt, candidateCount: cache.candidateCount,
         actualQueryCount: cache.actualQueryCount, keywordToolCount: cache.keywordToolCount,
+        categoryCounts: cache.categoryCounts, monthlyVolumeCounts: cache.monthlyVolumeCounts,
         seedCount: cache.seedCount, apiCalls: cache.apiCalls, retries: cache.retries, durationMs: cache.durationMs
       } : null,
       status: status || { state: "idle", message: "검색어 후보 캐시가 없습니다." }

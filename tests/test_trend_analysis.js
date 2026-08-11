@@ -11,6 +11,10 @@ assert.equal(period.surgeCount >= 500, true);
 assert.equal(period.surgeCount >= 100000, false);
 const instant = _test.instantMetrics(estimated);
 assert.equal(instant.surgeCount, Math.max(0, instant.latest - instant.baseline));
+const sparse = _test.estimate([{ period: "2026-08-10", ratio: 1.5 }], 2720, "2026-07-12");
+const sparseInstant = _test.instantMetrics(sparse);
+assert.equal(sparseInstant.baseline, 0);
+assert.equal(sparseInstant.surgeCount, 2720);
 
 const products = [{ product: "메디힐 비타민씨 세럼", brand: "메디힐", account: "계정1" }];
 const index = _test.buildIndex(products);
@@ -18,8 +22,8 @@ const match = _test.bestMatch("비타민씨 세럼", products, index);
 assert.ok(match.score >= 60);
 
 const diagnosticCandidates = [
-  { keyword: "비타민씨 세럼", monthlyPcSearches: 1000, monthlyMobileSearches: 9000, monthlyTotalSearches: 10000, impressions30d: 200, clicks30d: 5, sources: ["searchad-query"], category: "beauty" },
-  { keyword: "콜라겐", monthlyPcSearches: 2000, monthlyMobileSearches: 18000, monthlyTotalSearches: 20000, impressions30d: 0, clicks30d: 0, sources: ["keywordstool"], category: "health" }
+  { keyword: "비타민씨 세럼", monthlyPcSearches: 1000, monthlyMobileSearches: 9000, monthlyTotalSearches: 10000, impressions30d: 200, clicks30d: 5, sources: ["searchad-query"], isNewSearchQuery: true, category: "beauty" },
+  { keyword: "콜라겐", monthlyPcSearches: 2000, monthlyMobileSearches: 18000, monthlyTotalSearches: 20000, impressions30d: 0, clicks30d: 0, sources: ["keywordstool"], isNewSearchQuery: false, category: "health" }
 ];
 const stats = _test.summaryStats(diagnosticCandidates);
 assert.equal(stats.count, 2);
@@ -30,4 +34,5 @@ const diagnostic = _test.surgeDiagnostic(diagnosticCandidates[0], instant, estim
 assert.equal(diagnostic.monthlyTotalSearches, 10000);
 assert.equal(Math.round(diagnostic.ratioSum), 120);
 assert.equal(diagnostic.ratios.length, 30);
+assert.ok(_test.analysisPriority({ priorityScore: 50 }, { estimatedSurgeCount: 5000 }) > _test.analysisPriority({ priorityScore: 50 }, null));
 console.log("Trend estimation, surge calculation, and indexed matching OK");

@@ -1,6 +1,7 @@
-const { connect, readJob, writeJob } = require("./trend-analysis-cache");
+const { connect, store: analysisStore, readJob, writeJob } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
+const { evaluateMatch, buildProductIndex, findBestMatch } = require("./product-matching");
 
 const API_HUB = "https://naverapihub.apigw.ntruss.com";
 const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
@@ -107,13 +108,15 @@ function summaryStats(items) {
     count: items.length,
     averageMonthlySearches: Math.round(average(monthly)), medianMonthlySearches: Math.round(median(monthly)),
     averageSearchAdImpressions: Math.round(average(impressions)), medianSearchAdImpressions: Math.round(median(impressions)),
-    newSearchAdQueryRate: items.length ? items.filter((item) => item.sources.includes("searchad-query")).length / items.length : 0
+    newSearchAdQueryRate: items.length ? items.filter((item) => item.isNewSearchQuery).length / items.length : 0
   };
 }
 function candidateDiagnostic(item) {
   return { keyword: item.keyword, monthlyPcSearches: item.monthlyPcSearches, monthlyMobileSearches: item.monthlyMobileSearches,
     monthlyTotalSearches: item.monthlyTotalSearches, searchAdImpressions30d: Number(item.impressions30d || 0),
-    searchAdClicks30d: Number(item.clicks30d || 0), newSearchAdQuery: item.sources.includes("searchad-query"), category: item.category };
+    searchAdClicks30d: Number(item.clicks30d || 0), actualSearchAdQuery: item.sources.includes("searchad-query"),
+    newSearchAdQuery: Boolean(item.isNewSearchQuery), category: item.category, categoryEvidence: item.categoryEvidence,
+    monthlyVolumeStatus: item.monthlyVolumeStatus, priorityScore: item.priorityScore };
 }
 function surgeDiagnostic(item, metrics, series) {
   return { ...candidateDiagnostic(item), ratioSum: series.reduce((sum, point) => sum + Number(point.ratio || 0), 0),
@@ -122,6 +125,9 @@ function surgeDiagnostic(item, metrics, series) {
     latestDataDate: metrics.latestPeriod, endLift: metrics.endLift, peakLift: metrics.peakLift,
     nonZeroRatioDays: series.filter((point) => Number(point.ratio || 0) > 0).length,
     ratios: series.map((point) => ({ period: point.period, ratio: point.ratio, estimated: point.estimated })) };
+}
+function analysisPriority(item, priorSignal) {
+  return Number(item.priorityScore || 0) + Math.log10(Number(priorSignal?.estimatedSurgeCount || 0) + 1) * 6;
 }
 
 exports.handler = async (event) => {
@@ -132,11 +138,18 @@ exports.handler = async (event) => {
   const persist = async (patch) => { job = { ...job, ...patch, updatedAt: new Date().toISOString() }; await writeJob(job.jobId, job); };
   const started = Date.now();
   try {
-    const [candidateCache, productCache] = await Promise.all([readCandidateCache(), readProductCache()]);
+    const [candidateCache, productCache, priorSignalCache] = await Promise.all([
+      readCandidateCache(), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null)
+    ]);
+    const priorSignals = new Map((priorSignalCache?.items || []).map((item) => [item.keyword, item]));
     const allCandidates = candidateCache.candidates;
+    const relevantCandidates = allCandidates.filter((item) => item.category === "beauty" || item.category === "health");
+    const unknownCandidates = allCandidates.filter((item) => item.category === "unknown");
     const monthlyPresent = allCandidates.filter((item) => item.monthlyTotalSearches !== null && item.monthlyTotalSearches !== undefined && Number.isFinite(Number(item.monthlyTotalSearches)));
-    const eligibleBeforeLimit = allCandidates.filter((item) => Number(item.monthlyTotalSearches || 0) >= job.surgeThreshold)
-      .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0) || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0));
+    const eligibleBeforeLimit = relevantCandidates.filter((item) => Number(item.monthlyTotalSearches || 0) >= job.surgeThreshold)
+      .sort((a, b) => analysisPriority(b, priorSignals.get(b.keyword)) - analysisPriority(a, priorSignals.get(a.keyword))
+        || Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)
+        || Number(b.impressions30d || 0) - Number(a.impressions30d || 0));
     const eligible = eligibleBeforeLimit.slice(0, MAX_ACTIVE_CANDIDATES);
     const excludedByLimit = eligibleBeforeLimit.slice(MAX_ACTIVE_CANDIDATES);
     if (!eligible.length) throw new Error("급등수 기준을 계산할 수 있는 월간 검색량 후보가 없습니다.");
@@ -147,8 +160,15 @@ exports.handler = async (event) => {
         .sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, 100).map(candidateDiagnostic)
     };
     const funnel = {
-      candidates: { totalCache: allCandidates.length, monthlyVolumePresent: monthlyPresent.length,
-        monthlyVolumeMissing: allCandidates.length - monthlyPresent.length, monthlyAtOrAboveThreshold: eligibleBeforeLimit.length,
+      candidates: { totalCache: allCandidates.length, beauty: allCandidates.filter((item) => item.category === "beauty").length,
+        health: allCandidates.filter((item) => item.category === "health").length, unknown: unknownCandidates.length,
+        nonDomainExcluded: unknownCandidates.length, monthlyVolumePresent: monthlyPresent.length,
+        monthlyVolumeMissing: allCandidates.length - monthlyPresent.length,
+        monthlyVolumeAvailable: allCandidates.filter((item) => item.monthlyVolumeStatus === "available").length,
+        monthlyVolumeUnavailable: allCandidates.filter((item) => item.monthlyVolumeStatus === "keywordtool-unavailable").length,
+        monthlyVolumeNotRequested: allCandidates.filter((item) => item.monthlyVolumeStatus === "not-requested").length,
+        monthlyVolumeRequestFailed: allCandidates.filter((item) => item.monthlyVolumeStatus === "request-failed").length,
+        monthlyAtOrAboveThreshold: eligibleBeforeLimit.length,
         before5000Limit: eligibleBeforeLimit.length, analyzed: eligible.length, excludedBy5000Limit: excludedByLimit.length },
       searchTrend: { requested: eligible.length, validSeries: 0, emptySeries: 0, apiErrorCandidates: 0 },
       surge: { positive: 0, atLeast100: 0, atLeast500: 0, atLeast1000: 0, atLeast5000: 0, atLeast10000: 0, atUserThreshold: 0 },
@@ -188,7 +208,7 @@ exports.handler = async (event) => {
       }
     }
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
-    const productIndex = buildIndex(productCache.items);
+    const productIndex = buildProductIndex(productCache.items);
     const rows = []; const calculated = []; const matchedDiagnostics = [];
     for (const candidate of eligible) {
       const trendData = trendMap.get(candidate.keyword);
@@ -207,7 +227,7 @@ exports.handler = async (event) => {
       if (metrics.surgeCount >= 10000) funnel.surge.atLeast10000 += 1;
       if (metrics.surgeCount < job.surgeThreshold) continue;
       funnel.surge.atUserThreshold += 1;
-      const match = bestMatch(candidate.keyword, productCache.items, productIndex);
+      const match = findBestMatch(candidate.keyword, productCache.items, productIndex);
       const score = Number(match?.score || 0);
       if (score >= 30) funnel.matching.atLeast30 += 1;
       if (score >= 40) funnel.matching.atLeast40 += 1;
@@ -218,7 +238,8 @@ exports.handler = async (event) => {
       if (score >= 90) funnel.matching.atLeast90 += 1;
       if (score >= job.matchThreshold) funnel.matching.atUserThreshold += 1;
       if (match) matchedDiagnostics.push({ keyword: candidate.keyword, estimatedSurgeCount: Math.round(metrics.surgeCount),
-        matchedProductName: match.item.product, matchScore: match.score, account: match.item.account, productId: match.item.productId || match.item.id || null });
+        matchedProductName: match.item.product, matchScore: match.score, matchJudgment: match.judgment, matchReason: match.reason,
+        matchSignals: match.signals, account: match.item.account, productId: match.item.productId || match.item.id || null });
       if (!match || match.score < job.matchThreshold) continue;
       const shopping = shoppingMap.get(candidate.keyword) || [];
       const shoppingRatios = shopping.map((point) => Number(point.ratio || 0));
@@ -249,6 +270,9 @@ exports.handler = async (event) => {
     }));
     newsResults.forEach((result) => { if (result.status === "fulfilled") { const row = rows.find((item) => item.keyword === result.value.keyword); if (row) row.news = result.value; } });
     const latestDataDate = [...trendMap.values()].flatMap((data) => (data || []).map((point) => point.period)).filter(Boolean).sort().at(-1) || null;
+    await analysisStore().setJSON("signals/current", { updatedAt: new Date().toISOString(), mode: job.mode,
+      items: calculated.map((entry) => ({ keyword: entry.candidate.keyword, estimatedSurgeCount: Math.round(entry.metrics.surgeCount),
+        endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });
     await persist({ state: "completed", message: "분석 완료", progress: 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length, results: rows, errors: [],
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5) } });
@@ -257,4 +281,5 @@ exports.handler = async (event) => {
   }
 };
 
-exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex, bestMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic };
+exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
+  evaluateMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority };

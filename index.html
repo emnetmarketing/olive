@@ -1595,17 +1595,18 @@
           <table>
             <thead>
               <tr>
-                <th style="width:15%;">급등 키워드</th>
-                <th style="width:13%;">추정 최신/최대/기준</th>
-                <th style="width:11%;">추정 급등수</th>
-                <th style="width:15%;">출처</th>
-                <th style="width:18%;">Naver 광고 항목</th>
-                <th style="width:10%;">일치율</th>
-                <th style="width:18%;">판정</th>
+                <th>급등 키워드</th>
+                <th>추정 최신/최대/기준</th>
+                <th>추정 급등수</th>
+                <th>출처</th>
+                <th>Naver 광고 항목</th>
+                <th>일치율</th>
+                <th>매칭 판단</th>
+                <th>판단 근거</th>
               </tr>
             </thead>
             <tbody id="resultBody">
-              <tr><td colspan="7" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
+              <tr><td colspan="8" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
             </tbody>
           </table>
         </div>
@@ -2358,7 +2359,7 @@
       ["statSearchAd", "statDatalab", "statShoppingInsight", "statNews", "statMatches"].forEach((id) => { $(id).textContent = "0"; });
       $("statLastRun").textContent = "-";
       $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
-      $("resultBody").innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("resultBody").innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2517,7 +2518,7 @@
       const status = payload.status || {};
       const running = status.state === "running";
       $("candidateCacheSummary").textContent = payload.cacheExists
-        ? `캐시 있음 · 후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · 실제 유입 ${Number(cache.actualQueryCount || 0).toLocaleString("ko-KR")}건 · keywordstool ${Number(cache.keywordToolCount || 0).toLocaleString("ko-KR")}건 · 마지막 새로고침 ${new Date(cache.refreshedAt).toLocaleString("ko-KR")}`
+        ? `캐시 있음 · 후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · 뷰티 ${Number(cache.categoryCounts?.beauty || 0).toLocaleString("ko-KR")}건 · 건강 ${Number(cache.categoryCounts?.health || 0).toLocaleString("ko-KR")}건 · unknown ${Number(cache.categoryCounts?.unknown || 0).toLocaleString("ko-KR")}건 · 월간검색량 있음 ${Number(cache.monthlyVolumeCounts?.available || 0).toLocaleString("ko-KR")}건 · 마지막 새로고침 ${new Date(cache.refreshedAt).toLocaleString("ko-KR")}`
         : "검색어 후보 캐시 없음 · 먼저 '검색어 후보 새로고침'을 실행해주세요.";
       $("candidateCacheProgress").textContent = running
         ? status.message || "검색어 후보 동기화 중"
@@ -2565,7 +2566,7 @@
 
       const body = $("resultBody");
       if (!results.length) {
-        body.innerHTML = '<tr><td colspan="7" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
         return;
       }
 
@@ -2574,7 +2575,7 @@
         const item = row.match.item;
         return `
           <tr>
-            <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
+            <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
             <td>${row.today.toLocaleString("ko-KR")} / ${Number(row.estimatedPeak || row.today).toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
             <td>+${row.lift.toLocaleString("ko-KR")}</td>
             <td>${source}</td>
@@ -2583,7 +2584,8 @@
               <span class="muted">${escapeHtml(item.account || "계정 미지정")} · ${escapeHtml(item.campaign || "-")} · ${escapeHtml(item.adGroup || "-")}</span>
             </td>
             <td><span class="pill">${row.match.score}%</span></td>
-            <td>관련 키워드로 판단<br><span class="muted">비교값: ${escapeHtml(row.match.candidate)}</span></td>
+            <td><strong>${escapeHtml(row.match.judgment || "관련성 낮음")}</strong></td>
+            <td>${escapeHtml(row.match.reason || "식별 가능한 공통 특징 부족")}<br><span class="muted">비교값: ${escapeHtml(row.match.candidate)}</span></td>
           </tr>
         `;
       }).join("");
@@ -2627,11 +2629,12 @@
     }
 
     function buildExcelExport() {
-      const headers = ["급등 키워드", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상승률(참고)", "출처", "계정", "브랜드", "제품", "캠페인", "광고그룹", "일치율", "최신 데이터 기준일", "관련 뉴스", "판정"];
+      const headers = ["급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상승률(참고)", "출처", "계정", "브랜드", "제품", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
         const item = row.match.item;
         return [
           row.keyword,
+          row.category || "unknown",
           row.today,
           row.estimatedPeak,
           row.yesterday,
@@ -2644,9 +2647,10 @@
           item.campaign || "",
           item.adGroup || "",
           `${row.match.score}%`,
+          row.match.judgment || "관련성 낮음",
+          row.match.reason || "식별 가능한 공통 특징 부족",
           row.latestDataDate || "",
-          row.news?.items?.[0]?.title ? String(row.news.items[0].title).replace(/<[^>]*>/g, "") : "",
-          "관련 키워드"
+          row.news?.items?.[0]?.title ? String(row.news.items[0].title).replace(/<[^>]*>/g, "") : ""
         ];
       });
 
