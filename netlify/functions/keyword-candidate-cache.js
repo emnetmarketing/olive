@@ -2,14 +2,17 @@ const crypto = require("node:crypto");
 const { connectLambda, getStore } = require("@netlify/blobs");
 
 const STORE = "keyword-candidates";
-const CACHE_KEY = "current";
+const CACHE_KEY = "current-v2";
+const LEGACY_CACHE_KEY = "current";
 // Version the mutable job status independently from the durable candidate
 // cache so retired background retries cannot overwrite a newer worker's lock.
-const STATUS_KEY = "status-v2";
+const STATUS_KEY = "status-v3";
 
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
-async function readCandidateCache() { return store().get(CACHE_KEY, { type: "json" }); }
+async function readCandidateCache() {
+  return await store().get(CACHE_KEY, { type: "json" }) || store().get(LEGACY_CACHE_KEY, { type: "json" });
+}
 async function readCandidateStatus() { return store().get(STATUS_KEY, { type: "json" }); }
 async function writeCandidateStatus(value) { await store().setJSON(STATUS_KEY, value); return value; }
 
