@@ -1,4 +1,4 @@
-const { readCandidateCache } = require("./keyword-candidate-cache");
+const { connect, readCandidateCache } = require("./keyword-candidate-cache");
 const { estimate, periodMetrics, median } = require("./trend-analysis-background")._test;
 
 const API_HUB = "https://naverapihub.apigw.ntruss.com";
@@ -93,6 +93,7 @@ function buildDiagnostic(keyword, candidate, trend, startDate, endDate, querySta
 }
 
 exports.handler = async (event) => {
+  connect(event);
   if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
   try {
     const input = JSON.parse(event.body || "{}");
