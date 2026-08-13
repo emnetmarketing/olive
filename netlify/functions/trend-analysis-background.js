@@ -68,7 +68,7 @@ function bestMatch(keyword, items, index) {
 }
 function median(values) { const sorted = values.filter(Number.isFinite).sort((a, b) => a - b); if (!sorted.length) return 0; const mid = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2; }
 function average(values) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
-function estimate(data, monthly, startDate) {
+function estimate(data, monthly, startDate, maxPoints = 30) {
   const raw = (data || []).map((point) => ({ period: point.period, ratio: Number(point.ratio || 0) })).filter((point) => point.period);
   let points = raw;
   if (startDate && raw.length) {
@@ -79,7 +79,7 @@ function estimate(data, monthly, startDate) {
       const period = date.toISOString().slice(0, 10);
       points.push({ period, ratio: Number(ratios.get(period) || 0) });
     }
-    points = points.slice(-30);
+    if (maxPoints) points = points.slice(-maxPoints);
   }
   const sum = points.reduce((total, point) => total + point.ratio, 0);
   return points.map((point) => ({ ...point, estimated: sum > 0 ? monthly * point.ratio / sum : 0 }));
@@ -87,16 +87,29 @@ function estimate(data, monthly, startDate) {
 function periodMetrics(series, startDate, endDate) {
   const selected = series.filter((point) => point.period >= startDate && point.period <= endDate);
   const n = selected.length; const window = n <= 3 ? 1 : n <= 7 ? 2 : n <= 14 ? 3 : 7;
-  const baseline = median(selected.slice(0, window).map((point) => point.estimated));
+  const firstIndex = series.findIndex((point) => point.period === selected[0]?.period);
+  const previousSeven = firstIndex >= 0 ? series.slice(Math.max(0, firstIndex - 7), firstIndex).map((point) => point.estimated) : [];
+  const baseline = median(previousSeven.length ? previousSeven : selected.slice(0, window).map((point) => point.estimated));
   const recent = average(selected.slice(-window).map((point) => point.estimated));
-  let peakLift = 0, peakValue = 0;
+  let sustainedLift = 0, peakValue = 0;
   for (let i = window; i < n; i += 1) {
     const before = median(selected.slice(Math.max(0, i - window), i).map((point) => point.estimated));
     const after = average(selected.slice(i, Math.min(n, i + window)).map((point) => point.estimated));
-    peakLift = Math.max(peakLift, after - before); peakValue = Math.max(peakValue, after);
+    sustainedLift = Math.max(sustainedLift, after - before); peakValue = Math.max(peakValue, after);
   }
+  const dailyLifts = selected.map((point) => {
+    const index = series.findIndex((item) => item.period === point.period);
+    const prior = index >= 0 ? series.slice(Math.max(0, index - 7), index).map((item) => item.estimated) : [];
+    const dailyBaseline = median(prior);
+    return { period: point.period, estimated: point.estimated, baseline: dailyBaseline, lift: prior.length ? point.estimated - dailyBaseline : 0 };
+  });
+  const peakDaily = dailyLifts.slice().sort((a, b) => b.lift - a.lift)[0] || { period: null, estimated: 0, baseline: 0, lift: 0 };
+  const peakDailyLift = Math.max(0, peakDaily.lift);
   const endLift = recent - baseline;
-  return { baseline, latest: recent, peakValue: Math.max(peakValue, ...selected.map((point) => point.estimated), 0), surgeCount: Math.max(0, endLift, peakLift), endLift, peakLift, latestPeriod: selected.at(-1)?.period, series: selected };
+  return { baseline, latest: recent, peakValue: Math.max(peakValue, ...selected.map((point) => point.estimated), 0),
+    surgeCount: Math.max(0, endLift, peakDailyLift), endLift, peakLift: peakDailyLift, peakDailyLift, sustainedLift,
+    peakDailyDate: peakDaily.period, peakDailyEstimated: peakDaily.estimated, peakDailyBaseline: peakDaily.baseline,
+    dailyLifts, latestPeriod: selected.at(-1)?.period, series: selected };
 }
 function instantMetrics(series) {
   const latestPoint = series.at(-1); const baselineValues = series.slice(-8, -1).map((point) => point.estimated);
@@ -243,6 +256,7 @@ exports.handler = async (event) => {
       matching: { atLeast30: 0, atLeast40: 0, atLeast50: 0, atLeast60: 0, atLeast70: 0, atLeast80: 0, atLeast90: 0, atUserThreshold: 0 }
     };
     await persist({ message: `검색어트렌드 조회 중 · 0 / ${eligible.length.toLocaleString("ko-KR")}`, totalCandidates: eligible.length, progress: 5,
+      currentStage: "search-trend", processedCount: 0, totalCount: eligible.length,
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30: [], matchTop30: [], calculationSamples: [] } });
     const trendMap = new Map(); let processed = 0;
     for (const requestBatch of chunks(chunks(eligible, 5), 5)) {
@@ -259,10 +273,12 @@ exports.handler = async (event) => {
       }
       for (const payload of results) for (const result of payload.results || []) trendMap.set(result.title, result.data || []);
       processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
+      job.currentStage = "search-trend"; job.processedCount = processed; job.totalCount = eligible.length;
       await persist({ message: `검색어트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${eligible.length.toLocaleString("ko-KR")}`, progress: 5 + Math.round(processed / eligible.length * 35) });
     }
     await persist({ message: "키워드별 쇼핑 트렌드 조회 중", progress: 42 });
     const shoppingMap = new Map(); processed = 0;
+    job.currentStage = "shopping-trend"; job.processedCount = 0; job.totalCount = eligible.length;
     for (const category of ["beauty", "health"]) {
       const categoryItems = eligible.filter((item) => item.category === category);
       for (const requestBatch of chunks(chunks(categoryItems, 5), 5)) {
@@ -272,17 +288,35 @@ exports.handler = async (event) => {
         } })));
         for (const payload of results) for (const result of payload.results || []) shoppingMap.set(result.title, result.data || []);
         processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
+        job.currentStage = "shopping-trend"; job.processedCount = processed; job.totalCount = eligible.length;
         await persist({ message: `키워드별 쇼핑 트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${eligible.length.toLocaleString("ko-KR")}`, progress: 42 + Math.round(processed / eligible.length * 30) });
       }
     }
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
+    job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
     const productIndex = buildProductIndex(productCache.items);
     const rows = []; const calculated = []; const matchedDiagnostics = [];
+    let calculationProcessed = 0;
     for (const candidate of eligible) {
+      calculationProcessed += 1;
+      if (calculationProcessed % 500 === 0) {
+        await persist({
+          currentStage: "calculation-matching",
+          processedCount: calculationProcessed,
+          totalCount: eligible.length,
+          progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14),
+        });
+      }
       const trendData = trendMap.get(candidate.keyword);
       if (!Array.isArray(trendData) || !trendData.length) { funnel.searchTrend.emptySeries += 1; continue; }
       funnel.searchTrend.validSeries += 1;
-      const series = estimate(trendData, Number(candidate.monthlyTotalSearches), job.queryStartDate);
+      const queryDays = Math.round((Date.parse(`${job.endDate}T00:00:00Z`) - Date.parse(`${job.queryStartDate}T00:00:00Z`)) / 86400000) + 1;
+      const series = estimate(
+        trendData,
+        Number(candidate.monthlyTotalSearches),
+        job.queryStartDate,
+        queryDays <= 31 ? 30 : queryDays,
+      );
       if (!series.length) { funnel.searchTrend.emptySeries += 1; funnel.searchTrend.validSeries -= 1; continue; }
       const metrics = job.mode === "instant" ? instantMetrics(series) : periodMetrics(series, job.startDate, job.endDate);
       const diagnosticRow = surgeDiagnostic(candidate, metrics, series);
@@ -315,7 +349,8 @@ exports.handler = async (event) => {
       rows.push({ keyword: candidate.keyword, category: candidate.category, monthlySearches: candidate.monthlyTotalSearches,
         estimatedBaseline: Math.round(metrics.baseline), estimatedLatest: Math.round(metrics.latest), estimatedPeak: Math.round(metrics.peakValue),
         estimatedSurgeCount: Math.round(metrics.surgeCount), riseRate: metrics.baseline > 0 ? (metrics.surgeCount / metrics.baseline * 100) : null,
-        endLift: Math.round(metrics.endLift), peakLift: Math.round(metrics.peakLift), latestDataDate: metrics.latestPeriod,
+        endLift: Math.round(metrics.endLift), peakLift: Math.round(metrics.peakLift), peakDailyLift: Math.round(metrics.peakDailyLift || metrics.peakLift),
+        sustainedLift: Math.round(metrics.sustainedLift || 0), peakDailyDate: metrics.peakDailyDate || null, latestDataDate: metrics.latestPeriod,
         trendSeries: metrics.series, trendSlope: slope(metrics.series.map((point) => point.estimated)),
         shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
@@ -347,6 +382,7 @@ exports.handler = async (event) => {
     addSample("sparsestTrend", samplePool.filter((item) => item.diagnosticRow.nonZeroRatioDays > 0).sort((a, b) => a.diagnosticRow.nonZeroRatioDays - b.diagnosticRow.nonZeroRatioDays)[0]);
     rows.sort((a, b) => b.estimatedSurgeCount - a.estimatedSurgeCount || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
     await persist({ message: "상위 급등 검색어 뉴스 확인 중", progress: 90 });
+    job.currentStage = "news"; job.processedCount = 0; job.totalCount = Math.min(rows.length, 20);
     const newsResults = await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
       const payload = await api("/search/v1/news", { params: { query: row.keyword, display: 3, start: 1, sort: "date" } });
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
@@ -357,6 +393,7 @@ exports.handler = async (event) => {
       items: calculated.map((entry) => ({ keyword: entry.candidate.keyword, estimatedSurgeCount: Math.round(entry.metrics.surgeCount),
         endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });
     await persist({ state: "completed", message: "분석 완료", progress: 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
+      currentStage: "completed", processedCount: eligible.length, totalCount: eligible.length,
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length, results: rows, errors: [],
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5),
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,

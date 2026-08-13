@@ -1647,7 +1647,8 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
-      operatingSettings: null, operatingSettingsLoaded: false, accessUsers: [], accessUsersLoaded: false };
+      operatingSettings: null, operatingSettingsLoaded: false, accessUsers: [], accessUsersLoaded: false,
+      currentAnalysisJob: null, downloadHistory: [] };
     const DEFAULT_MASTER_EMAIL = "huni@emnet.co.kr";
     const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
     const SETTINGS_STORAGE_KEY = "keywordMonitorConfig";
@@ -2282,6 +2283,11 @@
 
     let analysisPollTimer = null;
 
+    function inclusiveAnalysisDays(startDate, endDate) {
+      const start = Date.parse(`${startDate}T00:00:00Z`); const end = Date.parse(`${endDate}T00:00:00Z`);
+      return Number.isFinite(start) && Number.isFinite(end) ? Math.round((end - start) / 86400000) + 1 : NaN;
+    }
+
     async function analyze(mode = "period") {
       if (!requireOperate(mode === "instant" ? "즉시 분석" : "기간 분석")) return;
       if (!state.operatingSettingsLoaded) await loadOperatingSettings();
@@ -2291,6 +2297,14 @@
       }
       clearAnalysisUI("실제 API 분석 작업을 시작하는 중입니다.");
       showApiErrors();
+      if (mode === "period") {
+        const days = inclusiveAnalysisDays($("collectionStart").value, $("collectionEnd").value);
+        if (!Number.isFinite(days) || days < 1 || days > 31) {
+          showApiErrors({ "분석 기간": "분석 기간은 시작일과 종료일을 포함하여 1~31일이어야 합니다." });
+          finishAnalysisControls();
+          return;
+        }
+      }
       $("analysisDiagnosticPanel").style.display = "none";
       $("analysisDiagnosticText").textContent = "";
       $("runBtn").disabled = true;
@@ -2305,6 +2319,7 @@
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `분석 시작 HTTP ${response.status}`);
+        if (payload.existing) alert(payload.message || "현재 다른 사용자가 분석을 실행 중입니다. 기존 분석 진행 상태를 표시합니다.");
         await pollAnalysis(payload.jobId);
       } catch (error) {
         clearAnalysisUI("분석 실행에 실패했습니다. 마지막 정상 결과를 복원하는 중입니다.");
@@ -2328,6 +2343,7 @@
         sources: { datalab: row.trendSlope, shoppingInsight: row.shoppingRise, news: row.news?.total || 0 }
       }));
       state.results = results;
+      state.currentAnalysisJob = job;
       const diagnosticPanel = $("analysisDiagnosticPanel");
       diagnosticPanel.style.display = job.diagnostic ? "block" : "none";
       $("analysisDiagnosticText").textContent = job.diagnostic ? JSON.stringify(job.diagnostic, null, 2) : "";
@@ -2359,7 +2375,11 @@
         const response = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
         const job = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(job.error || `분석 상태 HTTP ${response.status}`);
-        $("analysisProgressText").textContent = `${job.message || "분석 중"} · ${Number(job.progress || 0)}%`;
+        state.currentAnalysisJob = job;
+        const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-matching": "급등 계산 및 상품 매칭", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
+        const periodText = job.mode === "instant" ? "즉시 분석" : `기간 분석 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`;
+        const counts = Number(job.totalCount || 0) ? ` · ${Number(job.processedCount || 0).toLocaleString("ko-KR")} / ${Number(job.totalCount).toLocaleString("ko-KR")}` : "";
+        $("analysisProgressText").textContent = `${periodText} · ${stageLabels[job.currentStage] || job.message || "분석 중"}${counts} · ${Number(job.progress || 0)}%`;
         if (job.state === "running") {
           analysisPollTimer = setTimeout(() => pollAnalysis(jobId), 3000);
           return;
@@ -2375,6 +2395,18 @@
         $("analysisProgressText").textContent = `분석 실패: ${error.message}`;
         finishAnalysisControls();
       }
+    }
+
+    async function loadCurrentAnalysis() {
+      try {
+        const response = await fetch("/.netlify/functions/trend-analysis-current", { cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.running || !payload.job?.jobId) return null;
+        $("analysisProgressPanel").classList.add("visible");
+        $("runBtn").disabled = true; $("instantRunBtn").disabled = true;
+        pollAnalysis(payload.job.jobId);
+        return payload.job;
+      } catch { return null; }
     }
 
     let searchAdStatusTimer = null;
@@ -2561,6 +2593,85 @@
     function csvCell(value) {
       const text = String(value ?? "");
       return `"${text.replaceAll('"', '""')}"`;
+    }
+
+    function resultRowsFromJob(job) {
+      return (job?.results || []).map((row) => ({
+        ...row, today: Number(row.estimatedLatest || 0), yesterday: Number(row.estimatedBaseline || 0),
+        lift: Number(row.estimatedSurgeCount || 0), matched: true,
+        sources: { datalab: row.trendSlope, shoppingInsight: row.shoppingRise, news: row.news?.total || 0 }
+      }));
+    }
+
+    function analysisFilename(job) {
+      const compact = (value) => String(value || "").replaceAll("-", "");
+      return job?.mode === "instant"
+        ? `monitoring-result-instant-${compact(job.latestDataDate)}.xls`
+        : `monitoring-result-${compact(job?.startDate)}-${compact(job?.endDate)}.xls`;
+    }
+
+    function buildSharedExcelExport(job) {
+      const previousResults = state.results;
+      state.results = resultRowsFromJob(job);
+      const exportData = buildExcelExport();
+      state.results = previousResults;
+      return { ...exportData, filename: analysisFilename(job), mode: job.mode, startDate: job.startDate || null,
+        endDate: job.endDate || null, latestDataDate: job.latestDataDate || null, sourceJobId: job.jobId,
+        downloadedAt: new Date().toISOString(), resultCount: Number(job.resultCount || job.results?.length || 0) };
+    }
+
+    async function downloadExcelShared() {
+      const job = state.currentAnalysisJob;
+      if (!job?.jobId || job.state !== "completed" || !state.results.length) {
+        alert("다운로드할 완료 분석 결과가 없습니다."); return;
+      }
+      const exportData = buildSharedExcelExport(job);
+      const response = await fetch("/.netlify/functions/download-history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceJobId: job.jobId }) });
+      const saved = await response.json().catch(() => ({}));
+      if (!response.ok) { alert(saved.error || `다운로드 이력 저장 HTTP ${response.status}`); return; }
+      triggerExcelDownload(saved.filename || exportData.filename, exportData.csv);
+      await renderDownloadHistoryShared();
+      log(`공통 다운로드 이력 저장: ${saved.filename || exportData.filename}`);
+    }
+
+    function legacyDownloadHistory() {
+      try { return JSON.parse(localStorage.getItem("monitoringDownloadHistory") || "[]"); } catch { return []; }
+    }
+
+    async function renderDownloadHistoryShared() {
+      const list = $("downloadHistoryList");
+      try {
+        const response = await fetch("/.netlify/functions/download-history", { cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `다운로드 이력 HTTP ${response.status}`);
+        state.downloadHistory = [...(payload.items || []), ...legacyDownloadHistory().map((item) => ({ ...item, legacy: true }))];
+      } catch (error) {
+        state.downloadHistory = legacyDownloadHistory().map((item) => ({ ...item, legacy: true }));
+        if (!state.downloadHistory.length) list.innerHTML = `<div class="download-history-empty">${escapeHtml(error.message)}</div>`;
+      }
+      if (!state.downloadHistory.length) { list.innerHTML = '<div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div>'; return; }
+      list.innerHTML = state.downloadHistory.map((item) => {
+        const analysisPeriod = item.mode === "instant" ? `기준일: ${item.latestDataDate || "-"}`
+          : item.mode === "period" ? `분석기간: ${item.startDate || "-"} ~ ${item.endDate || "-"}` : "기존 다운로드 이력";
+        return `<div class="download-history-item"><div><span class="download-history-name">${escapeHtml(item.filename)}</span>
+          <span class="download-history-meta">${escapeHtml(analysisPeriod)}<br>다운로드: ${formatHistoryDate(item.downloadedAt || item.createdAt)} · ${Number(item.resultCount ?? item.count ?? 0).toLocaleString("ko-KR")}건</span></div>
+          <button class="secondary shared-history-download-btn" type="button" data-download-id="${escapeHtml(item.id)}">다시 다운로드</button></div>`;
+      }).join("");
+      Array.from(document.querySelectorAll(".shared-history-download-btn")).forEach((button) => button.addEventListener("click", async () => {
+        const item = state.downloadHistory.find((entry) => entry.id === button.dataset.downloadId);
+        if (!item) return;
+        if (item.legacy && item.csv) { triggerExcelDownload(item.filename, item.csv); return; }
+        const response = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(item.sourceJobId)}`, { cache: "no-store" });
+        const job = await response.json().catch(() => ({}));
+        if (!response.ok || job.state !== "completed") { alert(job.error || "완료 Job을 불러올 수 없습니다."); return; }
+        const exportData = buildSharedExcelExport(job);
+        triggerExcelDownload(item.filename || exportData.filename, exportData.csv);
+      }));
+    }
+
+    async function toggleDownloadHistoryShared() {
+      $("downloadHistoryPanel").hidden = !$("downloadHistoryPanel").hidden;
+      if (!$("downloadHistoryPanel").hidden) await renderDownloadHistoryShared();
     }
 
     function downloadExcel() {
@@ -2967,8 +3078,8 @@
     bindEvent("operatingSettingsSaveBtn", "click", saveOperatingSettings);
     bindEvent("saveBtn", "click", saveSettings);
     bindEvent("apiBtn", "click", fetchApiData);
-    bindEvent("excelDownloadBtn", "click", downloadExcel);
-    bindEvent("downloadHistoryBtn", "click", toggleDownloadHistory);
+    bindEvent("excelDownloadBtn", "click", downloadExcelShared);
+    bindEvent("downloadHistoryBtn", "click", toggleDownloadHistoryShared);
     bindEvent("clearDownloadHistoryBtn", "click", clearDownloadHistory);
     bindEvent("monitorTabBtn", "click", () => switchSideTab("monitor"));
     bindEvent("apiTabBtn", "click", () => switchSideTab("api"));
@@ -3008,9 +3119,13 @@
       clearAnalysisUI("저장된 마지막 정상 분석 결과를 확인하는 중입니다.");
       loadSearchAdCacheStatus();
       loadCandidateStatus();
-      renderDownloadHistory();
+      $("clearDownloadHistoryBtn").style.display = "none";
+      renderDownloadHistoryShared();
       applyAuthState();
-      if (state.currentUser) await loadLastSuccessfulAnalysis();
+      if (state.currentUser) {
+        await loadLastSuccessfulAnalysis();
+        await loadCurrentAnalysis();
+      }
     }
     initializeApp();
   </script>

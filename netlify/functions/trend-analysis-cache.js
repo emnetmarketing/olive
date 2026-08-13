@@ -2,6 +2,8 @@ const crypto = require("node:crypto");
 const { connectLambda, getStore } = require("@netlify/blobs");
 
 const STORE = "trend-analysis";
+const CURRENT_JOB_KEY = "current-job/v1";
+const STALE_JOB_MS = 12 * 60 * 1000;
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
 function lastSuccessKeys(mode) { return { mode: `last-success/${mode}`, latest: "last-success/latest" }; }
@@ -27,5 +29,22 @@ async function createJob(input) {
   await writeJob(job.jobId, job);
   return job;
 }
+async function readCurrentJob({ markStale = false } = {}) {
+  const pointer = await store().get(CURRENT_JOB_KEY, { type: "json" });
+  if (!pointer?.jobId) return null;
+  const job = await readJob(pointer.jobId);
+  if (!job || job.state !== "running") return null;
+  const age = Date.now() - Date.parse(job.updatedAt || job.createdAt || 0);
+  if (Number.isFinite(age) && age <= STALE_JOB_MS) return job;
+  if (markStale) await writeJob(job.jobId, { ...job, state: "failed", message: "Stale analysis job expired.", failedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), errors: ["Analysis job stopped updating and was released."] });
+  return null;
+}
+async function acquireJob(input) {
+  const active = await readCurrentJob({ markStale: true });
+  if (active) return { job: active, existing: true };
+  const job = await createJob(input);
+  await store().setJSON(CURRENT_JOB_KEY, { jobId: job.jobId, createdAt: job.createdAt });
+  return { job, existing: false };
+}
 
-module.exports = { connect, store, readJob, writeJob, createJob, writeLastSuccess, readLastSuccess, lastSuccessKeys };
+module.exports = { connect, store, readJob, writeJob, createJob, acquireJob, readCurrentJob, writeLastSuccess, readLastSuccess, lastSuccessKeys, CURRENT_JOB_KEY, STALE_JOB_MS };

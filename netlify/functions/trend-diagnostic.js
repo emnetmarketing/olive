@@ -47,13 +47,11 @@ async function fetchTrend(keyword, queryStartDate, endDate) {
 
 function calculationRows(series, startDate, endDate) {
   const selected = series.filter((point) => point.period >= startDate && point.period <= endDate);
-  const n = selected.length;
-  const window = n <= 3 ? 1 : n <= 7 ? 2 : n <= 14 ? 3 : 7;
-  return selected.map((point, index) => {
-    if (index < window) return { ...point, baseline: null, lift: null, comparisonAverage: null };
-    const baseline = median(selected.slice(Math.max(0, index - window), index).map((item) => item.estimated));
-    const comparisonAverage = average(selected.slice(index, Math.min(n, index + window)).map((item) => item.estimated));
-    return { ...point, baseline, lift: comparisonAverage - baseline, comparisonAverage };
+  return selected.map((point) => {
+    const index = series.findIndex((item) => item.period === point.period);
+    const prior = index >= 0 ? series.slice(Math.max(0, index - 7), index).map((item) => item.estimated) : [];
+    const baseline = median(prior);
+    return { ...point, baseline: prior.length ? baseline : null, lift: prior.length ? point.estimated - baseline : null };
   });
 }
 
@@ -80,12 +78,13 @@ function buildDiagnostic(keyword, candidate, trend, startDate, endDate, querySta
       ratio: peakRow.ratio,
       estimatedSearches: peakRow.estimated,
       baseline: peakRow.baseline,
-      comparisonAverage: peakRow.comparisonAverage,
       peakLift: peakRow.lift
     } : null,
     periodBaseline: metrics.baseline,
     periodLatestAverage: metrics.latest,
     peakLift: metrics.peakLift,
+    peakDailyLift: metrics.peakDailyLift,
+    sustainedLift: metrics.sustainedLift,
     endLift: metrics.endLift,
     estimatedSurgeCount: metrics.surgeCount,
     latestDataDate: metrics.latestPeriod

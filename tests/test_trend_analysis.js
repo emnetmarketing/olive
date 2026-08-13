@@ -7,6 +7,8 @@ assert.equal(Math.round(estimated.reduce((sum, point) => sum + point.estimated, 
 const period = _test.periodMetrics(estimated, "2026-08-01", "2026-08-30");
 assert.ok(period.peakLift > 0);
 assert.equal(period.surgeCount, Math.max(0, period.endLift, period.peakLift));
+assert.equal(period.peakLift, period.peakDailyLift);
+assert.ok(period.sustainedLift > 0);
 assert.equal(period.surgeCount >= 500, true);
 assert.equal(period.surgeCount >= 100000, false);
 const instant = _test.instantMetrics(estimated);
@@ -15,6 +17,12 @@ const sparse = _test.estimate([{ period: "2026-08-10", ratio: 1.5 }], 2720, "202
 const sparseInstant = _test.instantMetrics(sparse);
 assert.equal(sparseInstant.baseline, 0);
 assert.equal(sparseInstant.surgeCount, 2720);
+
+const spikeSeries = Array.from({ length: 22 }, (_, index) => ({ period: `2026-05-${String(index + 8).padStart(2, "0")}`, estimated: index === 14 ? 1162.52 : 298.57, ratio: 1 }));
+const spikePeriod = _test.periodMetrics(spikeSeries, "2026-05-15", "2026-05-29");
+assert.equal(spikePeriod.peakDailyDate, "2026-05-22");
+assert.equal(Math.round(spikePeriod.peakDailyLift), 864);
+assert.equal(Math.round(spikePeriod.surgeCount), 864);
 
 const products = [{ product: "메디힐 비타민씨 세럼", brand: "메디힐", account: "계정1" }];
 const index = _test.buildIndex(products);

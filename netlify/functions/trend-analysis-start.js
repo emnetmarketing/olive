@@ -1,4 +1,4 @@
-const { connect, createJob, writeJob } = require("./trend-analysis-cache");
+const { connect, acquireJob, writeJob } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { readOperatingSettings } = require("./operating-settings-cache");
@@ -9,6 +9,18 @@ function seoulDate() {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
     .formatToParts(new Date()).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+function inclusiveDays(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`); const end = new Date(`${endDate}T00:00:00Z`);
+  return Math.round((end - start) / 86400000) + 1;
+}
+function analysisQueryStart(mode, start, end) {
+  const queryStart = new Date(end); queryStart.setUTCDate(end.getUTCDate() - 30);
+  if (mode === "period") {
+    const baselineStart = new Date(start); baselineStart.setUTCDate(start.getUTCDate() - 7);
+    if (baselineStart < queryStart) queryStart.setTime(baselineStart.getTime());
+  }
+  return queryStart;
 }
 
 exports.handler = async (event) => {
@@ -28,22 +40,26 @@ exports.handler = async (event) => {
     }
     const start = new Date(`${startDate}T00:00:00Z`);
     const end = new Date(`${endDate}T00:00:00Z`);
-    const days = Math.round((end - start) / 86400000) + 1;
-    if (!Number.isFinite(days) || days < 3 || days > 30) return json(400, { error: "분석 기간은 3~30일이어야 합니다." });
-    const queryStart = new Date(end); queryStart.setUTCDate(end.getUTCDate() - 30);
+    const days = inclusiveDays(startDate, endDate);
+    if (!Number.isFinite(days) || days < 1 || days > 31) return json(400, { error: "분석 기간은 1~31일이어야 합니다." });
+    const queryStart = analysisQueryStart(mode, start, end);
     const [candidateCache, productCache] = await Promise.all([readCandidateCache(), readProductCache()]);
     if (!candidateCache?.candidates?.length) return json(409, { error: "검색어 후보 데이터가 없습니다. 먼저 '검색어 후보 새로고침'을 실행해주세요." });
     if (!productCache?.items?.length) return json(409, { error: "Search Ad 전체 상품 데이터가 없습니다. 먼저 'Search Ad 상품 새로고침'을 실행해주세요." });
-    const job = await createJob({ mode, startDate, endDate, queryStartDate: isoDate(queryStart), surgeThreshold, matchThreshold });
+    const acquired = await acquireJob({ mode, startDate, endDate, queryStartDate: isoDate(queryStart), surgeThreshold, matchThreshold,
+      currentStage: "preparing", processedCount: 0, totalCount: 0 });
+    const job = acquired.job;
     createdJob = job;
+    if (acquired.existing) return json(200, { jobId: job.jobId, existing: true, message: "현재 다른 사용자가 분석을 실행 중입니다. 기존 분석 진행 상태를 표시합니다." });
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
     const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId, job })
     });
     if (!response.ok && response.status !== 202) throw new Error(`분석 Background Function 시작 실패: HTTP ${response.status}`);
-    return json(202, { jobId: job.jobId, message: mode === "instant" ? "즉시 분석을 시작했습니다." : "기간 분석을 시작했습니다." });
+    return json(202, { jobId: job.jobId, existing: false, message: mode === "instant" ? "즉시 분석을 시작했습니다." : "기간 분석을 시작했습니다." });
   } catch (error) {
     if (createdJob) await writeJob(createdJob.jobId, { ...createdJob, state: "failed", message: "분석 시작 실패", errors: [error.message], updatedAt: new Date().toISOString() }).catch(() => {});
     return json(500, { error: error.message || "분석 시작 실패" });
   }
 };
+exports._test = { inclusiveDays, analysisQueryStart, isoDate };

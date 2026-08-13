@@ -8,6 +8,31 @@ function matchTokens(value) {
     .replace(/([가-힣a-z])([0-9])/g, "$1 $2").replace(/([0-9])([가-힣a-z])/g, "$1 $2")
     .replace(/[^0-9a-z가-힣]+/g, " ").trim().split(/\s+/).filter((token) => token.length >= 2 || /^\d+$/.test(token));
 }
+function koreanNgrams(value) {
+  const token = String(value || ""); const keys = [];
+  if (!/^[가-힣]{2,}$/.test(token)) return keys;
+  for (let size = 2; size <= Math.min(4, token.length); size += 1) for (let index = 0; index <= token.length - size; index += 1) keys.push(`#${token.slice(index, index + size)}`);
+  return keys;
+}
+function compoundTokens(value) {
+  return String(value || "").toLocaleLowerCase("ko-KR")
+    .replace(/([가-힣a-z])([0-9])/g, "$1 $2").replace(/([0-9])([가-힣a-z])/g, "$1 $2")
+    .replace(/[^0-9a-z가-힣]+/g, " ").trim().split(/\s+/).filter(Boolean);
+}
+function adjacentCompounds(tokens) {
+  const compounds = [];
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const left = tokens[index], right = tokens[index + 1];
+    if (/^[가-힣]+$/.test(left) && /^[가-힣]+$/.test(right) && left.length + right.length >= 3) compounds.push({ value: left + right, parts: [left, right] });
+  }
+  return compounds;
+}
+function indexKeys(value) {
+  const tokens = matchTokens(value); const keys = new Set(tokens);
+  for (const token of tokens) for (const key of koreanNgrams(token)) keys.add(key);
+  for (const compound of adjacentCompounds(compoundTokens(value))) for (const key of koreanNgrams(compound.value)) keys.add(key);
+  return [...keys];
+}
 function levenshtein(left, right) {
   const a = compact(left), b = compact(right), row = Array.from({ length: b.length + 1 }, (_, index) => index);
   for (let i = 1; i <= a.length; i += 1) { let previous = row[0]; row[0] = i; for (let j = 1; j <= b.length; j += 1) {
@@ -30,7 +55,8 @@ function evaluateMatch(keyword, item) {
   const compactPrefixBrand = !explicitBrandTokens.length && !/\s/.test(String(keyword || "").trim())
     && compactQuery && compactProduct.startsWith(compactQuery)
     && ![...queryTokens].some((token) => PRODUCT_TYPES.has(token) || INGREDIENTS.has(token) || GENERIC_WORDS.has(token));
-  const inferredBrandToken = !compactPrefixBrand && !explicitBrandTokens.length && firstProductToken && queryTokens.has(firstProductToken)
+  const inferredBrandToken = !compactPrefixBrand && !explicitBrandTokens.length && firstProductToken
+    && (queryTokens.has(firstProductToken) || compactQuery.startsWith(compact(firstProductToken)))
     && !PRODUCT_TYPES.has(firstProductToken) && !INGREDIENTS.has(firstProductToken) && !GENERIC_WORDS.has(firstProductToken)
     ? firstProductToken : "";
   const brandTokens = new Set(explicitBrandTokens.length ? explicitBrandTokens : (compactPrefixBrand ? [...queryTokens] : (inferredBrandToken ? [inferredBrandToken] : [])));
@@ -44,9 +70,15 @@ function evaluateMatch(keyword, item) {
   const numberMatches = intersects(new Set([...queryTokens].filter((token) => /^\d+(?:\.\d+)?$/.test(token))), new Set([...productTokens].filter((token) => /^\d+(?:\.\d+)?$/.test(token))));
   const productLineTokens = new Set([...productTokens].filter((token) => !brandTokens.has(token) && !PRODUCT_TYPES.has(token) && !INGREDIENTS.has(token)
     && !GENERIC_WORDS.has(token) && !/^\d+(?:\.\d+)?$/.test(token)));
-  const productLineMatches = intersects(queryTokens, productLineTokens);
+  const compoundLineMatches = adjacentCompounds(compoundTokens(product)).filter((compound) => compactQuery.includes(compact(compound.value))
+    && compound.parts.some((token) => productLineTokens.has(token))
+    && !compound.parts.every((token) => PRODUCT_TYPES.has(token) || GENERIC_WORDS.has(token))).map((compound) => compound.value);
+  const productLineMatches = [...new Set([...intersects(queryTokens, productLineTokens), ...compoundLineMatches])];
   const meaningfulQuery = [...queryTokens].filter((token) => !GENERIC_WORDS.has(token));
-  const tokenCoverage = meaningfulQuery.length ? matchedTokens.filter((token) => meaningfulQuery.includes(token)).length / meaningfulQuery.length : 0;
+  const identifiedCompacts = [...new Set([brandMatch ? brandCompact : "", ...compoundLineMatches.map(compact), ...matchedTokens.map(compact)].filter(Boolean))];
+  const identifiedCharacters = identifiedCompacts.reduce((sum, value) => sum + (compactQuery.includes(value) ? value.length : 0), 0);
+  const tokenCoverage = compoundLineMatches.length && compactQuery ? Math.min(1, identifiedCharacters / compactQuery.length)
+    : meaningfulQuery.length ? matchedTokens.filter((token) => meaningfulQuery.includes(token)).length / meaningfulQuery.length : 0;
   const ingredientMatch = ingredientMatches.length > 0;
   const concentrationMatch = ingredientMatch && numberMatches.length > 0;
   const productTypeMatch = typeMatches.length > 0;
@@ -105,15 +137,15 @@ function evaluateMatch(keyword, item) {
 
 function buildProductIndex(items) {
   const index = new Map();
-  items.forEach((item, position) => { for (const token of new Set(matchTokens(`${item.brand || ""} ${item.product || ""}`))) {
+  items.forEach((item, position) => { for (const token of indexKeys(`${item.brand || ""} ${item.product || ""}`)) {
     if (!index.has(token)) index.set(token, []); if (index.get(token).length < 500) index.get(token).push(position);
   } });
   return index;
 }
 function findBestMatch(keyword, items, index) {
-  const positions = new Set();
-  for (const token of matchTokens(keyword)) for (const position of index.get(token) || []) positions.add(position);
-  const shortlist = [...positions].slice(0, 500).map((position) => items[position]);
+  const positionScores = new Map();
+  for (const token of indexKeys(keyword)) for (const position of index.get(token) || []) positionScores.set(position, Number(positionScores.get(position) || 0) + 1);
+  const shortlist = [...positionScores].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 500).map(([position]) => items[position]);
   const evaluated = shortlist.map((item, order) => ({ item, candidate: item.product, order, ...evaluateMatch(keyword, item) }))
     .sort((a, b) => b.score - a.score || a.order - b.order);
   if (!evaluated.length) return null;
@@ -141,4 +173,4 @@ function findBestMatch(keyword, items, index) {
     additionalMatches: ranked.slice(1, 6).map(({ item, candidate, score, judgment, reason, signals }) => ({ item, candidate, score, judgment, reason, signals })) };
 }
 
-module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, auxiliarySimilarity, evaluateMatch, buildProductIndex, findBestMatch };
+module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, indexKeys, auxiliarySimilarity, evaluateMatch, buildProductIndex, findBestMatch };

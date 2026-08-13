@@ -68,4 +68,11 @@ const uniqueMatch = findBestMatch("라로슈포제 에빠끌라 B5", uniquelyIde
 assert.equal(uniqueMatch.matchingCandidateCount, 1);
 assert.equal(uniqueMatch.uniqueIdentification, true);
 assert.equal(uniqueMatch.score, 100);
+const compoundProducts = [{ brand: "", product: "라카 퍼펙트 트윈 립 4.7g 10colors", account: "계정1" }];
+const compoundMatch = findBestMatch("라카트윈립", compoundProducts, buildProductIndex(compoundProducts));
+assert.ok(compoundMatch);
+assert.equal(compoundMatch.signals.brandMatch, true);
+assert.equal(compoundMatch.signals.productLineMatch, true);
+assert.ok(compoundMatch.signals.productLineMatches.includes("트윈립"));
+assert.ok(compoundMatch.score >= 40);
 console.log("Structured product matching signals and judgments OK");

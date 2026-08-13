@@ -12,15 +12,15 @@ test("diagnostic uses the production rolling peak calculation", () => {
   assert.equal(result.monthlyTotalSearches, 8290);
   assert.equal(result.rows.length, 15);
   assert.equal(result.windowDays, 7);
-  assert.equal(result.peakLift, result.peak.peakLift);
+  assert.equal(result.peakDailyLift, result.peak.peakLift);
   assert.equal(result.estimatedSurgeCount, Math.max(0, result.endLift, result.peakLift));
 });
 
-test("per-date rows expose the same before-median and after-average operands", () => {
-  const selected = Array.from({ length: 15 }, (_, index) => ({ period: `2026-05-${String(index + 15).padStart(2, "0")}`, ratio: index, estimated: index * 100 }));
+test("per-date rows use the preceding seven-day median without future dilution", () => {
+  const selected = Array.from({ length: 22 }, (_, index) => ({ period: `2026-05-${String(index + 8).padStart(2, "0")}`, ratio: index, estimated: index * 100 }));
   const rows = calculationRows(selected, "2026-05-15", "2026-05-29");
   const may22 = rows.find((row) => row.period === "2026-05-22");
-  assert.equal(may22.baseline, 300);
-  assert.equal(may22.comparisonAverage, 1000);
-  assert.equal(may22.lift, 700);
+  assert.equal(may22.baseline, 1000);
+  assert.equal(may22.estimated, 1400);
+  assert.equal(may22.lift, 400);
 });
