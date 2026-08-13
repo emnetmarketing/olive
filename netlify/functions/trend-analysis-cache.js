@@ -7,7 +7,7 @@ const STALE_JOB_MS = 12 * 60 * 1000;
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
 function lastSuccessKeys(mode) { return { mode: `last-success/${mode}`, latest: "last-success/latest" }; }
-async function readJob(jobId, consistency) { return store().get(`jobs/${jobId}`, { type: "json", ...(consistency ? { consistency } : {}) }); }
+async function readJob(jobId) { return store().get(`jobs/${jobId}`, { type: "json" }); }
 async function writeJob(jobId, value) { await store().setJSON(`jobs/${jobId}`, value); return value; }
 async function writeLastSuccess(job) {
   if (!job?.jobId || job.state !== "completed") throw new Error("Only a completed analysis job can be published as the last successful result.");
@@ -30,9 +30,9 @@ async function createJob(input) {
   return job;
 }
 async function readCurrentJob({ markStale = false } = {}) {
-  const pointer = await store().get(CURRENT_JOB_KEY, { type: "json", consistency: "strong" });
+  const pointer = await store().get(CURRENT_JOB_KEY, { type: "json" });
   if (!pointer?.jobId) return null;
-  const job = await readJob(pointer.jobId, "strong");
+  const job = await readJob(pointer.jobId);
   if (!job || job.state !== "running") return null;
   const age = Date.now() - Date.parse(job.updatedAt || job.createdAt || 0);
   if (Number.isFinite(age) && age <= STALE_JOB_MS) return job;
@@ -41,7 +41,7 @@ async function readCurrentJob({ markStale = false } = {}) {
 }
 async function acquireJob(input) {
   const blobStore = store();
-  const currentEntry = await blobStore.getWithMetadata(CURRENT_JOB_KEY, { type: "json", consistency: "strong" });
+  const currentEntry = await blobStore.getWithMetadata(CURRENT_JOB_KEY, { type: "json" });
   const active = await readCurrentJob({ markStale: true });
   if (active) return { job: active, existing: true };
   const job = await createJob(input);

@@ -26,6 +26,6 @@ test("shared current job and download history endpoints are wired into the dashb
   assert.match(analysisCache, /current-job\/v1/);
   assert.match(analysisCache, /onlyIfMatch/);
   assert.match(analysisCache, /onlyIfNew/);
-  assert.match(analysisCache, /consistency: "strong"/);
+  assert.doesNotMatch(analysisCache, /consistency: "strong"/);
   assert.match(fs.readFileSync("netlify/functions/download-history-cache.js", "utf8"), /shared-history\/v1/);
 });
