@@ -1564,7 +1564,7 @@
 
       <section class="panel">
         <div class="section-head">
-          <h2>모니터링 결과</h2>
+          <h2>상품 직접 매칭 급등</h2>
           <div class="section-actions">
             <button id="excelDownloadBtn" class="secondary" type="button">엑셀 다운로드</button>
             <button id="downloadHistoryBtn" class="secondary" type="button">다운로드 신청 이력</button>
@@ -1601,6 +1601,17 @@
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section class="panel" id="brandSignalPanel">
+        <div class="section-head"><div>
+          <h2>브랜드/카테고리 관련 급등</h2>
+          <p class="muted">급등 기준은 통과했지만 특정 상품 하나를 식별하기 어려운 브랜드·카테고리 신호입니다.</p>
+        </div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>급등 검색어</th><th>추정 급등수</th><th>분류</th><th>관련 브랜드</th><th>관련 상품 수</th><th>참고 상품</th><th>상품 일치율</th><th>판단</th><th>판단 근거</th><th>최신 기준일</th></tr></thead>
+          <tbody id="brandSignalBody"><tr><td colspan="10" class="muted">브랜드/카테고리 관련 급등 결과가 없습니다.</td></tr></tbody>
+        </table></div>
       </section>
     </div>
   </main>
@@ -1752,7 +1763,9 @@
           state.currentUser = { ...sharedUser };
           sessionStorage.setItem("monitoringCurrentUser", sharedUser.email);
           applyAuthState();
-          loadLastSuccessfulAnalysis();
+          await loadLastSuccessfulAnalysis();
+          await loadCurrentAnalysis();
+          startCurrentJobWatcher();
           alert(email === DEFAULT_MASTER_EMAIL ? "지정된 마스터(관리자) 계정으로 등록되었습니다." : "이미 승인된 계정입니다. 로그인했습니다.");
         } else if (sharedUser.status === "rejected") {
           alert("접근 신청이 거절된 계정입니다. 마스터 관리자에게 문의하세요.");
@@ -1818,10 +1831,14 @@
       state.currentUser = { ...sharedUser };
       sessionStorage.setItem("monitoringCurrentUser", sharedUser.email);
       applyAuthState();
-      loadLastSuccessfulAnalysis();
+      await loadLastSuccessfulAnalysis();
+      await loadCurrentAnalysis();
+      startCurrentJobWatcher();
     }
 
     function logout() {
+      stopCurrentJobWatcher();
+      finishAnalysisControls();
       state.currentUser = null;
       sessionStorage.removeItem("monitoringCurrentUser");
       applyAuthState();
@@ -2270,6 +2287,7 @@
       $("statLastRun").textContent = "-";
       $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
       $("resultBody").innerHTML = `<tr><td colspan="11" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("brandSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2282,6 +2300,19 @@
     }
 
     let analysisPollTimer = null;
+    let currentJobWatchTimer = null;
+    let activeAnalysisJobId = null;
+    const CURRENT_JOB_WATCH_INTERVAL_MS = 8000;
+
+    function startCurrentJobWatcher() {
+      if (currentJobWatchTimer || !state.currentUser) return;
+      currentJobWatchTimer = setInterval(() => { if (state.currentUser) loadCurrentAnalysis(); }, CURRENT_JOB_WATCH_INTERVAL_MS);
+    }
+
+    function stopCurrentJobWatcher() {
+      if (currentJobWatchTimer) clearInterval(currentJobWatchTimer);
+      currentJobWatchTimer = null;
+    }
 
     function inclusiveAnalysisDays(startDate, endDate) {
       const start = Date.parse(`${startDate}T00:00:00Z`); const end = Date.parse(`${endDate}T00:00:00Z`);
@@ -2334,6 +2365,7 @@
       $("instantRunBtn").disabled = !canOperate();
       if (analysisPollTimer) clearTimeout(analysisPollTimer);
       analysisPollTimer = null;
+      activeAnalysisJobId = null;
     }
 
     function displayCompletedAnalysis(job, { restored = false } = {}) {
@@ -2371,6 +2403,7 @@
     }
 
     async function pollAnalysis(jobId) {
+      activeAnalysisJobId = jobId;
       try {
         const response = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
         const job = await response.json().catch(() => ({}));
@@ -2379,7 +2412,8 @@
         const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-matching": "급등 계산 및 상품 매칭", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
         const periodText = job.mode === "instant" ? "즉시 분석" : `기간 분석 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`;
         const counts = Number(job.totalCount || 0) ? ` · ${Number(job.processedCount || 0).toLocaleString("ko-KR")} / ${Number(job.totalCount).toLocaleString("ko-KR")}` : "";
-        $("analysisProgressText").textContent = `${periodText} · ${stageLabels[job.currentStage] || job.message || "분석 중"}${counts} · ${Number(job.progress || 0)}%`;
+        const started = job.createdAt ? ` · 시작 ${formatHistoryDate(job.createdAt)}` : "";
+        $("analysisProgressText").textContent = `${periodText}${started} · ${stageLabels[job.currentStage] || job.message || "분석 중"}${counts} · ${Number(job.progress || 0)}%`;
         if (job.state === "running") {
           analysisPollTimer = setTimeout(() => pollAnalysis(jobId), 3000);
           return;
@@ -2404,7 +2438,7 @@
         if (!response.ok || !payload.running || !payload.job?.jobId) return null;
         $("analysisProgressPanel").classList.add("visible");
         $("runBtn").disabled = true; $("instantRunBtn").disabled = true;
-        pollAnalysis(payload.job.jobId);
+        if (activeAnalysisJobId !== payload.job.jobId) pollAnalysis(payload.job.jobId);
         return payload.job;
       } catch { return null; }
     }
@@ -2528,13 +2562,12 @@
       $("statLastRun").innerHTML = formatDateTime(completedAt ? new Date(completedAt) : new Date());
       renderTrendChart(surgeRows);
 
+      const productResults = results.filter((row) => row.resultType !== "brand_or_category_signal");
+      const brandSignals = results.filter((row) => row.resultType === "brand_or_category_signal");
       const body = $("resultBody");
-      if (!results.length) {
+      if (!productResults.length) {
         body.innerHTML = '<tr><td colspan="11" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
-        return;
-      }
-
-      body.innerHTML = results.map((row) => {
+      } else body.innerHTML = productResults.map((row) => {
         const source = sourceSummary(row);
         const item = row.match.item;
         return `
@@ -2557,6 +2590,32 @@
             <td>${escapeHtml(row.match.reason || "식별 가능한 공통 특징 부족")}<br><span class="muted">비교값: ${escapeHtml(row.match.candidate)}</span></td>
           </tr>
         `;
+      }).join("");
+      renderBrandSignals(brandSignals);
+    }
+
+    function renderBrandSignals(results) {
+      const body = $("brandSignalBody");
+      if (!results.length) {
+        body.innerHTML = '<tr><td colspan="10" class="muted">브랜드/카테고리 관련 급등 결과가 없습니다.</td></tr>';
+        return;
+      }
+      body.innerHTML = results.map((row) => {
+        const signal = row.relatedSignal || {};
+        const references = (signal.referenceProducts || []).slice(0, 3)
+          .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
+        return `<tr>
+          <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
+          <td><strong>+${Number(row.lift || row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</strong></td>
+          <td>${escapeHtml(signal.signalType === "brand" ? "브랜드 급등" : "카테고리 관련 급등")}</td>
+          <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
+          <td>${Number(signal.relatedProductCount || 0).toLocaleString("ko-KR")}건</td>
+          <td>${references || '<span class="muted">없음</span>'}</td>
+          <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
+          <td><strong>${escapeHtml(signal.judgment || row.match?.judgment || "관련 신호")}</strong></td>
+          <td>${escapeHtml(signal.reason || row.match?.reason || "-")}</td>
+          <td>${escapeHtml(row.latestDataDate || "-")}</td>
+        </tr>`;
       }).join("");
     }
 
@@ -2688,28 +2747,33 @@
     }
 
     function buildExcelExport() {
-      const headers = ["급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
+      const headers = ["resultType", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "관련 브랜드", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
-        const item = row.match.item;
+        const item = row.match?.item || {};
+        const signal = row.relatedSignal || {};
         return [
+          row.resultType || "product_match",
           row.keyword,
           row.category || "unknown",
           row.today,
           row.estimatedPeak,
           row.yesterday,
           row.lift,
+          signal.relatedBrand || item.brand || "",
+          Number(signal.relatedProductCount || 0),
+          (signal.referenceProducts || []).map((entry) => entry.product || entry.brand || "").join(" / "),
           row.riseRate === null ? "" : `${Math.round(row.riseRate)}%`,
           sourceSummaryText(row),
           item.account || "계정 미지정",
           item.brand || "",
           item.product || "",
-          (row.match.additionalMatches || []).map((candidate) => `${candidate.item?.product || candidate.candidate || ""} (${candidate.item?.account || "계정 미지정"}, ${Number(candidate.score || 0)}%)`).join(" / "),
-          Number(row.match.matchingCandidateCount || 1),
+          (row.match?.additionalMatches || []).map((candidate) => `${candidate.item?.product || candidate.candidate || ""} (${candidate.item?.account || "계정 미지정"}, ${Number(candidate.score || 0)}%)`).join(" / "),
+          Number(row.match?.matchingCandidateCount || 1),
           item.campaign || "",
           item.adGroup || "",
-          `${row.match.score}%`,
-          row.match.judgment || "관련성 낮음",
-          row.match.reason || "식별 가능한 공통 특징 부족",
+          `${Number(row.match?.score || 0)}%`,
+          signal.judgment || row.match?.judgment || "관련성 낮음",
+          signal.reason || row.match?.reason || "식별 가능한 공통 특징 부족",
           row.latestDataDate || "",
           row.news?.items?.[0]?.title ? String(row.news.items[0].title).replace(/<[^>]*>/g, "") : ""
         ];
@@ -2855,8 +2919,12 @@
 
     function teamsPayload() {
       const rows = state.results.slice(0, 12).map((row, index) => {
-        const item = row.match.item;
-        return `${index + 1}. ${row.keyword} - ${row.today.toLocaleString("ko-KR")}회, 전일 ${row.yesterday.toLocaleString("ko-KR")}회, Naver ${item.account || "계정 미지정"}: ${item.product || item.brand}, 일치율 ${row.match.score}%`;
+        const item = row.match?.item || {};
+        const signal = row.relatedSignal;
+        const target = signal
+          ? `${signal.judgment || "브랜드 급등"} (${signal.relatedBrand || "-"}, 관련 상품 ${Number(signal.relatedProductCount || 0)}건)`
+          : `Naver ${item.account || "계정 미지정"}: ${item.product || item.brand}`;
+        return `${index + 1}. ${row.keyword} - ${row.today.toLocaleString("ko-KR")}회, 전일 ${row.yesterday.toLocaleString("ko-KR")}회, ${target}, 일치율 ${Number(row.match?.score || 0)}%`;
       }).join("\n");
       return {
         text: `NAVER 추정 급등 키워드 감지\n\n기준: 추정 급등수 ${Number(state.operatingSettings?.surgeThreshold || 0).toLocaleString("ko-KR")} 이상, 상품 일치율 ${state.operatingSettings?.matchThreshold || 0}% 이상\n\n${rows || "전송할 매칭 결과가 없습니다."}`
@@ -3125,6 +3193,7 @@
       if (state.currentUser) {
         await loadLastSuccessfulAnalysis();
         await loadCurrentAnalysis();
+        startCurrentJobWatcher();
       }
     }
     initializeApp();

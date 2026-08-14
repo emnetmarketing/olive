@@ -63,4 +63,16 @@ const protectionPool = Array.from({ length: 6000 }, (_, index) => ({ keyword: `p
 const protectedSignals = new Map([["protected-0", { estimatedSurgeCount: 900, protectionPriority: 1000 }]]);
 const protectedSelection = _test.selectAnalysisCandidates(protectionPool, protectedSignals, 5000);
 assert.ok(protectedSelection.selected.some((item) => item.keyword === "protected-0"));
+
+const snpeProducts = Array.from({ length: 13 }, (_, index) => ({
+  product: `SNPE 브랜드 상품 ${index + 1}`, account: "account1", productId: `snpe-${index + 1}`
+}));
+const snpeIndex = _test.buildIndex(snpeProducts);
+const snpeMatch = _test.bestMatch("SNPE", snpeProducts, snpeIndex);
+assert.equal(snpeMatch.score, 38);
+const snpeSignal = _test.buildBrandOrCategorySignal({ keyword: "SNPE", category: "beauty" }, snpeMatch, snpeProducts);
+assert.equal(snpeSignal.signalType, "brand");
+assert.equal(snpeSignal.relatedProductCount, 13);
+assert.equal(snpeSignal.judgment, "브랜드 급등");
+assert.equal(_test.buildBrandOrCategorySignal({ keyword: "크림", category: "beauty" }, _test.bestMatch("크림", snpeProducts, snpeIndex), snpeProducts), null);
 console.log("Trend estimation, surge calculation, and indexed matching OK");

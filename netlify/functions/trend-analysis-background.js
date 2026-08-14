@@ -1,7 +1,7 @@
 const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
-const { evaluateMatch, buildProductIndex, findBestMatch } = require("./product-matching");
+const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
   normalizeKeyword, CALCULATION_VERSION } = require("./surge-history-cache");
 
@@ -9,6 +9,36 @@ const API_HUB = "https://naverapihub.apigw.ntruss.com";
 const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
 const MAX_ACTIVE_CANDIDATES = 5000;
 const CANDIDATE_GROUP_QUOTAS = { new: 1500, highVolume: 1250, recentChange: 1000, priorSurge: 750, domainEvidence: 500 };
+
+function productBrandToken(item) {
+  const explicit = compact(item?.brand);
+  if (explicit) return explicit;
+  const first = matchTokens(item?.product)[0] || "";
+  return PRODUCT_TYPES.has(first) || INGREDIENTS.has(first) ? "" : compact(first);
+}
+
+function buildBrandOrCategorySignal(candidate, match, products) {
+  if (!match?.signals || !["beauty", "health"].includes(candidate?.category)) return null;
+  if (!match.signals.brandMatch || match.signals.genericOnlyMatch) return null;
+  const brandOnly = !match.signals.productLineMatch && !match.signals.productTypeMatch
+    && !match.signals.ingredientMatch && !match.signals.specMatch;
+  const brandToken = compact(match.item?.brand) || (brandOnly ? compact(candidate.keyword) : productBrandToken(match.item));
+  if (!brandToken || !compact(candidate.keyword).includes(brandToken)) return null;
+  const related = products.filter((item) => compact(item?.brand) === brandToken
+    || compact(item?.product).includes(brandToken));
+  if (!related.length) return null;
+  return {
+    signalType: "brand",
+    relatedBrand: String(match.item?.brand || matchTokens(match.item?.product)[0] || candidate.keyword),
+    relatedProductCount: related.length,
+    referenceProducts: related.slice(0, 5).map((item) => ({
+      product: item.product || item.brand || "", brand: item.brand || "", account: item.account || "",
+      productId: item.productId || item.id || null, adGroupId: item.adGroupId || null, adId: item.adId || null,
+    })),
+    judgment: "브랜드 급등",
+    reason: `${String(match.item?.brand || matchTokens(match.item?.product)[0] || candidate.keyword)} 브랜드 관련 상품 ${related.length.toLocaleString("ko-KR")}건 존재 / 특정 상품 식별 근거 부족`,
+  };
+}
 
 function chunks(values, size) { const out = []; for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size)); return out; }
 async function responseJson(response, name) {
@@ -343,10 +373,9 @@ exports.handler = async (event) => {
         matchedProductName: match.item.product, matchScore: match.score, matchJudgment: match.judgment, matchReason: match.reason,
         matchingCandidateCount: match.matchingCandidateCount, additionalMatches: match.additionalMatches,
         matchSignals: match.signals, account: match.item.account, productId: match.item.productId || match.item.id || null });
-      if (!match || match.score < job.matchThreshold) continue;
       const shopping = shoppingMap.get(candidate.keyword) || [];
       const shoppingRatios = shopping.map((point) => Number(point.ratio || 0));
-      rows.push({ keyword: candidate.keyword, category: candidate.category, monthlySearches: candidate.monthlyTotalSearches,
+      const baseRow = { keyword: candidate.keyword, category: candidate.category, monthlySearches: candidate.monthlyTotalSearches,
         estimatedBaseline: Math.round(metrics.baseline), estimatedLatest: Math.round(metrics.latest), estimatedPeak: Math.round(metrics.peakValue),
         estimatedSurgeCount: Math.round(metrics.surgeCount), riseRate: metrics.baseline > 0 ? (metrics.surgeCount / metrics.baseline * 100) : null,
         endLift: Math.round(metrics.endLift), peakLift: Math.round(metrics.peakLift), peakDailyLift: Math.round(metrics.peakDailyLift || metrics.peakLift),
@@ -354,7 +383,13 @@ exports.handler = async (event) => {
         trendSeries: metrics.series, trendSlope: slope(metrics.series.map((point) => point.estimated)),
         shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
-        match, sources: candidate.sources, news: null });
+        match, sources: candidate.sources, news: null };
+      if (match && match.score >= job.matchThreshold) {
+        rows.push({ ...baseRow, resultType: "product_match" });
+      } else {
+        const relatedSignal = buildBrandOrCategorySignal(candidate, match, productCache.items);
+        if (relatedSignal) rows.push({ ...baseRow, resultType: "brand_or_category_signal", relatedSignal });
+      }
     }
     let surgeHistoryManifest = surgeHistoryCache.manifest;
     if (job.mode === "instant") {
@@ -394,7 +429,10 @@ exports.handler = async (event) => {
         endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });
     await persist({ state: "completed", message: "분석 완료", progress: 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
       currentStage: "completed", processedCount: eligible.length, totalCount: eligible.length,
-      latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length, results: rows, errors: [],
+      latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length,
+      productMatchResultCount: rows.filter((row) => row.resultType === "product_match").length,
+      brandCategorySignalCount: rows.filter((row) => row.resultType === "brand_or_category_signal").length,
+      results: rows, errors: [],
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5),
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
@@ -405,4 +443,4 @@ exports.handler = async (event) => {
 };
 
 exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
-  evaluateMatch, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };
+  evaluateMatch, buildBrandOrCategorySignal, productBrandToken, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };
