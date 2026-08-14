@@ -1613,6 +1613,17 @@
           <tbody id="brandSignalBody"><tr><td colspan="10" class="muted">브랜드/카테고리 관련 급등 결과가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
+
+      <section class="panel" id="domainSignalPanel">
+        <div class="section-head"><div>
+          <h2>기타 뷰티/건강 관련 급등</h2>
+          <p class="muted">성분·제품라인·제품군 수준의 관련성은 확인되지만 특정 상품 하나를 식별하기 어려운 신호입니다.</p>
+        </div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>급등 검색어</th><th>추정 급등수</th><th>분류</th><th>관련 브랜드</th><th>관련 상품 수</th><th>참고 상품</th><th>상품 일치율</th><th>판단</th><th>판단 근거</th><th>최신 기준일</th></tr></thead>
+          <tbody id="domainSignalBody"><tr><td colspan="10" class="muted">기타 뷰티/건강 관련 급등 결과가 없습니다.</td></tr></tbody>
+        </table></div>
+      </section>
     </div>
   </main>
 
@@ -2288,6 +2299,7 @@
       $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
       $("resultBody").innerHTML = `<tr><td colspan="11" class="muted">${escapeHtml(message)}</td></tr>`;
       $("brandSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("domainSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2564,10 +2576,12 @@
 
       const productResults = results.filter((row) => row.resultType !== "brand_or_category_signal");
       const brandSignals = results.filter((row) => row.resultType === "brand_or_category_signal");
+      const domainSignals = results.filter((row) => row.resultType === "domain_related_signal");
+      const directResults = productResults.filter((row) => row.resultType !== "domain_related_signal");
       const body = $("resultBody");
-      if (!productResults.length) {
+      if (!directResults.length) {
         body.innerHTML = '<tr><td colspan="11" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
-      } else body.innerHTML = productResults.map((row) => {
+      } else body.innerHTML = directResults.map((row) => {
         const source = sourceSummary(row);
         const item = row.match.item;
         return `
@@ -2592,12 +2606,21 @@
         `;
       }).join("");
       renderBrandSignals(brandSignals);
+      renderDomainSignals(domainSignals);
     }
 
     function renderBrandSignals(results) {
-      const body = $("brandSignalBody");
+      renderRelatedSignals("brandSignalBody", results, "브랜드/카테고리 관련 급등 결과가 없습니다.");
+    }
+
+    function renderDomainSignals(results) {
+      renderRelatedSignals("domainSignalBody", results, "기타 뷰티/건강 관련 급등 결과가 없습니다.");
+    }
+
+    function renderRelatedSignals(bodyId, results, emptyMessage) {
+      const body = $(bodyId);
       if (!results.length) {
-        body.innerHTML = '<tr><td colspan="10" class="muted">브랜드/카테고리 관련 급등 결과가 없습니다.</td></tr>';
+        body.innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(emptyMessage)}</td></tr>`;
         return;
       }
       body.innerHTML = results.map((row) => {
@@ -2607,7 +2630,7 @@
         return `<tr>
           <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
           <td><strong>+${Number(row.lift || row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</strong></td>
-          <td>${escapeHtml(signal.signalType === "brand" ? "브랜드 급등" : "카테고리 관련 급등")}</td>
+          <td>${escapeHtml(signal.signalType === "brand" ? "브랜드 급등" : signal.signalType === "ingredient" ? "성분 관련" : signal.signalType === "product_line" ? "제품/제품라인 관련" : "제품군/카테고리 관련")}</td>
           <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
           <td>${Number(signal.relatedProductCount || 0).toLocaleString("ko-KR")}건</td>
           <td>${references || '<span class="muted">없음</span>'}</td>

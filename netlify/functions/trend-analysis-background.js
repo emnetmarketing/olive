@@ -9,6 +9,14 @@ const API_HUB = "https://naverapihub.apigw.ntruss.com";
 const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
 const MAX_ACTIVE_CANDIDATES = 5000;
 const CANDIDATE_GROUP_QUOTAS = { new: 1500, highVolume: 1250, recentChange: 1000, priorSurge: 750, domainEvidence: 500 };
+const BUSINESS_DOMAIN_TERMS = [
+  "유산균", "프로바이오틱", "프리바이오틱", "콜라겐", "비타민", "영양제", "건강식품", "오메가", "프로틴", "단백질", "단백바", "쉐이크",
+  "홍삼", "효소", "루테인", "마그네슘", "아연", "철분", "밀크씨슬", "글루타치온", "비오틴", "베르베린", "면역", "혈행", "관절", "장건강", "위건강",
+  "세럼", "크림", "쿠션", "선크림", "마스크", "앰플", "토너", "로션", "클렌징", "클렌저", "샴푸", "트리트먼트", "립", "향수",
+  "메이크업", "파운데이션", "네일", "헤어", "바디", "레티놀", "나이아신아마이드", "히알루론산", "세라마이드", "판테놀", "병풀", "시카",
+  "브라이트닝", "미백", "보습", "화장품", "에센스", "틴트", "섀도우", "라이너", "브로우", "블러셔", "모공", "피부", "수딩", "브러쉬",
+  "마사지", "괄사", "지압", "교정", "스트레칭", "폼롤러", "근막", "골반", "척추", "보호대", "패치", "치약", "칫솔", "구강", "생리", "여성청결", "다이어트"
+];
 
 function productBrandToken(item) {
   const explicit = compact(item?.brand);
@@ -38,6 +46,49 @@ function buildBrandOrCategorySignal(candidate, match, products) {
     judgment: "브랜드 급등",
     reason: `${String(match.item?.brand || matchTokens(match.item?.product)[0] || candidate.keyword)} 브랜드 관련 상품 ${related.length.toLocaleString("ko-KR")}건 존재 / 특정 상품 식별 근거 부족`,
   };
+}
+
+function hasBusinessDomainEvidence(candidate, match, relatedProducts = []) {
+  const text = [candidate?.keyword, ...(candidate?.relatedProducts || []), match?.item?.product,
+    ...relatedProducts.map((item) => item?.product)].filter(Boolean).join(" ").toLocaleLowerCase("ko-KR");
+  return BUSINESS_DOMAIN_TERMS.some((term) => text.includes(term));
+}
+
+function buildDomainRelatedSignal(candidate, match, products) {
+  if (!match?.signals || !["beauty", "health"].includes(candidate?.category)) return null;
+  const signals = match.signals;
+  const evidenceTokens = [...new Set([...(signals.ingredientMatches || []), ...(signals.productLineMatches || []), ...(signals.typeMatches || [])])];
+  if (!evidenceTokens.length || (signals.genericOnlyMatch && signals.productTypeMatch && !signals.ingredientMatch && !signals.productLineMatch)) return null;
+  const related = products.filter((item) => {
+    const value = compact(`${item.brand || ""} ${item.product || ""}`);
+    return evidenceTokens.some((token) => value.includes(compact(token)));
+  });
+  if (!related.length || !hasBusinessDomainEvidence(candidate, match, related)) return null;
+  const signalType = signals.ingredientMatch ? "ingredient" : signals.productLineMatch ? "product_line" : "category";
+  const label = signalType === "ingredient" ? "성분 관련 급등" : signalType === "product_line" ? "제품/제품라인 관련 급등" : "제품군/카테고리 관련 급등";
+  return {
+    signalType, relatedBrand: match.item?.brand || "", relatedProductCount: related.length,
+    referenceProducts: related.slice(0, 5).map((item) => ({ product: item.product || item.brand || "", brand: item.brand || "", account: item.account || "",
+      productId: item.productId || item.id || null, adGroupId: item.adGroupId || null, adId: item.adId || null })),
+    judgment: label, reason: `${evidenceTokens.join(" + ")} 관련 활성 상품 ${related.length.toLocaleString("ko-KR")}건 확인 / 특정 상품 단독 식별 근거 부족`,
+  };
+}
+
+function classifySurgeResult(candidate, match, products, matchThreshold) {
+  if (!match || !hasBusinessDomainEvidence(candidate, match)) return { resultType: null, reason: "unrelated_or_insufficient_domain_evidence" };
+  const signals = match.signals || {};
+  const productSpecific = Boolean(signals.productNameMatch
+    || signals.brandMatch && signals.productLineMatch
+    || signals.ingredientMatch && signals.concentrationMatch
+    || signals.productLineMatch && signals.specMatch);
+  if (match.score >= matchThreshold && productSpecific) return { resultType: "product_match", relatedSignal: null };
+  const brandSignal = buildBrandOrCategorySignal(candidate, match, products);
+  if (brandSignal && hasBusinessDomainEvidence(candidate, match, brandSignal.referenceProducts)) {
+    return { resultType: "brand_or_category_signal", relatedSignal: brandSignal };
+  }
+  const domainSignal = buildDomainRelatedSignal(candidate, match, products);
+  if (domainSignal) return { resultType: "domain_related_signal", relatedSignal: domainSignal };
+  return { resultType: null, reason: "insufficient_relation_evidence" };
 }
 
 function chunks(values, size) { const out = []; for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size)); return out; }
@@ -282,8 +333,10 @@ exports.handler = async (event) => {
         monthlyAtOrAboveThreshold: eligibleBeforeLimit.length,
         before5000Limit: eligibleBeforeLimit.length, analyzed: eligible.length, excludedBy5000Limit: excludedByLimit.length },
       searchTrend: { requested: eligible.length, validSeries: 0, emptySeries: 0, apiErrorCandidates: 0 },
-      surge: { positive: 0, atLeast100: 0, atLeast500: 0, atLeast1000: 0, atLeast5000: 0, atLeast10000: 0, atUserThreshold: 0 },
-      matching: { atLeast30: 0, atLeast40: 0, atLeast50: 0, atLeast60: 0, atLeast70: 0, atLeast80: 0, atLeast90: 0, atUserThreshold: 0 }
+      surge: { positive: 0, from0To99: 0, from100To199: 0, from200To299: 0, from300To499: 0, from500To999: 0, atLeast1000: 0,
+        atLeast100: 0, atLeast500: 0, atLeast5000: 0, atLeast10000: 0, atUserThreshold: 0 },
+      matching: { atLeast30: 0, atLeast40: 0, atLeast50: 0, atLeast60: 0, atLeast70: 0, atLeast80: 0, atLeast90: 0, atUserThreshold: 0 },
+      resultClassification: { productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, unrelatedOrInsufficient: 0 }
     };
     await persist({ message: `검색어트렌드 조회 중 · 0 / ${eligible.length.toLocaleString("ko-KR")}`, totalCandidates: eligible.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: eligible.length,
@@ -325,7 +378,7 @@ exports.handler = async (event) => {
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
     job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
     const productIndex = buildProductIndex(productCache.items);
-    const rows = []; const calculated = []; const matchedDiagnostics = [];
+    const rows = []; const calculated = []; const matchedDiagnostics = []; const boundaryRelated = [];
     let calculationProcessed = 0;
     for (const candidate of eligible) {
       calculationProcessed += 1;
@@ -352,11 +405,24 @@ exports.handler = async (event) => {
       const diagnosticRow = surgeDiagnostic(candidate, metrics, series);
       calculated.push({ candidate, metrics, diagnosticRow });
       if (metrics.surgeCount > 0) funnel.surge.positive += 1;
+      if (metrics.surgeCount >= 0 && metrics.surgeCount < 100) funnel.surge.from0To99 += 1;
+      if (metrics.surgeCount >= 100 && metrics.surgeCount < 200) funnel.surge.from100To199 += 1;
+      if (metrics.surgeCount >= 200 && metrics.surgeCount < 300) funnel.surge.from200To299 += 1;
+      if (metrics.surgeCount >= 300 && metrics.surgeCount < 500) funnel.surge.from300To499 += 1;
+      if (metrics.surgeCount >= 500 && metrics.surgeCount < 1000) funnel.surge.from500To999 += 1;
       if (metrics.surgeCount >= 100) funnel.surge.atLeast100 += 1;
       if (metrics.surgeCount >= 500) funnel.surge.atLeast500 += 1;
       if (metrics.surgeCount >= 1000) funnel.surge.atLeast1000 += 1;
       if (metrics.surgeCount >= 5000) funnel.surge.atLeast5000 += 1;
       if (metrics.surgeCount >= 10000) funnel.surge.atLeast10000 += 1;
+      if (metrics.surgeCount >= 200 && metrics.surgeCount < 300) {
+        const boundaryMatch = findBestMatch(candidate.keyword, productCache.items, productIndex);
+        const boundaryClassification = classifySurgeResult(candidate, boundaryMatch, productCache.items, job.matchThreshold);
+        if (boundaryClassification.resultType) boundaryRelated.push({ keyword: candidate.keyword,
+          estimatedSurgeCount: Math.round(metrics.surgeCount), resultType: boundaryClassification.resultType,
+          matchScore: Number(boundaryMatch?.score || 0), judgment: boundaryClassification.relatedSignal?.judgment || boundaryMatch?.judgment || null,
+          reason: boundaryClassification.relatedSignal?.reason || boundaryMatch?.reason || null });
+      }
       if (metrics.surgeCount < job.surgeThreshold) continue;
       funnel.surge.atUserThreshold += 1;
       const match = findBestMatch(candidate.keyword, productCache.items, productIndex);
@@ -384,12 +450,12 @@ exports.handler = async (event) => {
         shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
         match, sources: candidate.sources, news: null };
-      if (match && match.score >= job.matchThreshold) {
-        rows.push({ ...baseRow, resultType: "product_match" });
-      } else {
-        const relatedSignal = buildBrandOrCategorySignal(candidate, match, productCache.items);
-        if (relatedSignal) rows.push({ ...baseRow, resultType: "brand_or_category_signal", relatedSignal });
-      }
+      const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
+      if (classification.resultType === "product_match") funnel.resultClassification.productMatch += 1;
+      else if (classification.resultType === "brand_or_category_signal") funnel.resultClassification.brandSignal += 1;
+      else if (classification.resultType === "domain_related_signal") funnel.resultClassification.domainRelatedSignal += 1;
+      else funnel.resultClassification.unrelatedOrInsufficient += 1;
+      if (classification.resultType) rows.push({ ...baseRow, resultType: classification.resultType, relatedSignal: classification.relatedSignal || null });
     }
     let surgeHistoryManifest = surgeHistoryCache.manifest;
     if (job.mode === "instant") {
@@ -432,8 +498,11 @@ exports.handler = async (event) => {
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length,
       productMatchResultCount: rows.filter((row) => row.resultType === "product_match").length,
       brandCategorySignalCount: rows.filter((row) => row.resultType === "brand_or_category_signal").length,
+      domainRelatedSignalCount: rows.filter((row) => row.resultType === "domain_related_signal").length,
       results: rows, errors: [],
-      diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, calculationSamples: samples.slice(0, 5),
+      diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, boundary200To299: {
+        total: funnel.surge.from200To299, relatedCount: boundaryRelated.length, items: boundaryRelated.slice().sort((a, b) => b.estimatedSurgeCount - a.estimatedSurgeCount).slice(0, 100) },
+        calculationSamples: samples.slice(0, 5),
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
     await writeLastSuccess(job);
@@ -443,4 +512,5 @@ exports.handler = async (event) => {
 };
 
 exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
-  evaluateMatch, buildBrandOrCategorySignal, productBrandToken, median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };
+  evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, hasBusinessDomainEvidence, productBrandToken,
+  median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };

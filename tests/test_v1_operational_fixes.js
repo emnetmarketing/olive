@@ -23,7 +23,9 @@ test("shared current job and download history endpoints are wired into the dashb
   assert.match(html, /\.netlify\/functions\/download-history/);
   assert.match(html, /sourceJobId/);
   assert.match(html, /id="brandSignalBody"/);
+  assert.match(html, /id="domainSignalBody"/);
   assert.match(html, /brand_or_category_signal/);
+  assert.match(html, /domain_related_signal/);
   assert.match(html, /CURRENT_JOB_WATCH_INTERVAL_MS = 8000/);
   assert.match(html, /startCurrentJobWatcher\(\)/);
   const analysisCache = fs.readFileSync("netlify/functions/trend-analysis-cache.js", "utf8");

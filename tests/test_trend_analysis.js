@@ -65,7 +65,7 @@ const protectedSelection = _test.selectAnalysisCandidates(protectionPool, protec
 assert.ok(protectedSelection.selected.some((item) => item.keyword === "protected-0"));
 
 const snpeProducts = Array.from({ length: 13 }, (_, index) => ({
-  product: `SNPE 브랜드 상품 ${index + 1}`, account: "account1", productId: `snpe-${index + 1}`
+  product: `SNPE 교정 마사지 상품 ${index + 1}`, account: "account1", productId: `snpe-${index + 1}`
 }));
 const snpeIndex = _test.buildIndex(snpeProducts);
 const snpeMatch = _test.bestMatch("SNPE", snpeProducts, snpeIndex);
@@ -75,4 +75,15 @@ assert.equal(snpeSignal.signalType, "brand");
 assert.equal(snpeSignal.relatedProductCount, 13);
 assert.equal(snpeSignal.judgment, "브랜드 급등");
 assert.equal(_test.buildBrandOrCategorySignal({ keyword: "크림", category: "beauty" }, _test.bestMatch("크림", snpeProducts, snpeIndex), snpeProducts), null);
+assert.equal(_test.classifySurgeResult({ keyword: "SNPE", category: "beauty" }, snpeMatch, snpeProducts, 40).resultType, "brand_or_category_signal");
+const lakaProducts = [{ product: "라카 퍼펙트 트윈 립 4.7g 10colors", account: "account1" }];
+const lakaMatch = _test.bestMatch("라카트윈립", lakaProducts, _test.buildIndex(lakaProducts));
+assert.equal(lakaMatch.score, 83);
+assert.equal(_test.classifySurgeResult({ keyword: "라카트윈립", category: "beauty" }, lakaMatch, lakaProducts, 40).resultType, "product_match");
+const pdrnProducts = [{ product: "메디힐 PDRN 모공 탄력 더마 크림 50ml", account: "account1" }];
+const pdrnMatch = _test.bestMatch("PDRN", pdrnProducts, _test.buildIndex(pdrnProducts));
+assert.equal(_test.classifySurgeResult({ keyword: "PDRN", category: "beauty" }, pdrnMatch, pdrnProducts, 40).resultType, "domain_related_signal");
+const coffeeProducts = [{ product: "모모스커피 브루백 에스쇼콜라 7개입", account: "account2" }];
+const coffeeMatch = _test.bestMatch("모모스커피", coffeeProducts, _test.buildIndex(coffeeProducts));
+assert.equal(_test.classifySurgeResult({ keyword: "모모스커피", category: "beauty" }, coffeeMatch, coffeeProducts, 40).resultType, null);
 console.log("Trend estimation, surge calculation, and indexed matching OK");
