@@ -25,6 +25,8 @@ test("shared current job and download history endpoints are wired into the dashb
   assert.match(html, /id="brandSignalBody"/);
   assert.match(html, /id="domainSignalBody"/);
   assert.match(html, /brand_or_category_signal/);
+  assert.match(html, /low_intensity_early_signal/);
+  assert.match(html, /저강도 선행 신호/);
   assert.match(html, /domain_related_signal/);
   assert.match(html, /CURRENT_JOB_WATCH_INTERVAL_MS = 8000/);
   assert.match(html, /startCurrentJobWatcher\(\)/);

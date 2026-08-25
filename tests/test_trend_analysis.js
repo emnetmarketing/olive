@@ -86,4 +86,29 @@ assert.equal(_test.classifySurgeResult({ keyword: "PDRN", category: "beauty" }, 
 const coffeeProducts = [{ product: "모모스커피 브루백 에스쇼콜라 7개입", account: "account2" }];
 const coffeeMatch = _test.bestMatch("모모스커피", coffeeProducts, _test.buildIndex(coffeeProducts));
 assert.equal(_test.classifySurgeResult({ keyword: "모모스커피", category: "beauty" }, coffeeMatch, coffeeProducts, 40).resultType, null);
+
+const absoluteOnly = _test.surgePassSignals({ surgeCount: 300, peakDailyLift: 60, peakDailyBaseline: 200 }, 300);
+assert.equal(absoluteOnly.absoluteSurgePassed, true);
+assert.equal(absoluteOnly.relativeTrendPassed, false);
+const relativeOnly = _test.surgePassSignals({ surgeCount: 120, peakDailyLift: 120, peakDailyBaseline: 200 }, 300);
+assert.equal(relativeOnly.absoluteSurgePassed, false);
+assert.equal(relativeOnly.relativeTrendPassed, true);
+const lowBoundary = _test.surgePassSignals({ surgeCount: 40, peakDailyLift: 40, peakDailyBaseline: 200 }, 300);
+assert.equal(lowBoundary.lowIntensityTrendPassed, true);
+const zeroBaseline = _test.surgePassSignals({ surgeCount: 200, peakDailyLift: 200, peakDailyBaseline: 0 }, 300);
+assert.equal(zeroBaseline.relativeTrendPassed, false);
+assert.equal(zeroBaseline.lowIntensityTrendPassed, false);
+
+const numbuzinProducts = [{ brand: "넘버즈인", product: "넘버즈인 1번 판토텐산스킨케어100 블러파우더", account: "account1" }];
+const numbuzinIndex = _test.buildIndex(numbuzinProducts);
+const numbuzinMatch = _test.bestMatch("넘버즈인파우더", numbuzinProducts, numbuzinIndex);
+assert.equal(numbuzinMatch.score, 21);
+const numbuzinSignal = _test.classifyLowIntensitySignal({ keyword: "넘버즈인파우더", category: "beauty" }, numbuzinMatch, numbuzinProducts, numbuzinIndex, 40);
+assert.equal(numbuzinSignal.signalType, "brand_product_context");
+assert.equal(numbuzinSignal.relatedBrand, "넘버즈인");
+assert.equal(numbuzinSignal.relatedProductContext, "파우더");
+assert.match(numbuzinSignal.reason, /브랜드 넘버즈인 \+ 제품군 파우더/);
+const genericPowderMatch = _test.bestMatch("파우더", numbuzinProducts, numbuzinIndex);
+assert.equal(_test.classifyLowIntensitySignal({ keyword: "파우더", category: "beauty" }, genericPowderMatch, numbuzinProducts, numbuzinIndex, 40), null);
+assert.equal(_test.classifyLowIntensitySignal({ keyword: "넘버즈인파우더", category: "unknown" }, numbuzinMatch, numbuzinProducts, numbuzinIndex, 40), null);
 console.log("Trend estimation, surge calculation, and indexed matching OK");

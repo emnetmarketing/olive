@@ -1624,6 +1624,17 @@
           <tbody id="domainSignalBody"><tr><td colspan="10" class="muted">기타 뷰티/건강 관련 급등 결과가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
+
+      <section class="panel" id="lowIntensitySignalPanel">
+        <div class="section-head"><div>
+          <h2>저강도 선행 신호</h2>
+          <p class="muted">절대·상대 급등 기준 전 단계에서 브랜드와 제품 문맥이 함께 확인된 초기 관심 상승 신호입니다.</p>
+        </div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>검색어</th><th>Peak 날짜</th><th>Peak 증가량</th><th>상대 상승률</th><th>관련 브랜드</th><th>제품군/제품라인</th><th>상품 일치율</th><th>대표/참고 상품</th><th>판단</th><th>판단 근거</th></tr></thead>
+          <tbody id="lowIntensitySignalBody"><tr><td colspan="10" class="muted">저강도 선행 신호가 없습니다.</td></tr></tbody>
+        </table></div>
+      </section>
     </div>
   </main>
 
@@ -2300,6 +2311,7 @@
       $("resultBody").innerHTML = `<tr><td colspan="11" class="muted">${escapeHtml(message)}</td></tr>`;
       $("brandSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
       $("domainSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("lowIntensitySignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2574,7 +2586,8 @@
       $("statLastRun").innerHTML = formatDateTime(completedAt ? new Date(completedAt) : new Date());
       renderTrendChart(surgeRows);
 
-      const productResults = results.filter((row) => row.resultType !== "brand_or_category_signal");
+      const lowIntensitySignals = results.filter((row) => row.resultType === "low_intensity_early_signal");
+      const productResults = results.filter((row) => row.resultType !== "brand_or_category_signal" && row.resultType !== "low_intensity_early_signal");
       const brandSignals = results.filter((row) => row.resultType === "brand_or_category_signal");
       const domainSignals = results.filter((row) => row.resultType === "domain_related_signal");
       const directResults = productResults.filter((row) => row.resultType !== "domain_related_signal");
@@ -2607,6 +2620,7 @@
       }).join("");
       renderBrandSignals(brandSignals);
       renderDomainSignals(domainSignals);
+      renderLowIntensitySignals(lowIntensitySignals);
     }
 
     function renderBrandSignals(results) {
@@ -2615,6 +2629,31 @@
 
     function renderDomainSignals(results) {
       renderRelatedSignals("domainSignalBody", results, "기타 뷰티/건강 관련 급등 결과가 없습니다.");
+    }
+
+    function renderLowIntensitySignals(results) {
+      const body = $("lowIntensitySignalBody");
+      if (!results.length) {
+        body.innerHTML = '<tr><td colspan="10" class="muted">저강도 선행 신호가 없습니다.</td></tr>';
+        return;
+      }
+      body.innerHTML = results.map((row) => {
+        const signal = row.relatedSignal || {};
+        const references = (signal.referenceProducts || []).slice(0, 3)
+          .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
+        return `<tr>
+          <td><strong>${escapeHtml(row.keyword)}</strong></td>
+          <td>${escapeHtml(row.peakDate || row.peakDailyDate || "-")}</td>
+          <td><strong>+${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</strong></td>
+          <td>+${Number(row.peakRelativeLiftPct || 0).toFixed(2)}%</td>
+          <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
+          <td>${escapeHtml(signal.relatedProductContext || "-")}</td>
+          <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
+          <td>${references || escapeHtml(row.match?.item?.product || "-")}</td>
+          <td><strong>${escapeHtml(signal.judgment || "선행 신호")}</strong></td>
+          <td>${escapeHtml(signal.reason || "-")}</td>
+        </tr>`;
+      }).join("");
     }
 
     function renderRelatedSignals(bodyId, results, emptyMessage) {
@@ -2646,6 +2685,7 @@
       const absolute = Boolean(row.absoluteSurgePassed);
       const relative = Boolean(row.relativeSurgePassed);
       const label = absolute && relative ? "절대·상대 급등" : relative ? "상대 관심도 급등" : "절대 급등";
+      if (row.lowIntensityEarlySignal) return `<span class="pill">저강도 선행 신호</span><span class="muted"> · 평소 대비 +${Math.round(Number(row.peakRelativeLiftPct || 0)).toLocaleString("ko-KR")}% · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</span>`;
       const detail = relative && Number.isFinite(Number(row.peakRelativeLiftPct))
         ? ` · 평소 대비 +${Math.round(Number(row.peakRelativeLiftPct)).toLocaleString("ko-KR")}% · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}` : "";
       return `<span class="pill">${escapeHtml(label)}</span><span class="muted">${escapeHtml(detail)}</span>`;
@@ -2779,13 +2819,14 @@
     }
 
     function buildExcelExport() {
-      const headers = ["resultType", "급등 유형", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "관련 브랜드", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
+      const headers = ["resultType", "급등 유형", "저강도 선행 신호", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "관련 브랜드", "관련 제품군/제품라인", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
         const item = row.match?.item || {};
         const signal = row.relatedSignal || {};
         return [
           row.resultType || "product_match",
-          row.absoluteSurgePassed && row.relativeSurgePassed ? "절대 급등 + 상대 관심도 급등" : row.relativeSurgePassed ? "상대 관심도 급등" : "절대 급등",
+          row.lowIntensityEarlySignal ? "저강도 선행 신호" : row.absoluteSurgePassed && row.relativeSurgePassed ? "절대 급등 + 상대 관심도 급등" : row.relativeSurgePassed ? "상대 관심도 급등" : "절대 급등",
+          row.lowIntensityEarlySignal ? "Y" : "N",
           row.absoluteSurgePassed ? "Y" : "N",
           row.relativeSurgePassed ? "Y" : "N",
           row.keyword,
@@ -2799,6 +2840,7 @@
           Math.round(Number(row.peakBaseline || 0)),
           row.peakDate || "",
           signal.relatedBrand || item.brand || "",
+          signal.relatedProductContext || "",
           Number(signal.relatedProductCount || 0),
           (signal.referenceProducts || []).map((entry) => entry.product || entry.brand || "").join(" / "),
           row.riseRate === null ? "" : `${Math.round(row.riseRate)}%`,

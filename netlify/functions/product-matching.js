@@ -1,4 +1,5 @@
 const PRODUCT_TYPES = new Set(["크림", "세럼", "앰플", "에센스", "토너", "로션", "쿠션", "선크림", "클렌저", "클렌징", "샴푸", "트리트먼트", "마스크", "팩", "립", "향수", "파운데이션", "유산균", "비타민", "영양제", "프로틴", "단백질", "쉐이크", "콜라겐", "오메가3", "밴드", "보호대", "탈취제"]);
+const VERIFIED_CONTEXT_PRODUCT_TYPES = new Set([...PRODUCT_TYPES, "립밤", "파우더"]);
 const INGREDIENTS = new Set(["나이아신아마이드", "레티놀", "비타민c", "비타민씨", "pdrn", "히알루론산", "콜라겐", "마그네슘", "유산균", "프로바이오틱스", "프리바이오틱스", "글루타치온", "병풀", "시카", "세라마이드", "판테놀", "비오틴", "아연", "철분", "루테인", "밀크씨슬", "오메가3", "단백질", "베르베린"]);
 const GENERIC_WORDS = new Set(["효과", "효능", "추천", "사용법", "가격", "후기", "기획", "세트", "증정", "단독", "공식", "제품", "상품", "케어", "데일리", "프리미엄", "더블"]);
 
@@ -159,6 +160,21 @@ function detectQueryBrand(keyword, index) {
     .filter((brand) => query.startsWith(brand))
     .sort((a, b) => b.length - a.length)[0] || "";
 }
+
+function detectVerifiedBrandProductContext(keyword, item, index) {
+  const query = compact(keyword);
+  const brand = detectQueryBrand(keyword, index);
+  if (!query || !brand || !query.startsWith(brand) || query === brand) return null;
+  const suffix = query.slice(brand.length);
+  const productTypes = [...VERIFIED_CONTEXT_PRODUCT_TYPES].map(compact).filter((type) => type.length >= 2)
+    .sort((left, right) => right.length - left.length);
+  const productType = productTypes.find((type) => suffix === type) || "";
+  if (!productType) return null;
+  const itemBrand = compact(item?.brand) || compact(matchTokens(item?.product)[0] || "");
+  const product = compact(item?.product);
+  if (itemBrand !== brand || !product.includes(productType)) return null;
+  return { brand, productType, normalizedParts: [brand, productType] };
+}
 function findBestMatch(keyword, items, index) {
   const positionScores = new Map();
   for (const token of indexKeys(keyword)) for (const position of index.get(token) || []) positionScores.set(position, Number(positionScores.get(position) || 0) + 1);
@@ -201,4 +217,5 @@ function findBestMatch(keyword, items, index) {
     additionalMatches: ranked.slice(1, 6).map(({ item, candidate, score, judgment, reason, signals }) => ({ item, candidate, score, judgment, reason, signals })) };
 }
 
-module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, indexKeys, auxiliarySimilarity, evaluateMatch, buildProductIndex, detectQueryBrand, findBestMatch };
+module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, indexKeys, auxiliarySimilarity, evaluateMatch, buildProductIndex,
+  detectQueryBrand, detectVerifiedBrandProductContext, findBestMatch };

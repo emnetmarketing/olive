@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { evaluateMatch, buildProductIndex, findBestMatch } = require("../netlify/functions/product-matching");
+const { evaluateMatch, buildProductIndex, findBestMatch, detectVerifiedBrandProductContext } = require("../netlify/functions/product-matching");
 
 const ingredientSpec = evaluateMatch("나이아신아마이드20", { brand: "더마팩토리", product: "더마팩토리 나이아신아마이드20% 세럼" });
 assert.equal(ingredientSpec.signals.ingredientMatch, true);
@@ -84,4 +84,14 @@ const brandConflictMatch = findBestMatch("오휘선파우더", brandConflictProd
 assert.ok(brandConflictMatch);
 assert.equal(brandConflictMatch.item.brand, "오휘");
 assert.notEqual(brandConflictMatch.item.brand, "식물나라");
+
+const joinedContextProducts = [{ brand: "넘버즈인", product: "넘버즈인 1번 판토텐산스킨케어100 블러파우더", account: "계정1" }];
+const joinedContextIndex = buildProductIndex(joinedContextProducts);
+const joinedContextMatch = findBestMatch("넘버즈인파우더", joinedContextProducts, joinedContextIndex);
+assert.equal(joinedContextMatch.score, 21);
+assert.deepEqual(detectVerifiedBrandProductContext("넘버즈인파우더", joinedContextMatch.item, joinedContextIndex), {
+  brand: "넘버즈인", productType: "파우더", normalizedParts: ["넘버즈인", "파우더"]
+});
+assert.equal(detectVerifiedBrandProductContext("파우더", joinedContextMatch.item, joinedContextIndex), null);
+assert.equal(detectVerifiedBrandProductContext("다른브랜드파우더", joinedContextMatch.item, joinedContextIndex), null);
 console.log("Structured product matching signals and judgments OK");

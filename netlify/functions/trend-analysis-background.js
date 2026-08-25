@@ -1,7 +1,8 @@
 const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
-const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch } = require("./product-matching");
+const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
+  detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
   normalizeKeyword, CALCULATION_VERSION } = require("./surge-history-cache");
 
@@ -10,6 +11,8 @@ const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
 const MAX_ACTIVE_CANDIDATES = 5000;
 const RELATIVE_SURGE_PERCENT = 50;
 const RELATIVE_SURGE_MIN_LIFT = 100;
+const LOW_INTENSITY_SURGE_PERCENT = 20;
+const LOW_INTENSITY_SURGE_MIN_LIFT = 40;
 const CANDIDATE_GROUP_QUOTAS = { new: 1500, highVolume: 1250, recentChange: 1000, priorSurge: 750, domainEvidence: 500 };
 const BUSINESS_DOMAIN_TERMS = [
   "유산균", "프로바이오틱", "프리바이오틱", "콜라겐", "비타민", "영양제", "건강식품", "오메가", "프로틴", "단백질", "단백바", "쉐이크",
@@ -93,6 +96,29 @@ function classifySurgeResult(candidate, match, products, matchThreshold) {
   return { resultType: null, reason: "insufficient_relation_evidence" };
 }
 
+function classifyLowIntensitySignal(candidate, match, products, productIndex, matchThreshold) {
+  if (!match || !["beauty", "health"].includes(candidate?.category)) return null;
+  const normal = classifySurgeResult(candidate, match, products, matchThreshold);
+  if (normal.resultType === "product_match") {
+    return { signalType: "strong_product_match", relatedBrand: match.item?.brand || "",
+      relatedProductContext: (match.signals?.productLineMatches || match.signals?.typeMatches || []).join(" + "),
+      relatedProductCount: Number(match.matchingCandidateCount || 1), referenceProducts: [match.item, ...(match.additionalMatches || []).map((entry) => entry.item)].slice(0, 5),
+      judgment: "상품 직접 매칭 선행 신호", reason: `${match.reason} / 절대 급등 기준 미만이나 초기 관심 상승 감지` };
+  }
+  const context = detectVerifiedBrandProductContext(candidate.keyword, match.item, productIndex);
+  if (!context) return null;
+  const related = products.filter((item) => {
+    const itemBrand = compact(item?.brand) || compact(matchTokens(item?.product)[0] || "");
+    return itemBrand === context.brand && compact(item?.product).includes(context.productType);
+  });
+  if (!related.length) return null;
+  const brandLabel = String(match.item?.brand || matchTokens(match.item?.product)[0] || context.brand);
+  return { signalType: "brand_product_context", relatedBrand: brandLabel, relatedProductContext: context.productType,
+    relatedProductCount: related.length, referenceProducts: related.slice(0, 5),
+    judgment: "브랜드 + 제품군 관련 선행 신호",
+    reason: `브랜드 ${brandLabel} + 제품군 ${context.productType} 확인 / 절대 급등 기준 미만이나 초기 관심 상승 감지` };
+}
+
 function surgePassSignals(metrics, surgeThreshold) {
   const peakDailyLift = Number(metrics?.peakDailyLift ?? metrics?.surgeCount ?? 0);
   const peakBaseline = Number(metrics?.peakDailyBaseline ?? metrics?.baseline ?? 0);
@@ -103,6 +129,9 @@ function surgePassSignals(metrics, surgeThreshold) {
     relativeTrendPassed: peakRelativeLiftPct !== null
       && peakRelativeLiftPct >= RELATIVE_SURGE_PERCENT
       && peakDailyLift >= RELATIVE_SURGE_MIN_LIFT,
+    lowIntensityTrendPassed: peakRelativeLiftPct !== null
+      && peakRelativeLiftPct >= LOW_INTENSITY_SURGE_PERCENT
+      && peakDailyLift >= LOW_INTENSITY_SURGE_MIN_LIFT,
     peakDailyLift,
     peakRelativeLiftPct,
     peakBaseline,
@@ -358,7 +387,8 @@ exports.handler = async (event) => {
       matching: { atLeast30: 0, atLeast40: 0, atLeast50: 0, atLeast60: 0, atLeast70: 0, atLeast80: 0, atLeast90: 0, atUserThreshold: 0 },
       resultClassification: { productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, unrelatedOrInsufficient: 0 },
       relativeSurge: { trendEligible: 0, passedWithDomainEvidence: 0, relativeOnlyAdded: 0,
-        productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, insufficientDomainEvidence: 0 }
+        productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, insufficientDomainEvidence: 0 },
+      lowIntensity: { numericEligible: 0, included: 0, strongProductMatch: 0, brandProductContext: 0, insufficientRelationEvidence: 0 }
     };
     await persist({ message: `검색어트렌드 조회 중 · 0 / ${eligible.length.toLocaleString("ko-KR")}`, totalCandidates: eligible.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: eligible.length,
@@ -448,18 +478,19 @@ exports.handler = async (event) => {
       }
       if (surgeSignals.absoluteSurgePassed) funnel.surge.atUserThreshold += 1;
       if (surgeSignals.relativeTrendPassed) funnel.relativeSurge.trendEligible += 1;
-      if (!surgeSignals.absoluteSurgePassed && !surgeSignals.relativeTrendPassed) continue;
+      if (!surgeSignals.absoluteSurgePassed && !surgeSignals.relativeTrendPassed && !surgeSignals.lowIntensityTrendPassed) continue;
       const match = findBestMatch(candidate.keyword, productCache.items, productIndex);
       const score = Number(match?.score || 0);
-      if (score >= 30) funnel.matching.atLeast30 += 1;
-      if (score >= 40) funnel.matching.atLeast40 += 1;
-      if (score >= 50) funnel.matching.atLeast50 += 1;
-      if (score >= 60) funnel.matching.atLeast60 += 1;
-      if (score >= 70) funnel.matching.atLeast70 += 1;
-      if (score >= 80) funnel.matching.atLeast80 += 1;
-      if (score >= 90) funnel.matching.atLeast90 += 1;
-      if (score >= job.matchThreshold) funnel.matching.atUserThreshold += 1;
-      if (match) matchedDiagnostics.push({ keyword: candidate.keyword, estimatedSurgeCount: Math.round(metrics.surgeCount),
+      const existingNumericSurge = surgeSignals.absoluteSurgePassed || surgeSignals.relativeTrendPassed;
+      if (existingNumericSurge && score >= 30) funnel.matching.atLeast30 += 1;
+      if (existingNumericSurge && score >= 40) funnel.matching.atLeast40 += 1;
+      if (existingNumericSurge && score >= 50) funnel.matching.atLeast50 += 1;
+      if (existingNumericSurge && score >= 60) funnel.matching.atLeast60 += 1;
+      if (existingNumericSurge && score >= 70) funnel.matching.atLeast70 += 1;
+      if (existingNumericSurge && score >= 80) funnel.matching.atLeast80 += 1;
+      if (existingNumericSurge && score >= 90) funnel.matching.atLeast90 += 1;
+      if (existingNumericSurge && score >= job.matchThreshold) funnel.matching.atUserThreshold += 1;
+      if (existingNumericSurge && match) matchedDiagnostics.push({ keyword: candidate.keyword, estimatedSurgeCount: Math.round(metrics.surgeCount),
         matchedProductName: match.item.product, matchScore: match.score, matchJudgment: match.judgment, matchReason: match.reason,
         matchingCandidateCount: match.matchingCandidateCount, additionalMatches: match.additionalMatches,
         matchSignals: match.signals, account: match.item.account, productId: match.item.productId || match.item.id || null });
@@ -476,6 +507,10 @@ exports.handler = async (event) => {
         match, sources: candidate.sources, news: null };
       const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
       const relativeSurgePassed = surgeSignals.relativeTrendPassed && Boolean(classification.resultType);
+      const lowIntensityOnlyEligible = !surgeSignals.absoluteSurgePassed && !relativeSurgePassed && surgeSignals.lowIntensityTrendPassed;
+      if (lowIntensityOnlyEligible) funnel.lowIntensity.numericEligible += 1;
+      const lowIntensitySignal = lowIntensityOnlyEligible
+        ? classifyLowIntensitySignal(candidate, match, productCache.items, productIndex, job.matchThreshold) : null;
       if (surgeSignals.relativeTrendPassed) {
         if (classification.resultType) funnel.relativeSurge.passedWithDomainEvidence += 1;
         else funnel.relativeSurge.insufficientDomainEvidence += 1;
@@ -484,11 +519,22 @@ exports.handler = async (event) => {
         else if (classification.resultType === "domain_related_signal") funnel.relativeSurge.domainRelatedSignal += 1;
         if (!surgeSignals.absoluteSurgePassed && classification.resultType) funnel.relativeSurge.relativeOnlyAdded += 1;
       }
-      if (classification.resultType === "product_match") funnel.resultClassification.productMatch += 1;
-      else if (classification.resultType === "brand_or_category_signal") funnel.resultClassification.brandSignal += 1;
-      else if (classification.resultType === "domain_related_signal") funnel.resultClassification.domainRelatedSignal += 1;
-      else funnel.resultClassification.unrelatedOrInsufficient += 1;
-      if (classification.resultType) rows.push({ ...baseRow, ...surgeSignals, relativeSurgePassed,
+      if (lowIntensityOnlyEligible) {
+        if (lowIntensitySignal) {
+          funnel.lowIntensity.included += 1;
+          if (lowIntensitySignal.signalType === "strong_product_match") funnel.lowIntensity.strongProductMatch += 1;
+          else funnel.lowIntensity.brandProductContext += 1;
+        } else funnel.lowIntensity.insufficientRelationEvidence += 1;
+      }
+      if (!lowIntensityOnlyEligible) {
+        if (classification.resultType === "product_match") funnel.resultClassification.productMatch += 1;
+        else if (classification.resultType === "brand_or_category_signal") funnel.resultClassification.brandSignal += 1;
+        else if (classification.resultType === "domain_related_signal") funnel.resultClassification.domainRelatedSignal += 1;
+        else funnel.resultClassification.unrelatedOrInsufficient += 1;
+      }
+      if (lowIntensitySignal) rows.push({ ...baseRow, ...surgeSignals, relativeSurgePassed: false, lowIntensityEarlySignal: true,
+        surgeSignalType: "low_intensity", resultType: "low_intensity_early_signal", relatedSignal: lowIntensitySignal });
+      else if (classification.resultType && !lowIntensityOnlyEligible) rows.push({ ...baseRow, ...surgeSignals, relativeSurgePassed,
         surgeSignalType: surgeSignals.absoluteSurgePassed && relativeSurgePassed ? "absolute_and_relative"
           : relativeSurgePassed ? "relative" : "absolute",
         resultType: classification.resultType, relatedSignal: classification.relatedSignal || null });
@@ -535,6 +581,7 @@ exports.handler = async (event) => {
       productMatchResultCount: rows.filter((row) => row.resultType === "product_match").length,
       brandCategorySignalCount: rows.filter((row) => row.resultType === "brand_or_category_signal").length,
       domainRelatedSignalCount: rows.filter((row) => row.resultType === "domain_related_signal").length,
+      lowIntensityEarlySignalCount: rows.filter((row) => row.resultType === "low_intensity_early_signal").length,
       results: rows, errors: [],
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, boundary200To299: {
         total: funnel.surge.from200To299, relatedCount: boundaryRelated.length, items: boundaryRelated.slice().sort((a, b) => b.estimatedSurgeCount - a.estimatedSurgeCount).slice(0, 100) },
@@ -548,5 +595,5 @@ exports.handler = async (event) => {
 };
 
 exports._test = { estimate, periodMetrics, instantMetrics, surgePassSignals, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
-  evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, hasBusinessDomainEvidence, productBrandToken,
+  evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, classifyLowIntensitySignal, hasBusinessDomainEvidence, productBrandToken,
   median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };
