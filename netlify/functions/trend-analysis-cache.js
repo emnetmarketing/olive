@@ -3,6 +3,7 @@ const { connectLambda, getStore } = require("@netlify/blobs");
 
 const STORE = "trend-analysis";
 const CURRENT_JOB_KEY = "current-job/v1";
+const DIAGNOSTIC_INDEX_KEY = "diagnostics/latest-v1";
 const STALE_JOB_MS = 12 * 60 * 1000;
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
@@ -22,6 +23,8 @@ async function readLastSuccess(mode = "latest") {
   const job = await readJob(pointer.jobId);
   return job?.state === "completed" ? job : null;
 }
+async function writeDiagnosticIndex(value) { await store().setJSON(DIAGNOSTIC_INDEX_KEY, value); return value; }
+async function readDiagnosticIndex() { return store().get(DIAGNOSTIC_INDEX_KEY, { type: "json" }).catch(() => null); }
 
 async function createJob(input) {
   const now = new Date().toISOString();
@@ -60,4 +63,5 @@ async function acquireJob(input) {
   return { job, existing: false };
 }
 
-module.exports = { connect, store, readJob, writeJob, createJob, acquireJob, readCurrentJob, writeLastSuccess, readLastSuccess, lastSuccessKeys, CURRENT_JOB_KEY, STALE_JOB_MS };
+module.exports = { connect, store, readJob, writeJob, createJob, acquireJob, readCurrentJob, writeLastSuccess, readLastSuccess,
+  writeDiagnosticIndex, readDiagnosticIndex, lastSuccessKeys, CURRENT_JOB_KEY, DIAGNOSTIC_INDEX_KEY, STALE_JOB_MS };

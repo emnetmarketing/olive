@@ -1,10 +1,11 @@
-const { connect, readCache, writeCache, readStatus, writeStatus, readTrustedChannels } = require("./market-discovery-cache");
+const { connect, readCache, writeCache, readStatus, writeStatus, readTrustedChannels, writeYoutubeSnapshot } = require("./market-discovery-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { accounts, searchAdGet } = require("./search-ad-cache");
 const { YOUTUBE_SEEDS, productCandidates, youtubeCandidates, mergeCandidates, discoveryPriority, normalizedKeyword } = require("./market-discovery-core");
 
-const PRODUCT_BATCH = 2500; const MAX_CACHE = 5000; const MAX_KEYWORDTOOL_BACKFILL = 250; const MAX_SEARCH_CALLS_PER_DAY = 90;
+const PRODUCT_BATCH = 2500; const MAX_CACHE = 5000; const MAX_PRODUCT_CANDIDATES = 15000;
+const MAX_KEYWORDTOOL_BACKFILL = 750; const MAX_SEARCH_CALLS_PER_DAY = 90;
 function seoulDay() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()); }
 function chunks(values, size) { const output = []; for (let i = 0; i < values.length; i += size) output.push(values.slice(i, i + size)); return output; }
 function toolRows(payload) { if (Array.isArray(payload)) return payload; for (const key of ["keywordList", "relKwdStat", "items", "results"]) if (Array.isArray(payload?.[key])) return payload[key]; return []; }
@@ -41,7 +42,21 @@ async function collectYoutube(previousStatus, products, trustedChannels) {
     for (const item of payload.items || []) { const video = videos.get(item.id); if (video) video.statistics = { viewCount: Number(item.statistics?.viewCount || 0),
       likeCount: Number(item.statistics?.likeCount || 0), commentCount: Number(item.statistics?.commentCount || 0) }; }
   }
-  return { items: youtubeCandidates(videoList, products), videos: videoList.length, counters, quotaDate: today };
+  return { items: youtubeCandidates(videoList, products), videos: videoList.length, videoItems: videoList, counters, quotaDate: today };
+}
+function prioritizedKeywordtoolBackfill(items, limit = MAX_KEYWORDTOOL_BACKFILL) {
+  const pending = (items || []).filter((item) => !item.monthlySearchStatus || ["not-requested", "request-failed"].includes(item.monthlySearchStatus));
+  const scoreSort = (a, b) => discoveryPriority(b) - discoveryPriority(a);
+  const groups = [pending.slice().sort(scoreSort).slice(0, 400),
+    pending.filter((item) => item.discoverySource?.includes("youtube")).sort(scoreSort).slice(0, 200),
+    pending.filter((item) => item.relatedBrand && (item.relatedProductType || item.relatedProductLine)).sort(scoreSort).slice(0, 300),
+    pending.filter((item) => item.discoverySource?.includes("searchad-new-query")).sort(scoreSort).slice(0, 200)];
+  const selected = []; const keys = new Set();
+  for (const item of groups.flat()) { if (selected.length >= limit) break; if (keys.has(item.normalizedKeyword)) continue; keys.add(item.normalizedKeyword); selected.push(item); }
+  if (selected.length < limit) for (const item of pending.slice().sort(scoreSort)) {
+    if (selected.length >= limit) break; if (keys.has(item.normalizedKeyword)) continue; keys.add(item.normalizedKeyword); selected.push(item);
+  }
+  return selected;
 }
 exports.handler = async (event) => {
   connect(event); let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
@@ -50,10 +65,10 @@ exports.handler = async (event) => {
   try {
     const [previous, productCache, candidateCache, trustedChannels] = await Promise.all([readCache(), readProductCache(), readCandidateCache(), readTrustedChannels()]);
     if (!productCache?.items?.length) throw new Error("Search Ad 상품 캐시가 없습니다.");
-    const previousItems = previous?.items || []; const cursor = Number(previous?.productBackfill?.cursor || 0);
-    const batchProducts = productCache.items.slice(cursor, cursor + PRODUCT_BATCH); const nextCursor = cursor + batchProducts.length >= productCache.items.length ? 0 : cursor + batchProducts.length;
-    await persist({ message: `상품 기반 후보 생성 중 · ${Math.min(cursor + batchProducts.length, productCache.items.length).toLocaleString("ko-KR")} / ${productCache.items.length.toLocaleString("ko-KR")}` });
-    const productItems = productCandidates(batchProducts, { brandProducts: productCache.items }).map((item) => ({ ...item, discoverySource: ["product-cache"] }));
+    const previousItems = previous?.items || [];
+    await persist({ message: `상품 기반 후보 생성 중 · ${productCache.items.length.toLocaleString("ko-KR")} / ${productCache.items.length.toLocaleString("ko-KR")}` });
+    const productItems = productCandidates(productCache.items, { brandProducts: productCache.items, limit: MAX_PRODUCT_CANDIDATES })
+      .map((item) => ({ ...item, discoverySource: ["product-cache"] }));
     const searchAdItems = (candidateCache?.candidates || []).filter((item) => item.isNewSearchQuery && item.sources?.includes("searchad-query")).map((item) => ({
       keyword: item.keyword, normalizedKeyword: normalizedKeyword(item.keyword), discoverySource: ["searchad-new-query"], sourceConfidence: 82,
       relatedBrand: "", relatedProductType: "", relatedProductLine: "", category: item.category, categoryEvidence: item.categoryEvidence,
@@ -63,7 +78,7 @@ exports.handler = async (event) => {
     const previousYoutubeStatus = { youtubeQuotaDate: previous?.youtube?.quotaDate || status.youtubeQuotaDate,
       youtubeSearchCallsToday: previous?.youtube?.searchCallsToday ?? status.youtubeSearchCallsToday,
       youtubeApiCallsToday: previous?.youtube?.apiCallsToday ?? status.youtubeApiCallsToday };
-    let youtube = { items: [], videos: 0, counters: {
+    let youtube = { items: [], videos: 0, videoItems: [], counters: {
       search: previousYoutubeStatus.youtubeQuotaDate === seoulDay() ? Number(previousYoutubeStatus.youtubeSearchCallsToday || 0) : 0,
       api: previousYoutubeStatus.youtubeQuotaDate === seoulDay() ? Number(previousYoutubeStatus.youtubeApiCallsToday || 0) : 0,
     }, quotaDate: seoulDay(), reused: true };
@@ -71,9 +86,10 @@ exports.handler = async (event) => {
       if (String(process.env.YOUTUBE_API_KEY || "").trim()) youtube = await collectYoutube(previousYoutubeStatus, productCache.items, trustedChannels);
       else errors.push("YOUTUBE_API_KEY 미설정 · 기존 소스로 계속 진행");
     } catch (error) { errors.push(error.message); }
+    if (!youtube.reused && youtube.videoItems?.length) await writeYoutubeSnapshot({ version: 1, refreshedAt: new Date().toISOString(), items: youtube.videoItems });
     let items = mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]);
     const metrics = { apiCalls: 0, retries: 0 }; const toolAccount = accounts().find((item) => item.apiKey && item.secretKey && item.customerId);
-    const backfill = items.filter((item) => item.monthlySearchStatus !== "available").sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_KEYWORDTOOL_BACKFILL);
+    const backfill = prioritizedKeywordtoolBackfill(items);
     const applyKeywordtoolRow = (item, row) => {
       const pc = numericVolume(row?.monthlyPcQcCnt), mobile = numericVolume(row?.monthlyMobileQcCnt);
       item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = pc !== null && mobile !== null ? "available" : "keywordtool-unavailable";
@@ -97,7 +113,8 @@ exports.handler = async (event) => {
       }
     }
     items = items.filter((item) => Date.now() - Date.parse(item.lastSeenAt || item.discoveredAt || 0) <= 45 * 86400000)
-      .sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_CACHE);
+      .sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_CACHE)
+      .map((item, index) => ({ ...item, marketDiscoveryRank: index + 1 }));
     const refreshedAt = new Date().toISOString(); const sourceCount = (source) => items.filter((item) => item.discoverySource?.includes(source)).length;
     const ratioOnlyCandidateCount = items.filter((item) => item.monthlySearchStatus === "keywordtool-unavailable" && item.sourceConfidence >= 75
       && (item.discoverySource?.length > 1 || item.discoverySource?.includes("searchad-new-query") || item.relatedBrand && (item.relatedProductType || item.relatedProductLine))).length;
@@ -106,7 +123,7 @@ exports.handler = async (event) => {
         unavailable: items.filter((item) => item.monthlySearchStatus === "keywordtool-unavailable").length,
         notRequested: items.filter((item) => !item.monthlySearchStatus || item.monthlySearchStatus === "not-requested").length,
         requestFailed: items.filter((item) => item.monthlySearchStatus === "request-failed").length }, ratioOnlyCandidateCount,
-      productBackfill: { cursor: nextCursor, processedThisRun: batchProducts.length, total: productCache.items.length, completeCycle: nextCursor === 0 },
+      productBackfill: { cursor: productCache.items.length, processedThisRun: productCache.items.length, total: productCache.items.length, completeCycle: true },
       youtube: { enabled: Boolean(String(process.env.YOUTUBE_API_KEY || "").trim()), quotaDate: youtube.quotaDate,
         searchCallsToday: youtube.counters.search, apiCallsToday: youtube.counters.api,
         remainingSearchQuotaEstimate: Math.max(0, 100 - youtube.counters.search), collectedVideos: youtube.videos, generatedCandidates: youtube.items.length,
@@ -121,4 +138,5 @@ exports.handler = async (event) => {
   } catch (error) { await persist({ state: "failed", message: "신규 시장 후보 수집 실패 · 마지막 정상 캐시 유지", failedAt: new Date().toISOString(), durationMs: Date.now() - started, errors: [error.message, ...errors].slice(0, 20) }); }
 };
 
-exports._test = { collectYoutube, numericVolume, toolRows, PRODUCT_BATCH, MAX_CACHE, MAX_KEYWORDTOOL_BACKFILL };
+exports._test = { collectYoutube, numericVolume, toolRows, prioritizedKeywordtoolBackfill,
+  PRODUCT_BATCH, MAX_CACHE, MAX_PRODUCT_CANDIDATES, MAX_KEYWORDTOOL_BACKFILL };

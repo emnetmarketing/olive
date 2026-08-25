@@ -1,4 +1,4 @@
-const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess } = require("./trend-analysis-cache");
+const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess, writeDiagnosticIndex } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readMarketDiscoveryCache } = require("./market-discovery-cache");
 const { discoveryPriority } = require("./market-discovery-core");
@@ -451,6 +451,13 @@ exports.handler = async (event) => {
       lowIntensity: { numericEligible: 0, included: 0, strongProductMatch: 0, brandProductContext: 0, insufficientRelationEvidence: 0 }
     };
     const trendCandidates = [...eligible, ...ratioOnlyCandidates];
+    const ratioOnlyKeys = new Set(ratioOnlyCandidates.map((item) => normalizeKeyword(item.keyword)));
+    const analysisTrace = new Map(trendCandidates.map((candidate) => [normalizeKeyword(candidate.keyword), {
+      keyword: candidate.keyword, normalizedKeyword: normalizeKeyword(candidate.keyword), selectedForAnalysis: true,
+      selectedForProtectedSlot: Boolean(candidate.marketDiscovery), selectionType: ratioOnlyKeys.has(normalizeKeyword(candidate.keyword)) ? "ratio-only" : "monthly-search",
+      monthlySearchStatus: candidate.monthlyVolumeStatus, monthlyTotalSearches: candidate.monthlyTotalSearches,
+      searchTrendRequested: true, searchTrendStatus: "pending", marketDiscovery: Boolean(candidate.marketDiscovery)
+    }]));
     await persist({ message: `검색어트렌드 조회 중 · 0 / ${trendCandidates.length.toLocaleString("ko-KR")}`, totalCandidates: trendCandidates.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: trendCandidates.length,
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30: [], matchTop30: [], calculationSamples: [] } });
@@ -504,8 +511,10 @@ exports.handler = async (event) => {
         });
       }
       const trendData = trendMap.get(candidate.keyword);
-      if (!Array.isArray(trendData) || !trendData.length) { funnel.searchTrend.emptySeries += 1; continue; }
+      const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
+      if (!Array.isArray(trendData) || !trendData.length) { funnel.searchTrend.emptySeries += 1; if (trace) trace.searchTrendStatus = "empty"; continue; }
       funnel.searchTrend.validSeries += 1;
+      if (trace) trace.searchTrendStatus = "valid";
       const queryDays = Math.round((Date.parse(`${job.endDate}T00:00:00Z`) - Date.parse(`${job.queryStartDate}T00:00:00Z`)) / 86400000) + 1;
       const series = estimate(
         trendData,
@@ -516,6 +525,11 @@ exports.handler = async (event) => {
       if (!series.length) { funnel.searchTrend.emptySeries += 1; funnel.searchTrend.validSeries -= 1; continue; }
       const metrics = job.mode === "instant" ? instantMetrics(series) : periodMetrics(series, job.startDate, job.endDate);
       const surgeSignals = surgePassSignals(metrics, job.surgeThreshold);
+      if (trace) Object.assign(trace, { latestDataDate: metrics.latestPeriod, estimatedSurgeCount: Math.round(metrics.surgeCount),
+        peakDailyLift: Math.round(metrics.peakDailyLift || metrics.peakLift), peakRelativeLiftPct: metrics.peakRelativeLiftPct,
+        peakBaseline: metrics.peakBaseline, peakEstimatedSearches: metrics.peakEstimatedSearches, peakDate: metrics.peakDailyDate,
+        absoluteSurgePassed: surgeSignals.absoluteSurgePassed, relativeSurgePassed: surgeSignals.relativeTrendPassed,
+        lowIntensityTrendPassed: surgeSignals.lowIntensityTrendPassed });
       const diagnosticRow = surgeDiagnostic(candidate, metrics, series);
       calculated.push({ candidate, metrics, diagnosticRow });
       if (metrics.surgeCount > 0) funnel.surge.positive += 1;
@@ -602,8 +616,12 @@ exports.handler = async (event) => {
     }
     for (const candidate of ratioOnlyCandidates) {
       const trendData = trendMap.get(candidate.keyword);
-      if (!Array.isArray(trendData) || !trendData.length) { funnel.searchTrend.emptySeries += 1; continue; }
+      const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
+      if (!Array.isArray(trendData) || !trendData.length) { funnel.searchTrend.emptySeries += 1; if (trace) trace.searchTrendStatus = "empty"; continue; }
       const ratioMetrics = ratioOnlyMetrics(trendData, job.startDate, job.endDate);
+      if (trace) Object.assign(trace, { searchTrendStatus: "valid", ratioOnly: true, ratioPeak: ratioMetrics.ratioPeak,
+        ratioBaseline: ratioMetrics.ratioBaseline, relativeRatioLift: ratioMetrics.relativeRatioLift,
+        peakDate: ratioMetrics.peakDate, latestRatio: ratioMetrics.latestRatio });
       if (ratioMetrics.relativeRatioLift === null || ratioMetrics.relativeRatioLift < RELATIVE_SURGE_PERCENT) continue;
       const match = findBestMatch(candidate.keyword, productCache.items, productIndex);
       const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
@@ -659,6 +677,17 @@ exports.handler = async (event) => {
     }));
     newsResults.forEach((result) => { if (result.status === "fulfilled") { const row = rows.find((item) => item.keyword === result.value.keyword); if (row) row.news = result.value; } });
     const latestDataDate = [...trendMap.values()].flatMap((data) => (data || []).map((point) => point.period)).filter(Boolean).sort().at(-1) || null;
+    const resultByKeyword = new Map(rows.map((row) => [normalizeKeyword(row.keyword), row]));
+    for (const trace of analysisTrace.values()) {
+      const result = resultByKeyword.get(trace.normalizedKeyword);
+      trace.finalIncluded = Boolean(result); trace.resultType = result?.resultType || null;
+      trace.exclusionReason = result ? null : trace.searchTrendStatus === "empty" ? "Search Trend 시계열 없음"
+        : trace.ratioOnly && Number(trace.relativeRatioLift || 0) < RELATIVE_SURGE_PERCENT ? "ratio-only 상대 변화 기준 미달"
+          : !trace.ratioOnly && !trace.absoluteSurgePassed && !trace.relativeSurgePassed && !trace.lowIntensityTrendPassed ? "급등 수치 조건 미달"
+            : "상품·브랜드·도메인 관련 근거 부족";
+    }
+    await writeDiagnosticIndex({ version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
+      latestDataDate, completedAt: new Date().toISOString(), items: [...analysisTrace.values()] });
     await analysisStore().setJSON("signals/current", { updatedAt: new Date().toISOString(), mode: job.mode,
       items: calculated.map((entry) => ({ keyword: entry.candidate.keyword, estimatedSurgeCount: Math.round(entry.metrics.surgeCount),
         endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });

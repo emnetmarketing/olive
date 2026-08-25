@@ -1541,6 +1541,14 @@
           <strong>신규 시장 후보 (marketDiscovery)</strong><br>
           <span id="marketDiscoverySummary">신규 시장 후보 상태를 확인하는 중입니다.</span><br>
           <span id="marketDiscoveryProgress" class="muted"></span>
+          <div id="marketDiscoveryDiagnostic" style="display:none;margin-top:12px;">
+            <strong>시장 후보 검색</strong>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+              <input id="marketDiscoveryKeyword" type="text" placeholder="검색어 입력" style="min-width:220px;flex:1;">
+              <button id="marketDiscoverySearchBtn" class="secondary" type="button">검색</button>
+            </div>
+            <pre id="marketDiscoveryDiagnosticResult" style="max-height:360px;overflow:auto;white-space:pre-wrap;font-size:12px;margin-top:8px;"></pre>
+          </div>
         </div>
         <div id="analysisProgressPanel" class="api-errors" style="margin-bottom:16px;">
           <strong>분석 진행 상태</strong><br><span id="analysisProgressText"></span>
@@ -1944,6 +1952,7 @@
       $("permissionNote").style.display = editable ? "none" : "block";
       $("adminAccessCard").style.display = master ? "block" : "none";
       if ($("headerAccessBtn")) $("headerAccessBtn").style.display = master ? "inline-flex" : "none";
+      if ($("marketDiscoveryDiagnostic")) $("marketDiscoveryDiagnostic").style.display = editable ? "block" : "none";
 
       const editableIds = [
         "surgeThreshold", "matchThreshold",
@@ -2599,7 +2608,7 @@
     function renderMarketDiscoveryStatus(payload) {
       const cache = payload.cache || {}; const status = payload.status || {}; const running = status.state === "running";
       $("marketDiscoverySummary").textContent = payload.cacheExists
-        ? `후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · YouTube ${Number(cache.sourceCounts?.youtube || 0).toLocaleString("ko-KR")}건 · 상품 ${Number(cache.sourceCounts?.productCache || 0).toLocaleString("ko-KR")}건 · 신규 유입 ${Number(cache.sourceCounts?.searchAdNewQuery || 0).toLocaleString("ko-KR")}건 · ratio-only ${Number(cache.ratioOnlyCandidateCount || 0).toLocaleString("ko-KR")}건 · 마지막 갱신 ${cache.refreshedAt ? new Date(cache.refreshedAt).toLocaleString("ko-KR") : "-"}`
+        ? `후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · YouTube ${Number(cache.sourceCounts?.youtube || 0).toLocaleString("ko-KR")}건 · 상품 ${Number(cache.sourceCounts?.productCache || 0).toLocaleString("ko-KR")}건 · 신규 유입 ${Number(cache.sourceCounts?.searchAdNewQuery || 0).toLocaleString("ko-KR")}건 · 월간검색량 ${Number(cache.monthlyVolumeCounts?.available || 0).toLocaleString("ko-KR")}건 / 미조회 ${Number(cache.monthlyVolumeCounts?.notRequested || 0).toLocaleString("ko-KR")}건 · ratio-only ${Number(cache.ratioOnlyCandidateCount || 0).toLocaleString("ko-KR")}건 · 마지막 갱신 ${cache.refreshedAt ? new Date(cache.refreshedAt).toLocaleString("ko-KR") : "-"}`
         : "신규 시장 후보 캐시가 아직 없습니다.";
       const youtube = cache.youtube || {};
       $("marketDiscoveryProgress").textContent = running ? status.message || "신규 시장 후보 수집 중"
@@ -2619,6 +2628,17 @@
       try { const response = await fetch("/.netlify/functions/market-discovery-refresh", { method: "POST" }); const payload = await response.json().catch(() => ({}));
         if (response.status !== 409 && !response.ok) throw new Error(payload.error || `HTTP ${response.status}`); await loadMarketDiscoveryStatus();
       } catch (error) { $("marketDiscoveryProgress").textContent = `신규 시장 후보 수집 시작 실패: ${error.message}`; $("refreshMarketDiscoveryBtn").disabled = !canEdit(); }
+    }
+    async function searchMarketDiscovery() {
+      if (!requireEdit("시장 후보 검색")) return;
+      const keyword = $("marketDiscoveryKeyword").value.trim(); if (!keyword) return;
+      $("marketDiscoverySearchBtn").disabled = true; $("marketDiscoveryDiagnosticResult").textContent = "진단 중입니다.";
+      try {
+        const response = await fetch(`/.netlify/functions/market-discovery-diagnostic?keyword=${encodeURIComponent(keyword)}`, { cache: "no-store" });
+        const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        $("marketDiscoveryDiagnosticResult").textContent = JSON.stringify(payload, null, 2);
+      } catch (error) { $("marketDiscoveryDiagnosticResult").textContent = `시장 후보 진단 실패: ${error.message}`; }
+      finally { $("marketDiscoverySearchBtn").disabled = false; }
     }
 
     function render(counts, results, surgeRows = [], completedAt = null) {
@@ -3273,6 +3293,8 @@
     bindEvent("refreshSearchAdBtn", "click", refreshSearchAdProducts);
     bindEvent("refreshCandidatesBtn", "click", refreshKeywordCandidates);
     bindEvent("refreshMarketDiscoveryBtn", "click", refreshMarketDiscovery);
+    bindEvent("marketDiscoverySearchBtn", "click", searchMarketDiscovery);
+    bindEvent("marketDiscoveryKeyword", "keydown", (event) => { if (event.key === "Enter") searchMarketDiscovery(); });
     bindEvent("scheduleBtn", "click", toggleSchedulePanel);
     bindEvent("startScheduleBtn", "click", startScheduledCollection);
     bindEvent("stopScheduleBtn", "click", () => stopScheduledCollection(true));

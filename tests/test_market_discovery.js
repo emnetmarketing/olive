@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const core = require("../netlify/functions/market-discovery-core");
 const { _test: analysis } = require("../netlify/functions/trend-analysis-background");
+const { _test: refresh } = require("../netlify/functions/market-discovery-refresh-background");
+const { _test: diagnostic } = require("../netlify/functions/market-discovery-diagnostic");
 
 const products = [
   { product: "넘버즈인 1번 판토텐산스킨케어100 블러 파우더", adGroupId: "n1" },
@@ -30,6 +32,20 @@ test("youtube extraction merges repeated brand/product evidence", () => {
   assert.equal(target.youtubeEvidence.length, 2);
   assert.equal(target.evidence[0].videoCount, 2);
   assert.equal(target.evidence[0].channelCount, 2);
+});
+
+test("youtube extraction preserves a repeated compound product expression", () => {
+  const heraProducts = [
+    { product: "헤라 블랙 쿠션", brand: "헤라", adGroupId: "h1" },
+    { product: "헤라 UV 쿠션", brand: "헤라", adGroupId: "h2" },
+  ];
+  const items = core.youtubeCandidates([{ videoId: "h-video", channelId: "hc", title: "헤라 블랙쿠션 NEW 컬러 후기", description: "",
+    publishedAt: new Date().toISOString() }], heraProducts);
+  const target = items.find((item) => item.normalizedKeyword === "헤라블랙쿠션");
+  assert.ok(target);
+  assert.equal(target.relatedBrand, "헤라");
+  assert.equal(target.relatedProductType, "쿠션");
+  assert.equal(target.relatedProductLine, "블랙");
 });
 
 test("multi-source candidates merge without resetting first discovery", () => {
@@ -87,6 +103,31 @@ test("unused market slots are fully returned to existing candidates", () => {
   const selected = analysis.selectWithMarketDiscovery(base, [], new Map(), 100, 500);
   assert.equal(selected.selected.length, 100);
   assert.equal(selected.ratioOnly.length, 0);
+});
+
+test("keywordtool backfill protects source diversity before generic backlog", () => {
+  const common = { monthlySearchStatus: "not-requested", discoveredAt: "2026-08-25T00:00:00.000Z", sourceConfidence: 60 };
+  const items = [
+    ...Array.from({ length: 500 }, (_, i) => ({ ...common, keyword: `일반${i}`, normalizedKeyword: `일반${i}`, discoverySource: ["product-cache"] })),
+    { ...common, keyword: "유튜브후보", normalizedKeyword: "유튜브후보", discoverySource: ["youtube"], sourceConfidence: 80 },
+    { ...common, keyword: "브랜드크림", normalizedKeyword: "브랜드크림", discoverySource: ["product-cache"], relatedBrand: "브랜드", relatedProductType: "크림" },
+    { ...common, keyword: "신규유입", normalizedKeyword: "신규유입", discoverySource: ["searchad-new-query"] },
+  ];
+  const selected = refresh.prioritizedKeywordtoolBackfill(items, 50);
+  const keys = new Set(selected.map((item) => item.normalizedKeyword));
+  assert.ok(keys.has("유튜브후보")); assert.ok(keys.has("브랜드크림")); assert.ok(keys.has("신규유입"));
+});
+
+test("diagnostic protected selection matches monthly and ratio-only rules", () => {
+  const items = [
+    { keyword: "월간후보", normalizedKeyword: "월간후보", discoverySource: ["product-cache"], sourceConfidence: 70,
+      discoveredAt: "2026-08-25T00:00:00.000Z", monthlySearchStatus: "available", monthlyTotalSearches: 100 },
+    { keyword: "비율후보", normalizedKeyword: "비율후보", discoverySource: ["product-cache", "youtube"], sourceConfidence: 85,
+      discoveredAt: "2026-08-25T00:00:00.000Z", monthlySearchStatus: "keywordtool-unavailable", relatedBrand: "브랜드", relatedProductType: "크림" },
+    { keyword: "미조회", normalizedKeyword: "미조회", discoverySource: ["youtube"], sourceConfidence: 90,
+      discoveredAt: "2026-08-25T00:00:00.000Z", monthlySearchStatus: "not-requested" },
+  ];
+  assert.deepEqual(new Set(diagnostic.protectedSelection(items).map((item) => item.keyword)), new Set(["월간후보", "비율후보"]));
 });
 
 test("ambiguous single terms are not promoted by an unrelated cosmetic product", () => {

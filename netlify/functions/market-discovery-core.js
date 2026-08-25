@@ -1,7 +1,8 @@
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens } = require("./product-matching");
 
 const YOUTUBE_SEEDS = Object.freeze([
-  "올리브영", "화장품 추천", "신상 화장품", "신상 스킨케어", "신상 립",
+  "올리브영", "뷰티", "메이크업", "헤어", "추천템", "신상", "신제품",
+  "화장품 추천", "신상 화장품", "신상 스킨케어", "신상 립",
   "립 추천", "쿠션 추천", "파운데이션 추천", "선크림 추천", "클렌저 추천",
   "아이크림 추천", "헤어제품 추천", "다이어트 추천", "영양제 추천", "건강기능식품",
   "유산균 추천", "비타민 추천", "피부관리", "뷰티 신제품", "화장품 신제품"
@@ -100,7 +101,7 @@ function youtubeCandidates(videos, products) {
   for (const video of videos || []) {
     const title = normalizeText(video.title); const description = normalizeText(video.description).slice(0, 500);
     const titleTokens = cleanTokens(title); const allText = `${title} ${description}`;
-    for (const type of VERIFIED_TYPES) {
+    for (const type of VERIFIED_TYPES.slice().sort((a, b) => compact(b).length - compact(a).length)) {
       const typeCompact = compact(type); if (!compact(allText).includes(typeCompact)) continue;
       for (let index = 0; index < titleTokens.length; index += 1) {
         const token = compact(titleTokens[index]); const joined = compact(`${titleTokens[index]}${titleTokens[index + 1] || ""}`);
@@ -108,7 +109,16 @@ function youtubeCandidates(videos, products) {
         if (!brand && index < titleTokens.length - 1 && compact(titleTokens[index + 1]).includes(typeCompact)
           && token.length >= 2 && token.length <= 15 && !GENERIC_BRAND.has(token)) brand = token;
         if (!brand || !compact(title).includes(brand) || !compact(title).includes(typeCompact)) continue;
-        record(`${brand}${type}`, video, { brand, productType: type, titleHit: true, descriptionHit: compact(description).includes(brand + typeCompact) });
+        const following = compact(titleTokens[index + 1] || "");
+        const preceding = compact(titleTokens[index - 1] || "");
+        let productExpression = typeCompact; let productLine = "";
+        if (following.includes(typeCompact) && following.length > typeCompact.length) {
+          productExpression = following; productLine = following.replace(typeCompact, "");
+        } else if (preceding.includes(typeCompact) && preceding.length > typeCompact.length) {
+          productExpression = preceding; productLine = preceding.replace(typeCompact, "");
+        }
+        record(`${brand}${productExpression}`, video, { brand, productType: type, productLine,
+          titleHit: true, descriptionHit: compact(description).includes(brand + productExpression) });
       }
     }
   }
