@@ -2,7 +2,7 @@ const { connect, readCache, writeCache, readStatus, writeStatus, readTrustedChan
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { accounts, searchAdGet } = require("./search-ad-cache");
-const { YOUTUBE_SEEDS, productCandidates, youtubeCandidates, mergeCandidates, discoveryPriority, normalizedKeyword } = require("./market-discovery-core");
+const { YOUTUBE_SEEDS, productCandidates, youtubeCandidates, mergeCandidates, discoveryPriority, selectMarketCacheItems, normalizedKeyword } = require("./market-discovery-core");
 
 const PRODUCT_BATCH = 2500; const MAX_CACHE = 5000; const MAX_PRODUCT_CANDIDATES = 15000;
 const MAX_KEYWORDTOOL_BACKFILL = 750; const MAX_SEARCH_CALLS_PER_DAY = 90;
@@ -87,7 +87,7 @@ exports.handler = async (event) => {
       else errors.push("YOUTUBE_API_KEY 미설정 · 기존 소스로 계속 진행");
     } catch (error) { errors.push(error.message); }
     if (!youtube.reused && youtube.videoItems?.length) await writeYoutubeSnapshot({ version: 1, refreshedAt: new Date().toISOString(), items: youtube.videoItems });
-    let items = mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]);
+    let items = selectMarketCacheItems(mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]), MAX_CACHE);
     const metrics = { apiCalls: 0, retries: 0 }; const toolAccount = accounts().find((item) => item.apiKey && item.secretKey && item.customerId);
     const backfill = prioritizedKeywordtoolBackfill(items);
     const applyKeywordtoolRow = (item, row) => {
@@ -112,8 +112,7 @@ exports.handler = async (event) => {
         } });
       }
     }
-    items = items.filter((item) => Date.now() - Date.parse(item.lastSeenAt || item.discoveredAt || 0) <= 45 * 86400000)
-      .sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_CACHE)
+    items = selectMarketCacheItems(items.filter((item) => Date.now() - Date.parse(item.lastSeenAt || item.discoveredAt || 0) <= 45 * 86400000), MAX_CACHE)
       .map((item, index) => ({ ...item, marketDiscoveryRank: index + 1 }));
     const refreshedAt = new Date().toISOString(); const sourceCount = (source) => items.filter((item) => item.discoverySource?.includes(source)).length;
     const ratioOnlyCandidateCount = items.filter((item) => item.monthlySearchStatus === "keywordtool-unavailable" && item.sourceConfidence >= 75

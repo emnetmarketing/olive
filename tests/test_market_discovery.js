@@ -48,6 +48,11 @@ test("youtube extraction preserves a repeated compound product expression", () =
   assert.equal(target.relatedProductLine, "블랙");
 });
 
+test("youtube normalization composes decomposed Korean text", () => {
+  const decomposed = "헤라 블랙쿠션".normalize("NFD");
+  assert.equal(core.normalizedKeyword(decomposed), "헤라블랙쿠션");
+});
+
 test("multi-source candidates merge without resetting first discovery", () => {
   const old = { keyword: "마데카크림", normalizedKeyword: "마데카크림", discoverySource: ["product-cache"], discoveredAt: "2026-08-20T00:00:00.000Z", sourceConfidence: 70, evidence: [] };
   const fresh = { keyword: "마데카 크림", normalizedKeyword: "마데카크림", discoverySource: ["youtube"], sourceConfidence: 80, evidence: [] };
@@ -116,6 +121,16 @@ test("keywordtool backfill protects source diversity before generic backlog", ()
   const selected = refresh.prioritizedKeywordtoolBackfill(items, 50);
   const keys = new Set(selected.map((item) => item.normalizedKeyword));
   assert.ok(keys.has("유튜브후보")); assert.ok(keys.has("브랜드크림")); assert.ok(keys.has("신규유입"));
+});
+
+test("market cache selection prevents one brand from crowding out product contexts", () => {
+  const crowded = Array.from({ length: 200 }, (_, i) => ({ keyword: `대형브랜드라인${i}크림`, normalizedKeyword: `대형브랜드라인${i}크림`,
+    discoverySource: ["product-cache"], sourceConfidence: 90, discoveredAt: "2026-08-25T00:00:00.000Z", relatedBrand: "대형브랜드", relatedProductType: "크림" }));
+  const diverse = Array.from({ length: 30 }, (_, i) => ({ keyword: `브랜드${i}쿠션`, normalizedKeyword: `브랜드${i}쿠션`, discoverySource: ["product-cache"],
+    sourceConfidence: 78, discoveredAt: "2026-08-25T00:00:00.000Z", relatedBrand: `브랜드${i}`, relatedProductType: "쿠션" }));
+  const selected = core.selectMarketCacheItems([...crowded, ...diverse], 50);
+  assert.ok(selected.some((item) => item.normalizedKeyword === "브랜드29쿠션"));
+  assert.ok(selected.filter((item) => item.relatedBrand === "대형브랜드").length <= 20);
 });
 
 test("diagnostic protected selection matches monthly and ratio-only rules", () => {

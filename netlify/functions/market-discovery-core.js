@@ -12,11 +12,11 @@ const STOP = new Set(["추천", "리뷰", "후기", "신상", "신제품", "요�
 const GENERIC_BRAND = new Set([...PRODUCT_TYPES, ...INGREDIENTS, "비타민", "두유", "카카오", "화장품", "뷰티", "건강", "영양제"]);
 
 function normalizeText(value) {
-  return String(value || "").toLocaleLowerCase("ko-KR").replace(/<[^>]*>/g, " ")
+  return String(value || "").normalize("NFKC").toLocaleLowerCase("ko-KR").replace(/<[^>]*>/g, " ")
     .replace(/\d+(?:\.\d+)?\s*(?:ml|g|mg|정|포|매|개|입)/gi, " ")
     .replace(/[^0-9a-z가-힣\s]/g, " ").replace(/\s+/g, " ").trim();
 }
-function normalizedKeyword(value) { return compact(value); }
+function normalizedKeyword(value) { return compact(String(value || "").normalize("NFKC")); }
 function cleanTokens(value) {
   return normalizeText(value).split(/\s+/).filter((token) => token.length >= 2 && token.length <= 20 && !STOP.has(token) && !/^\d+$/.test(token));
 }
@@ -155,6 +155,22 @@ function discoveryPriority(item, now = Date.now()) {
     + (sources.includes("searchad-new-query") ? 25 : 0) + (item.monthlySearchStatus === "available" ? 15 : 0)
     + Math.log10(Number(item.monthlyTotalSearches || 0) + 1) * 3 + Math.log10(Number(item.searchAdEvidence?.recentImpressions || 0) + 1) * 2;
 }
+function selectMarketCacheItems(items, limit = 5000) {
+  const sorted = (items || []).slice().sort((a, b) => discoveryPriority(b) - discoveryPriority(a));
+  const selected = []; const keys = new Set(); const brandCounts = new Map();
+  const add = (item, perBrandLimit = Infinity) => {
+    if (!item || selected.length >= limit || keys.has(item.normalizedKeyword)) return;
+    const brand = item.relatedBrand || ""; if (brand && Number(brandCounts.get(brand) || 0) >= perBrandLimit) return;
+    keys.add(item.normalizedKeyword); selected.push(item); if (brand) brandCounts.set(brand, Number(brandCounts.get(brand) || 0) + 1);
+  };
+  sorted.filter((item) => (item.discoverySource || []).length > 1).forEach((item) => add(item, 30));
+  sorted.filter((item) => item.discoverySource?.includes("youtube")).forEach((item) => add(item, 30));
+  sorted.filter((item) => item.discoverySource?.includes("searchad-new-query")).forEach((item) => add(item, 40));
+  sorted.filter((item) => item.discoverySource?.includes("product-cache") && item.relatedBrand
+    && (item.relatedProductType || item.relatedProductLine)).forEach((item) => add(item, 20));
+  sorted.forEach((item) => add(item, 50));
+  return selected.slice(0, limit);
+}
 
 module.exports = { YOUTUBE_SEEDS, VERIFIED_TYPES, normalizeText, normalizedKeyword, buildVerifiedBrands, productCandidates,
-  youtubeCandidates, mergeCandidates, discoveryPriority, productTypeIn };
+  youtubeCandidates, mergeCandidates, discoveryPriority, selectMarketCacheItems, productTypeIn };

@@ -33,8 +33,10 @@ exports.handler = async (event) => {
     const finalResult = (lastSuccess?.results || []).find((entry) => normalizedKeyword(entry.keyword) === key) || null;
     const marketRank = item ? marketItems.findIndex((entry) => entry.normalizedKeyword === key) + 1 : null;
     const protectedRank = protectedItems.findIndex((entry) => entry.normalizedKeyword === key) + 1;
-    const textKey = normalizedKeyword(keyword); const youtubeMatches = (youtubeSnapshot?.items || []).filter((video) => normalizedKeyword(`${video.title || ""} ${video.description || ""}`).includes(textKey)
-      || textKey.includes(normalizedKeyword(video.title || ""))).slice(0, 20);
+    const textKey = normalizedKeyword(keyword); const youtubeMatches = (youtubeSnapshot?.items || []).filter((video) => {
+      const contentKey = normalizedKeyword(`${video.title || ""} ${video.description || ""}`); const titleKey = normalizedKeyword(video.title || "");
+      return textKey.length >= 2 && (contentKey.includes(textKey) || titleKey.length >= 3 && textKey.includes(titleKey));
+    }).slice(0, 20);
     const match = productCache?.items?.length ? findBestMatch(keyword, productCache.items, buildProductIndex(productCache.items)) : null;
     let exclusionReason = null;
     if (!item && !existingCandidate) exclusionReason = "marketDiscovery와 기존 후보 캐시에 없음";
