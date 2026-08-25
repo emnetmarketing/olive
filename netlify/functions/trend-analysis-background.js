@@ -1,5 +1,7 @@
 const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
+const { readCache: readMarketDiscoveryCache } = require("./market-discovery-cache");
+const { discoveryPriority } = require("./market-discovery-core");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
@@ -82,6 +84,12 @@ function buildDomainRelatedSignal(candidate, match, products) {
 function classifySurgeResult(candidate, match, products, matchThreshold) {
   if (!match || !hasBusinessDomainEvidence(candidate, match)) return { resultType: null, reason: "unrelated_or_insufficient_domain_evidence" };
   const signals = match.signals || {};
+  const queryHasDomainTerm = BUSINESS_DOMAIN_TERMS.some((term) => compact(candidate?.keyword).includes(compact(term)));
+  const verifiedMarketContext = Boolean(candidate?.marketDiscovery && candidate?.relatedBrand
+    && (candidate?.relatedProductType || candidate?.relatedProductLine));
+  if (!queryHasDomainTerm && !signals.brandMatch && !signals.ingredientMatch && !verifiedMarketContext) {
+    return { resultType: null, reason: "query_has_no_verified_business_context" };
+  }
   const productSpecific = Boolean(signals.productNameMatch
     || signals.brandMatch && signals.productLineMatch
     || signals.ingredientMatch && signals.concentrationMatch
@@ -246,6 +254,21 @@ function instantMetrics(series) {
   const baseline = median(baselineValues), latest = Number(latestPoint?.estimated || 0);
   return { baseline, latest, peakValue: latest, surgeCount: Math.max(0, latest - baseline), endLift: latest - baseline, peakLift: latest - baseline, latestPeriod: latestPoint?.period, series: series.slice(-8) };
 }
+function ratioOnlyMetrics(data, startDate, endDate) {
+  const series = (data || []).map((point) => ({ period: point.period, ratio: Number(point.ratio || 0) }))
+    .filter((point) => point.period).sort((a, b) => a.period.localeCompare(b.period));
+  const selected = series.filter((point) => point.period >= startDate && point.period <= endDate);
+  const daily = selected.map((point) => {
+    const index = series.findIndex((entry) => entry.period === point.period);
+    const prior = index >= 0 ? series.slice(Math.max(0, index - 7), index).map((entry) => entry.ratio) : [];
+    const baseline = median(prior);
+    return { period: point.period, ratio: point.ratio, baseline, lift: prior.length ? point.ratio - baseline : 0,
+      relativeLiftPct: prior.length && baseline > 0 ? (point.ratio - baseline) / baseline * 100 : null };
+  });
+  const peak = daily.filter((point) => point.relativeLiftPct !== null).sort((a, b) => b.relativeLiftPct - a.relativeLiftPct)[0] || null;
+  return { series: selected, daily, peakDate: peak?.period || null, ratioPeak: Number(peak?.ratio || 0), ratioBaseline: Number(peak?.baseline || 0),
+    relativeRatioLift: peak?.relativeLiftPct ?? null, latestRatio: Number(selected.at(-1)?.ratio || 0) };
+}
 function slope(values) { if (values.length < 2) return 0; const n = values.length, sx = n * (n - 1) / 2, sy = values.reduce((a, b) => a + b, 0); let sxy = 0, sx2 = 0; values.forEach((y, x) => { sxy += x * y; sx2 += x * x; }); return (n * sxy - sx * sy) / Math.max(1, n * sx2 - sx * sx); }
 function summaryStats(items) {
   const monthly = items.map((item) => Number(item.monthlyTotalSearches || 0));
@@ -293,7 +316,7 @@ function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_C
   const addGroup = (quota, predicate, compare) => {
     let added = 0;
     for (const item of candidates.filter(predicate).sort(compare)) {
-      if (added >= quota) break;
+      if (added >= quota || selected.length >= limit) break;
       const key = item.keyword.toLocaleLowerCase("ko-KR");
       if (selectedKeys.has(key)) continue;
       selected.push(item); selectedKeys.add(key); added += 1;
@@ -338,6 +361,40 @@ function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_C
       multiGroupOverlap: selected.filter((item) => qualifyingGroupCount(item) > 1).length } };
 }
 
+function marketCandidateForAnalysis(item) {
+  const type = String(item.relatedProductType || "");
+  const health = ["유산균", "비타민", "영양제", "프로틴", "단백질", "콜라겐", "오메가3"].some((value) => type.includes(value));
+  return { keyword: item.keyword, category: item.category || (health ? "health" : "beauty"), categoryEvidence: "market-discovery",
+    sources: [...new Set([...(item.discoverySource || []), "market-discovery"])], firstSeenAt: item.discoveredAt, lastSeenAt: item.lastSeenAt,
+    isNewSearchQuery: item.discoverySource?.includes("searchad-new-query"), impressions30d: Number(item.searchAdEvidence?.recentImpressions || 0),
+    clicks30d: Number(item.searchAdEvidence?.recentClicks || 0), impressionDelta: Number(item.searchAdEvidence?.recentImpressions || 0),
+    monthlyPcSearches: item.monthlyPcSearches ?? null, monthlyMobileSearches: item.monthlyMobileSearches ?? null,
+    monthlyTotalSearches: item.monthlyTotalSearches ?? null, monthlyVolumeStatus: item.monthlySearchStatus || "not-requested",
+    priorityScore: discoveryPriority(item), marketDiscovery: true, marketEvidence: item.evidence || [], sourceConfidence: item.sourceConfidence,
+    relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "" };
+}
+
+function selectWithMarketDiscovery(baseCandidates, marketItems, priorSignals, limit = MAX_ACTIVE_CANDIDATES, marketLimit = 500) {
+  const marketPool = (marketItems || []).map(marketCandidateForAnalysis);
+  const numericMarket = marketPool.filter((item) => item.monthlyVolumeStatus === "available" && Number(item.monthlyTotalSearches || 0) >= LOW_INTENSITY_SURGE_MIN_LIFT)
+    .sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0));
+  const ratioOnly = marketPool.filter((item) => item.monthlyVolumeStatus === "keywordtool-unavailable" && Number(item.sourceConfidence || 0) >= 75
+    && (item.sources.length > 2 || item.sources.includes("searchad-new-query") || item.relatedBrand && (item.relatedProductType || item.relatedProductLine)))
+    .sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0));
+  const marketSelected = []; const keys = new Set();
+  for (const item of [...numericMarket, ...ratioOnly]) { if (marketSelected.length >= marketLimit) break; const key = normalizeKeyword(item.keyword); if (keys.has(key)) continue; keys.add(key); marketSelected.push(item); }
+  const numericKeys = new Set(numericMarket.map((item) => normalizeKeyword(item.keyword)));
+  const selectedNumericMarket = marketSelected.filter((item) => numericKeys.has(normalizeKeyword(item.keyword)));
+  const selectedRatioOnly = marketSelected.filter((item) => !numericKeys.has(normalizeKeyword(item.keyword)));
+  const base = baseCandidates.filter((item) => !keys.has(normalizeKeyword(item.keyword)));
+  const baseSelection = selectAnalysisCandidates(base, priorSignals, Math.max(0, limit - marketSelected.length));
+  return { selected: [...selectedNumericMarket, ...baseSelection.selected], ratioOnly: selectedRatioOnly,
+    excluded: [...baseSelection.excluded, ...numericMarket.filter((item) => !keys.has(normalizeKeyword(item.keyword)))],
+    diagnostics: { marketLimit, marketSelected: marketSelected.length, marketNumeric: selectedNumericMarket.length,
+      marketRatioOnly: selectedRatioOnly.length, existingSelected: baseSelection.selected.length, total: marketSelected.length + baseSelection.selected.length,
+      existingSelection: baseSelection.diagnostics } };
+}
+
 exports.handler = async (event) => {
   connect(event);
   let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
@@ -346,8 +403,8 @@ exports.handler = async (event) => {
   const persist = async (patch) => { job = { ...job, ...patch, updatedAt: new Date().toISOString() }; await writeJob(job.jobId, job); };
   const started = Date.now();
   try {
-    const [candidateCache, productCache, priorSignalCache, surgeHistoryCache] = await Promise.all([
-      readCandidateCache(), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory()
+    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache] = await Promise.all([
+      readCandidateCache(), readMarketDiscoveryCache().catch(() => null), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory()
     ]);
     const priorSignals = new Map((priorSignalCache?.items || []).map((item) => [item.keyword, item]));
     const allCandidates = candidateCache.candidates;
@@ -360,8 +417,9 @@ exports.handler = async (event) => {
     const unknownCandidates = allCandidates.filter((item) => item.category === "unknown");
     const monthlyPresent = allCandidates.filter((item) => item.monthlyTotalSearches !== null && item.monthlyTotalSearches !== undefined && Number.isFinite(Number(item.monthlyTotalSearches)));
     const eligibleBeforeLimit = relevantCandidates.filter((item) => Number(item.monthlyTotalSearches || 0) >= job.surgeThreshold);
-    const selection = selectAnalysisCandidates(eligibleBeforeLimit, priorSignals);
+    const selection = selectWithMarketDiscovery(eligibleBeforeLimit, marketCache?.items || [], priorSignals);
     const eligible = selection.selected;
+    const ratioOnlyCandidates = selection.ratioOnly;
     const excludedByLimit = selection.excluded;
     if (!eligible.length) throw new Error("급등수 기준을 계산할 수 있는 월간 검색량 후보가 없습니다.");
     const cutDiagnostic = {
@@ -380,8 +438,10 @@ exports.handler = async (event) => {
         monthlyVolumeNotRequested: allCandidates.filter((item) => item.monthlyVolumeStatus === "not-requested").length,
         monthlyVolumeRequestFailed: allCandidates.filter((item) => item.monthlyVolumeStatus === "request-failed").length,
         monthlyAtOrAboveThreshold: eligibleBeforeLimit.length,
-        before5000Limit: eligibleBeforeLimit.length, analyzed: eligible.length, excludedBy5000Limit: excludedByLimit.length },
-      searchTrend: { requested: eligible.length, validSeries: 0, emptySeries: 0, apiErrorCandidates: 0 },
+        before5000Limit: eligibleBeforeLimit.length + Number(selection.diagnostics.marketSelected || 0), analyzed: eligible.length + ratioOnlyCandidates.length, excludedBy5000Limit: excludedByLimit.length,
+        marketDiscoveryCache: marketCache?.items?.length || 0, marketDiscoverySelected: selection.diagnostics.marketSelected || 0,
+        marketDiscoveryNumeric: selection.diagnostics.marketNumeric || 0, ratioOnlySelected: ratioOnlyCandidates.length },
+      searchTrend: { requested: eligible.length + ratioOnlyCandidates.length, validSeries: 0, emptySeries: 0, apiErrorCandidates: 0 },
       surge: { positive: 0, from0To99: 0, from100To199: 0, from200To299: 0, from300To499: 0, from500To999: 0, atLeast1000: 0,
         atLeast100: 0, atLeast500: 0, atLeast5000: 0, atLeast10000: 0, atUserThreshold: 0 },
       matching: { atLeast30: 0, atLeast40: 0, atLeast50: 0, atLeast60: 0, atLeast70: 0, atLeast80: 0, atLeast90: 0, atUserThreshold: 0 },
@@ -390,11 +450,12 @@ exports.handler = async (event) => {
         productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, insufficientDomainEvidence: 0 },
       lowIntensity: { numericEligible: 0, included: 0, strongProductMatch: 0, brandProductContext: 0, insufficientRelationEvidence: 0 }
     };
-    await persist({ message: `검색어트렌드 조회 중 · 0 / ${eligible.length.toLocaleString("ko-KR")}`, totalCandidates: eligible.length, progress: 5,
-      currentStage: "search-trend", processedCount: 0, totalCount: eligible.length,
+    const trendCandidates = [...eligible, ...ratioOnlyCandidates];
+    await persist({ message: `검색어트렌드 조회 중 · 0 / ${trendCandidates.length.toLocaleString("ko-KR")}`, totalCandidates: trendCandidates.length, progress: 5,
+      currentStage: "search-trend", processedCount: 0, totalCount: trendCandidates.length,
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30: [], matchTop30: [], calculationSamples: [] } });
     const trendMap = new Map(); let processed = 0;
-    for (const requestBatch of chunks(chunks(eligible, 5), 5)) {
+    for (const requestBatch of chunks(chunks(trendCandidates, 5), 5)) {
       let results;
       try {
         results = await Promise.all(requestBatch.map((batch) => api("/search-trend/v1/search", { method: "POST", body: {
@@ -408,8 +469,8 @@ exports.handler = async (event) => {
       }
       for (const payload of results) for (const result of payload.results || []) trendMap.set(result.title, result.data || []);
       processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
-      job.currentStage = "search-trend"; job.processedCount = processed; job.totalCount = eligible.length;
-      await persist({ message: `검색어트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${eligible.length.toLocaleString("ko-KR")}`, progress: 5 + Math.round(processed / eligible.length * 35) });
+      job.currentStage = "search-trend"; job.processedCount = processed; job.totalCount = trendCandidates.length;
+      await persist({ message: `검색어트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${trendCandidates.length.toLocaleString("ko-KR")}`, progress: 5 + Math.round(processed / trendCandidates.length * 35) });
     }
     await persist({ message: "키워드별 쇼핑 트렌드 조회 중", progress: 42 });
     const shoppingMap = new Map(); processed = 0;
@@ -539,6 +600,31 @@ exports.handler = async (event) => {
           : relativeSurgePassed ? "relative" : "absolute",
         resultType: classification.resultType, relatedSignal: classification.relatedSignal || null });
     }
+    for (const candidate of ratioOnlyCandidates) {
+      const trendData = trendMap.get(candidate.keyword);
+      if (!Array.isArray(trendData) || !trendData.length) { funnel.searchTrend.emptySeries += 1; continue; }
+      const ratioMetrics = ratioOnlyMetrics(trendData, job.startDate, job.endDate);
+      if (ratioMetrics.relativeRatioLift === null || ratioMetrics.relativeRatioLift < RELATIVE_SURGE_PERCENT) continue;
+      const match = findBestMatch(candidate.keyword, productCache.items, productIndex);
+      const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
+      const strongEvidence = Boolean(classification.resultType || candidate.sources.includes("searchad-new-query")
+        || Number(candidate.sourceConfidence || 0) >= 80 && candidate.relatedBrand && (candidate.relatedProductType || candidate.relatedProductLine));
+      if (!strongEvidence) continue;
+      const evidenceSignal = classification.relatedSignal || { signalType: "market_context", relatedBrand: candidate.relatedBrand || "",
+        relatedProductContext: candidate.relatedProductType || candidate.relatedProductLine || "", relatedProductCount: Number(match?.matchingCandidateCount || 0),
+        referenceProducts: match?.item ? [match.item] : [], judgment: "ratio-only 시장 신호",
+        reason: "월간검색량 미제공 / 검증된 시장·상품 문맥에서 Search Trend ratio 급상승" };
+      rows.push({ keyword: candidate.keyword, category: candidate.category, monthlySearches: null, estimatedBaseline: null, estimatedLatest: null,
+        estimatedPeak: null, estimatedSurgeCount: null, riseRate: null, endLift: null, peakLift: null, peakDailyLift: null,
+        peakRelativeLiftPct: ratioMetrics.relativeRatioLift, peakBaseline: null, peakEstimatedSearches: null, peakDate: ratioMetrics.peakDate,
+        latestDataDate: ratioMetrics.series.at(-1)?.period || null, trendSeries: ratioMetrics.series, trendSlope: slope(ratioMetrics.series.map((point) => point.ratio)),
+        shoppingTrend: [], shoppingRise: 0, newSearchAdQuery: candidate.sources.includes("searchad-new-query"),
+        searchAdImpressions30d: candidate.impressions30d, match, sources: candidate.sources, news: null,
+        absoluteSurgePassed: false, relativeSurgePassed: false, lowIntensityEarlySignal: false,
+        ratioOnlyMarketSignal: true, ratioPeak: ratioMetrics.ratioPeak, ratioBaseline: ratioMetrics.ratioBaseline,
+        relativeRatioLift: ratioMetrics.relativeRatioLift, latestRatio: ratioMetrics.latestRatio,
+        resultType: "ratio_only_market_signal", surgeSignalType: "ratio_only", relatedSignal: evidenceSignal, marketEvidence: candidate.marketEvidence || [] });
+    }
     let surgeHistoryManifest = surgeHistoryCache.manifest;
     if (job.mode === "instant") {
       const latestHistoryCache = await readSurgeHistory();
@@ -563,7 +649,8 @@ exports.handler = async (event) => {
     addSample("largestMonthlyVolume", samplePool.slice().sort((a, b) => Number(b.candidate.monthlyTotalSearches || 0) - Number(a.candidate.monthlyTotalSearches || 0))[0]);
     addSample("largestLatestLift", samplePool.slice().sort((a, b) => b.metrics.endLift - a.metrics.endLift)[0]);
     addSample("sparsestTrend", samplePool.filter((item) => item.diagnosticRow.nonZeroRatioDays > 0).sort((a, b) => a.diagnosticRow.nonZeroRatioDays - b.diagnosticRow.nonZeroRatioDays)[0]);
-    rows.sort((a, b) => b.estimatedSurgeCount - a.estimatedSurgeCount || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
+    rows.sort((a, b) => Number(b.estimatedSurgeCount || 0) - Number(a.estimatedSurgeCount || 0)
+      || Number(b.relativeRatioLift || 0) - Number(a.relativeRatioLift || 0) || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
     await persist({ message: "상위 급등 검색어 뉴스 확인 중", progress: 90 });
     job.currentStage = "news"; job.processedCount = 0; job.totalCount = Math.min(rows.length, 20);
     const newsResults = await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
@@ -576,12 +663,13 @@ exports.handler = async (event) => {
       items: calculated.map((entry) => ({ keyword: entry.candidate.keyword, estimatedSurgeCount: Math.round(entry.metrics.surgeCount),
         endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });
     await persist({ state: "completed", message: "분석 완료", progress: 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
-      currentStage: "completed", processedCount: eligible.length, totalCount: eligible.length,
-      latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: eligible.length, resultCount: rows.length,
+      currentStage: "completed", processedCount: trendCandidates.length, totalCount: trendCandidates.length,
+      latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
       productMatchResultCount: rows.filter((row) => row.resultType === "product_match").length,
       brandCategorySignalCount: rows.filter((row) => row.resultType === "brand_or_category_signal").length,
       domainRelatedSignalCount: rows.filter((row) => row.resultType === "domain_related_signal").length,
       lowIntensityEarlySignalCount: rows.filter((row) => row.resultType === "low_intensity_early_signal").length,
+      ratioOnlyMarketSignalCount: rows.filter((row) => row.resultType === "ratio_only_market_signal").length,
       results: rows, errors: [],
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30, matchTop30, boundary200To299: {
         total: funnel.surge.from200To299, relatedCount: boundaryRelated.length, items: boundaryRelated.slice().sort((a, b) => b.estimatedSurgeCount - a.estimatedSurgeCount).slice(0, 100) },
@@ -596,4 +684,5 @@ exports.handler = async (event) => {
 
 exports._test = { estimate, periodMetrics, instantMetrics, surgePassSignals, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
   evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, classifyLowIntensitySignal, hasBusinessDomainEvidence, productBrandToken,
-  median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };
+  median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, selectWithMarketDiscovery,
+  marketCandidateForAnalysis, ratioOnlyMetrics, domainEvidenceScore, isRecentCandidate };

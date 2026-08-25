@@ -1340,6 +1340,7 @@
       <div class="toolbar header-toolbar header-management-controls">
         <button id="refreshSearchAdBtn" class="secondary" type="button">↻ Search Ad 상품 새로고침</button>
         <button id="refreshCandidatesBtn" class="secondary" type="button">↻ 검색어 후보 새로고침</button>
+        <button id="refreshMarketDiscoveryBtn" class="secondary" type="button">↻ 신규 시장 후보 새로고침</button>
         <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
         <button id="teamsBtn" class="success">↗ Teams 전송</button>
         <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">권한 관리 <span id="pendingBadge" class="badge-count">0</span></button>
@@ -1536,6 +1537,11 @@
           <span id="candidateCacheSummary">검색어 후보 상태를 확인하는 중입니다.</span><br>
           <span id="candidateCacheProgress" class="muted"></span>
         </div>
+        <div id="marketDiscoveryPanel" class="api-errors visible" style="margin-bottom:16px;">
+          <strong>신규 시장 후보 (marketDiscovery)</strong><br>
+          <span id="marketDiscoverySummary">신규 시장 후보 상태를 확인하는 중입니다.</span><br>
+          <span id="marketDiscoveryProgress" class="muted"></span>
+        </div>
         <div id="analysisProgressPanel" class="api-errors" style="margin-bottom:16px;">
           <strong>분석 진행 상태</strong><br><span id="analysisProgressText"></span>
         </div>
@@ -1633,6 +1639,17 @@
         <div class="table-wrap"><table>
           <thead><tr><th>검색어</th><th>Peak 날짜</th><th>Peak 증가량</th><th>상대 상승률</th><th>관련 브랜드</th><th>제품군/제품라인</th><th>상품 일치율</th><th>대표/참고 상품</th><th>판단</th><th>판단 근거</th></tr></thead>
           <tbody id="lowIntensitySignalBody"><tr><td colspan="10" class="muted">저강도 선행 신호가 없습니다.</td></tr></tbody>
+        </table></div>
+      </section>
+
+      <section class="panel" id="ratioOnlySignalPanel">
+        <div class="section-head"><div>
+          <h2>Ratio-only 시장 신호</h2>
+          <p class="muted">월간검색량이 제공되지 않아 절대 검색량을 만들지 않고, 강한 상품·시장 근거와 Search Trend ratio 변화만 표시합니다.</p>
+        </div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>검색어</th><th>Peak 날짜</th><th>Peak ratio</th><th>Baseline ratio</th><th>상대 ratio 상승</th><th>관련 브랜드</th><th>제품 문맥</th><th>참고 상품</th><th>판단</th><th>근거</th></tr></thead>
+          <tbody id="ratioOnlySignalBody"><tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
     </div>
@@ -1944,7 +1961,7 @@
       Array.from(document.querySelectorAll(".schedule-time-input, .remove-schedule-time-btn")).forEach((el) => {
         el.disabled = !editable;
       });
-      ["saveBtn", "operatingSettingsSaveBtn", "addScheduleTimeBtn", "refreshSearchAdBtn", "refreshCandidatesBtn", "scheduleBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
+      ["saveBtn", "operatingSettingsSaveBtn", "addScheduleTimeBtn", "refreshSearchAdBtn", "refreshCandidatesBtn", "refreshMarketDiscoveryBtn", "scheduleBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
       });
       if ($("operatingSettingsSaveBtn")) $("operatingSettingsSaveBtn").style.display = editable ? "inline-flex" : "none";
@@ -2312,6 +2329,7 @@
       $("brandSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
       $("domainSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
       $("lowIntensitySignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("ratioOnlySignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2577,6 +2595,32 @@
       }
     }
 
+    let marketDiscoveryStatusTimer = null;
+    function renderMarketDiscoveryStatus(payload) {
+      const cache = payload.cache || {}; const status = payload.status || {}; const running = status.state === "running";
+      $("marketDiscoverySummary").textContent = payload.cacheExists
+        ? `후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · YouTube ${Number(cache.sourceCounts?.youtube || 0).toLocaleString("ko-KR")}건 · 상품 ${Number(cache.sourceCounts?.productCache || 0).toLocaleString("ko-KR")}건 · 신규 유입 ${Number(cache.sourceCounts?.searchAdNewQuery || 0).toLocaleString("ko-KR")}건 · ratio-only ${Number(cache.ratioOnlyCandidateCount || 0).toLocaleString("ko-KR")}건 · 마지막 갱신 ${cache.refreshedAt ? new Date(cache.refreshedAt).toLocaleString("ko-KR") : "-"}`
+        : "신규 시장 후보 캐시가 아직 없습니다.";
+      const youtube = cache.youtube || {};
+      $("marketDiscoveryProgress").textContent = running ? status.message || "신규 시장 후보 수집 중"
+        : `${status.message || "대기 중"} · YouTube search 오늘 ${Number(youtube.searchCallsToday || status.youtubeSearchCallsToday || 0).toLocaleString("ko-KR")}회 / 잔여 추정 ${Number(youtube.remainingSearchQuotaEstimate || 0).toLocaleString("ko-KR")}회 · 영상 ${Number(youtube.collectedVideos || 0).toLocaleString("ko-KR")}건 · 상품 백필 ${Number(cache.productBackfill?.cursor || 0).toLocaleString("ko-KR")} / ${Number(cache.productBackfill?.total || 0).toLocaleString("ko-KR")}`;
+      $("refreshMarketDiscoveryBtn").disabled = running || !canEdit();
+      if (running && !marketDiscoveryStatusTimer) marketDiscoveryStatusTimer = setInterval(loadMarketDiscoveryStatus, 3000);
+      if (!running && marketDiscoveryStatusTimer) { clearInterval(marketDiscoveryStatusTimer); marketDiscoveryStatusTimer = null; }
+    }
+    async function loadMarketDiscoveryStatus() {
+      try { const response = await fetch("/.netlify/functions/market-discovery-status", { cache: "no-store" }); const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`); renderMarketDiscoveryStatus(payload);
+      } catch (error) { $("marketDiscoverySummary").textContent = `신규 시장 후보 상태 조회 실패: ${error.message}`; }
+    }
+    async function refreshMarketDiscovery() {
+      if (!requireEdit("신규 시장 후보 새로고침")) return;
+      $("refreshMarketDiscoveryBtn").disabled = true; $("marketDiscoveryProgress").textContent = "신규 시장 후보 수집을 시작하는 중입니다.";
+      try { const response = await fetch("/.netlify/functions/market-discovery-refresh", { method: "POST" }); const payload = await response.json().catch(() => ({}));
+        if (response.status !== 409 && !response.ok) throw new Error(payload.error || `HTTP ${response.status}`); await loadMarketDiscoveryStatus();
+      } catch (error) { $("marketDiscoveryProgress").textContent = `신규 시장 후보 수집 시작 실패: ${error.message}`; $("refreshMarketDiscoveryBtn").disabled = !canEdit(); }
+    }
+
     function render(counts, results, surgeRows = [], completedAt = null) {
       $("statSearchAd").textContent = Number(counts.searchAd || 0).toLocaleString("ko-KR");
       $("statDatalab").textContent = Number(counts.datalab || 0).toLocaleString("ko-KR");
@@ -2587,7 +2631,8 @@
       renderTrendChart(surgeRows);
 
       const lowIntensitySignals = results.filter((row) => row.resultType === "low_intensity_early_signal");
-      const productResults = results.filter((row) => row.resultType !== "brand_or_category_signal" && row.resultType !== "low_intensity_early_signal");
+      const ratioOnlySignals = results.filter((row) => row.resultType === "ratio_only_market_signal");
+      const productResults = results.filter((row) => !["brand_or_category_signal", "low_intensity_early_signal", "ratio_only_market_signal"].includes(row.resultType));
       const brandSignals = results.filter((row) => row.resultType === "brand_or_category_signal");
       const domainSignals = results.filter((row) => row.resultType === "domain_related_signal");
       const directResults = productResults.filter((row) => row.resultType !== "domain_related_signal");
@@ -2621,6 +2666,15 @@
       renderBrandSignals(brandSignals);
       renderDomainSignals(domainSignals);
       renderLowIntensitySignals(lowIntensitySignals);
+      renderRatioOnlySignals(ratioOnlySignals);
+    }
+
+    function renderRatioOnlySignals(results) {
+      const body = $("ratioOnlySignalBody");
+      if (!results.length) { body.innerHTML = '<tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr>'; return; }
+      body.innerHTML = results.map((row) => { const signal = row.relatedSignal || {}; const refs = (signal.referenceProducts || []).slice(0, 3).map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
+        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong></td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${Number(row.ratioBaseline || 0).toFixed(2)}</td><td>+${Number(row.relativeRatioLift || 0).toFixed(2)}%</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
+      }).join("");
     }
 
     function renderBrandSignals(results) {
@@ -2819,14 +2873,15 @@
     }
 
     function buildExcelExport() {
-      const headers = ["resultType", "급등 유형", "저강도 선행 신호", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "관련 브랜드", "관련 제품군/제품라인", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
+      const headers = ["resultType", "급등 유형", "저강도 선행 신호", "ratio-only 시장 신호", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "Peak ratio", "Ratio baseline", "상대 ratio 상승률", "관련 브랜드", "관련 제품군/제품라인", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
         const item = row.match?.item || {};
         const signal = row.relatedSignal || {};
         return [
           row.resultType || "product_match",
-          row.lowIntensityEarlySignal ? "저강도 선행 신호" : row.absoluteSurgePassed && row.relativeSurgePassed ? "절대 급등 + 상대 관심도 급등" : row.relativeSurgePassed ? "상대 관심도 급등" : "절대 급등",
+          row.ratioOnlyMarketSignal ? "ratio-only 시장 신호" : row.lowIntensityEarlySignal ? "저강도 선행 신호" : row.absoluteSurgePassed && row.relativeSurgePassed ? "절대 급등 + 상대 관심도 급등" : row.relativeSurgePassed ? "상대 관심도 급등" : "절대 급등",
           row.lowIntensityEarlySignal ? "Y" : "N",
+          row.ratioOnlyMarketSignal ? "Y" : "N",
           row.absoluteSurgePassed ? "Y" : "N",
           row.relativeSurgePassed ? "Y" : "N",
           row.keyword,
@@ -2839,6 +2894,9 @@
           Math.round(Number(row.peakEstimatedSearches || 0)),
           Math.round(Number(row.peakBaseline || 0)),
           row.peakDate || "",
+          row.ratioPeak ?? "",
+          row.ratioBaseline ?? "",
+          row.relativeRatioLift === null || row.relativeRatioLift === undefined ? "" : `${Number(row.relativeRatioLift).toFixed(2)}%`,
           signal.relatedBrand || item.brand || "",
           signal.relatedProductContext || "",
           Number(signal.relatedProductCount || 0),
@@ -3214,6 +3272,7 @@
     bindEvent("instantRunBtn", "click", () => analyze("instant"));
     bindEvent("refreshSearchAdBtn", "click", refreshSearchAdProducts);
     bindEvent("refreshCandidatesBtn", "click", refreshKeywordCandidates);
+    bindEvent("refreshMarketDiscoveryBtn", "click", refreshMarketDiscovery);
     bindEvent("scheduleBtn", "click", toggleSchedulePanel);
     bindEvent("startScheduleBtn", "click", startScheduledCollection);
     bindEvent("stopScheduleBtn", "click", () => stopScheduledCollection(true));
@@ -3268,6 +3327,7 @@
       clearAnalysisUI("저장된 마지막 정상 분석 결과를 확인하는 중입니다.");
       loadSearchAdCacheStatus();
       loadCandidateStatus();
+      loadMarketDiscoveryStatus();
       $("clearDownloadHistoryBtn").style.display = "none";
       renderDownloadHistoryShared();
       applyAuthState();

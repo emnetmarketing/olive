@@ -56,7 +56,8 @@ function evaluateMatch(keyword, item) {
   const compactPrefixBrand = !explicitBrandTokens.length && !/\s/.test(String(keyword || "").trim())
     && compactQuery && compactProduct.startsWith(compactQuery)
     && ![...queryTokens].some((token) => PRODUCT_TYPES.has(token) || INGREDIENTS.has(token) || GENERIC_WORDS.has(token));
-  const inferredBrandToken = !compactPrefixBrand && !explicitBrandTokens.length && firstProductToken
+  const queryStartsWithKnownIngredient = [...INGREDIENTS, "비타민"].some((value) => compactQuery.startsWith(compact(value)) && compact(value).length > compact(firstProductToken).length);
+  const inferredBrandToken = !queryStartsWithKnownIngredient && !compactPrefixBrand && !explicitBrandTokens.length && firstProductToken
     && (queryTokens.has(firstProductToken) || compactQuery.startsWith(compact(firstProductToken)))
     && !PRODUCT_TYPES.has(firstProductToken) && !INGREDIENTS.has(firstProductToken) && !GENERIC_WORDS.has(firstProductToken)
     ? firstProductToken : "";
@@ -139,12 +140,25 @@ function evaluateMatch(keyword, item) {
 function buildProductIndex(items) {
   const index = new Map();
   const brandPositions = new Map();
+  const inferredBrandStats = new Map();
+  items.forEach((item) => {
+    if (compact(item.brand)) return;
+    const brand = compact(matchTokens(item.product)[0] || "");
+    if (brand.length < 2 || PRODUCT_TYPES.has(brand) || INGREDIENTS.has(brand) || GENERIC_WORDS.has(brand)) return;
+    const stats = inferredBrandStats.get(brand) || { products: 0, adGroups: new Set(), productTypes: new Set() };
+    stats.products += 1;
+    if (item.adGroupId) stats.adGroups.add(String(item.adGroupId));
+    for (const token of matchTokens(item.product)) if (PRODUCT_TYPES.has(token)) stats.productTypes.add(token);
+    inferredBrandStats.set(brand, stats);
+  });
   items.forEach((item, position) => { for (const token of indexKeys(`${item.brand || ""} ${item.product || ""}`)) {
     if (!index.has(token)) index.set(token, []); if (index.get(token).length < 500) index.get(token).push(position);
   }
     const explicitBrand = compact(item.brand);
     const inferredBrand = compact(matchTokens(item.product)[0] || "");
-    const brand = explicitBrand || inferredBrand;
+    const stats = inferredBrandStats.get(inferredBrand);
+    const inferredVerified = stats && stats.products >= 2 && (stats.adGroups.size >= 2 || stats.productTypes.size >= 2);
+    const brand = explicitBrand || (inferredVerified ? inferredBrand : "");
     if (brand.length >= 2 && !PRODUCT_TYPES.has(brand) && !INGREDIENTS.has(brand) && !GENERIC_WORDS.has(brand)) {
       if (!brandPositions.has(brand)) brandPositions.set(brand, []);
       brandPositions.get(brand).push(position);

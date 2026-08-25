@@ -5,6 +5,9 @@
 [functions]
   node_bundler = "esbuild"
 
+[functions."market-discovery-scheduled"]
+  schedule = "0 */6 * * *"
+
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]

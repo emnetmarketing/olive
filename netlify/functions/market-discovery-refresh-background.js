@@ -1,0 +1,111 @@
+const { connect, readCache, writeCache, readStatus, writeStatus, readTrustedChannels } = require("./market-discovery-cache");
+const { readCache: readProductCache } = require("./search-ad-cache");
+const { readCandidateCache } = require("./keyword-candidate-cache");
+const { accounts, searchAdGet } = require("./search-ad-cache");
+const { YOUTUBE_SEEDS, productCandidates, youtubeCandidates, mergeCandidates, discoveryPriority, normalizedKeyword } = require("./market-discovery-core");
+
+const PRODUCT_BATCH = 2500; const MAX_CACHE = 5000; const MAX_KEYWORDTOOL_BACKFILL = 250; const MAX_SEARCH_CALLS_PER_DAY = 90;
+function seoulDay() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()); }
+function chunks(values, size) { const output = []; for (let i = 0; i < values.length; i += size) output.push(values.slice(i, i + size)); return output; }
+function toolRows(payload) { if (Array.isArray(payload)) return payload; for (const key of ["keywordList", "relKwdStat", "items", "results"]) if (Array.isArray(payload?.[key])) return payload[key]; return []; }
+function numericVolume(value) { if (typeof value === "number" && Number.isFinite(value)) return value; const text = String(value || "").replace(/,/g, "").trim(); if (!text || text.includes("<")) return null; const result = Number(text); return Number.isFinite(result) ? result : null; }
+async function youtubeGet(path, params, counters) {
+  const key = String(process.env.YOUTUBE_API_KEY || "").trim(); if (!key) throw new Error("YOUTUBE_API_KEY 미설정");
+  const url = new URL(path, "https://www.googleapis.com/youtube/v3/"); Object.entries({ ...params, key }).forEach(([name, value]) => url.searchParams.set(name, String(value)));
+  const response = await fetch(url, { signal: AbortSignal.timeout(20000) }); counters.api += 1; if (path.includes("search")) counters.search += 1;
+  const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(`YouTube API HTTP ${response.status} · ${payload.error?.message || "응답 오류"}`); return payload;
+}
+async function collectYoutube(previousStatus, products, trustedChannels) {
+  const today = seoulDay(); const counters = { search: previousStatus?.youtubeQuotaDate === today ? Number(previousStatus.youtubeSearchCallsToday || 0) : 0,
+    api: previousStatus?.youtubeQuotaDate === today ? Number(previousStatus.youtubeApiCallsToday || 0) : 0 };
+  const videos = new Map(); const publishedAfter = new Date(Date.now() - 48 * 3600000).toISOString();
+  for (const query of YOUTUBE_SEEDS) {
+    for (let page = 0, pageToken = ""; page < 2 && counters.search < MAX_SEARCH_CALLS_PER_DAY; page += 1) {
+      const payload = await youtubeGet("search", { part: "snippet", type: "video", order: "date", regionCode: "KR", relevanceLanguage: "ko",
+        maxResults: 25, publishedAfter, q: query, ...(pageToken ? { pageToken } : {}) }, counters);
+      for (const item of payload.items || []) { const snippet = item.snippet || {}; const videoId = item.id?.videoId; if (!videoId) continue;
+        videos.set(videoId, { videoId, channelId: snippet.channelId || "", channelTitle: snippet.channelTitle || "", title: snippet.title || "",
+          description: snippet.description || "", publishedAt: snippet.publishedAt || "", sourceQuery: query, discoveredAt: new Date().toISOString() }); }
+      pageToken = payload.nextPageToken || ""; if (!pageToken) break;
+    }
+  }
+  for (const channelId of (trustedChannels?.channels || []).slice(0, 50)) {
+    const payload = await youtubeGet("activities", { part: "snippet,contentDetails", channelId, publishedAfter, maxResults: 25 }, counters);
+    for (const item of payload.items || []) { const snippet = item.snippet || {}; const videoId = item.contentDetails?.upload?.videoId; if (!videoId) continue;
+      videos.set(videoId, { videoId, channelId: snippet.channelId || channelId, channelTitle: snippet.channelTitle || "", title: snippet.title || "",
+        description: snippet.description || "", publishedAt: snippet.publishedAt || "", sourceQuery: "trusted-channel", discoveredAt: new Date().toISOString(), trustedChannel: true }); }
+  }
+  const videoList = [...videos.values()];
+  for (const batch of chunks(videoList.map((item) => item.videoId), 50)) {
+    const payload = await youtubeGet("videos", { part: "statistics", id: batch.join(",") }, counters);
+    for (const item of payload.items || []) { const video = videos.get(item.id); if (video) video.statistics = { viewCount: Number(item.statistics?.viewCount || 0),
+      likeCount: Number(item.statistics?.likeCount || 0), commentCount: Number(item.statistics?.commentCount || 0) }; }
+  }
+  return { items: youtubeCandidates(videoList, products), videos: videoList.length, counters, quotaDate: today };
+}
+exports.handler = async (event) => {
+  connect(event); let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
+  let status = await readStatus(); if (!status || status.jobId !== input.jobId) status = input.status; if (!status?.jobId) return;
+  const started = Date.now(); const errors = []; const persist = async (patch) => { status = { ...status, ...patch, updatedAt: new Date().toISOString() }; await writeStatus(status); };
+  try {
+    const [previous, productCache, candidateCache, trustedChannels] = await Promise.all([readCache(), readProductCache(), readCandidateCache(), readTrustedChannels()]);
+    if (!productCache?.items?.length) throw new Error("Search Ad 상품 캐시가 없습니다.");
+    const previousItems = previous?.items || []; const cursor = Number(previous?.productBackfill?.cursor || 0);
+    const batchProducts = productCache.items.slice(cursor, cursor + PRODUCT_BATCH); const nextCursor = cursor + batchProducts.length >= productCache.items.length ? 0 : cursor + batchProducts.length;
+    await persist({ message: `상품 기반 후보 생성 중 · ${Math.min(cursor + batchProducts.length, productCache.items.length).toLocaleString("ko-KR")} / ${productCache.items.length.toLocaleString("ko-KR")}` });
+    const productItems = productCandidates(batchProducts, { brandProducts: productCache.items }).map((item) => ({ ...item, discoverySource: ["product-cache"] }));
+    const searchAdItems = (candidateCache?.candidates || []).filter((item) => item.isNewSearchQuery && item.sources?.includes("searchad-query")).map((item) => ({
+      keyword: item.keyword, normalizedKeyword: normalizedKeyword(item.keyword), discoverySource: ["searchad-new-query"], sourceConfidence: 82,
+      relatedBrand: "", relatedProductType: "", relatedProductLine: "", category: item.category, categoryEvidence: item.categoryEvidence,
+      monthlySearchStatus: item.monthlyVolumeStatus, monthlyTotalSearches: item.monthlyTotalSearches,
+      searchAdEvidence: { firstSeenAt: item.firstSeenAt, lastSeenAt: item.lastSeenAt, recentImpressions: item.impressions30d, recentClicks: item.clicks30d,
+        accountSources: item.accountNumbers || [] }, evidence: [{ source: "searchad-new-query", impressions: item.impressions30d, clicks: item.clicks30d }] }));
+    const previousYoutubeStatus = { youtubeQuotaDate: previous?.youtube?.quotaDate || status.youtubeQuotaDate,
+      youtubeSearchCallsToday: previous?.youtube?.searchCallsToday ?? status.youtubeSearchCallsToday,
+      youtubeApiCallsToday: previous?.youtube?.apiCallsToday ?? status.youtubeApiCallsToday };
+    let youtube = { items: [], videos: 0, counters: {
+      search: previousYoutubeStatus.youtubeQuotaDate === seoulDay() ? Number(previousYoutubeStatus.youtubeSearchCallsToday || 0) : 0,
+      api: previousYoutubeStatus.youtubeQuotaDate === seoulDay() ? Number(previousYoutubeStatus.youtubeApiCallsToday || 0) : 0,
+    }, quotaDate: seoulDay(), reused: true };
+    try {
+      if (String(process.env.YOUTUBE_API_KEY || "").trim()) youtube = await collectYoutube(previousYoutubeStatus, productCache.items, trustedChannels);
+      else errors.push("YOUTUBE_API_KEY 미설정 · 기존 소스로 계속 진행");
+    } catch (error) { errors.push(error.message); }
+    let items = mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]);
+    const metrics = { apiCalls: 0, retries: 0 }; const toolAccount = accounts().find((item) => item.apiKey && item.secretKey && item.customerId);
+    const backfill = items.filter((item) => item.monthlySearchStatus !== "available").sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_KEYWORDTOOL_BACKFILL);
+    if (toolAccount) for (const batch of chunks(backfill, 5)) {
+      try {
+        const payload = await searchAdGet(toolAccount, "/keywordstool", { hintKeywords: batch.map((item) => item.keyword).join(","), showDetail: 1 }, metrics);
+        const byKeyword = new Map(toolRows(payload).map((row) => [normalizedKeyword(row.relKeyword || row.keyword), row]));
+        for (const item of batch) { const row = byKeyword.get(item.normalizedKeyword); const pc = numericVolume(row?.monthlyPcQcCnt), mobile = numericVolume(row?.monthlyMobileQcCnt);
+          item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = pc !== null && mobile !== null ? "available" : "keywordtool-unavailable";
+          item.monthlyPcSearches = pc; item.monthlyMobileSearches = mobile; item.monthlyTotalSearches = pc !== null && mobile !== null ? pc + mobile : null; }
+      } catch (error) { errors.push(error.message); for (const item of batch) { item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = "request-failed"; } }
+    }
+    items = items.filter((item) => Date.now() - Date.parse(item.lastSeenAt || item.discoveredAt || 0) <= 45 * 86400000)
+      .sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_CACHE);
+    const refreshedAt = new Date().toISOString(); const sourceCount = (source) => items.filter((item) => item.discoverySource?.includes(source)).length;
+    const ratioOnlyCandidateCount = items.filter((item) => item.monthlySearchStatus === "keywordtool-unavailable" && item.sourceConfidence >= 75
+      && (item.discoverySource?.length > 1 || item.discoverySource?.includes("searchad-new-query") || item.relatedBrand && (item.relatedProductType || item.relatedProductLine))).length;
+    const cache = { version: 1, refreshedAt, items, sourceCounts: { youtube: sourceCount("youtube"), productCache: sourceCount("product-cache"), searchAdNewQuery: sourceCount("searchad-new-query") },
+      monthlyVolumeCounts: { available: items.filter((item) => item.monthlySearchStatus === "available").length,
+        unavailable: items.filter((item) => item.monthlySearchStatus === "keywordtool-unavailable").length,
+        notRequested: items.filter((item) => !item.monthlySearchStatus || item.monthlySearchStatus === "not-requested").length,
+        requestFailed: items.filter((item) => item.monthlySearchStatus === "request-failed").length }, ratioOnlyCandidateCount,
+      productBackfill: { cursor: nextCursor, processedThisRun: batchProducts.length, total: productCache.items.length, completeCycle: nextCursor === 0 },
+      youtube: { enabled: Boolean(String(process.env.YOUTUBE_API_KEY || "").trim()), quotaDate: youtube.quotaDate,
+        searchCallsToday: youtube.counters.search, apiCallsToday: youtube.counters.api,
+        remainingSearchQuotaEstimate: Math.max(0, 100 - youtube.counters.search), collectedVideos: youtube.videos, generatedCandidates: youtube.items.length,
+        lastSuccessAt: youtube.reused ? previous?.youtube?.lastSuccessAt || null : refreshedAt, lastError: errors.find((item) => item.includes("YouTube")) || null },
+      keywordtool: { checkedThisRun: backfill.length, apiCalls: metrics.apiCalls, retries: metrics.retries }, errors: errors.slice(0, 20) };
+    await writeCache(cache);
+    await persist({ state: "completed", message: "신규 시장 후보 수집 완료", completedAt: refreshedAt, durationMs: Date.now() - started,
+      candidateCount: items.length, sourceCounts: cache.sourceCounts, youtubeQuotaDate: youtube.quotaDate,
+      youtubeSearchCallsToday: youtube.counters.search, youtubeApiCallsToday: youtube.counters.api, youtubeVideos: youtube.videos,
+      youtubeCandidates: youtube.items.length, productCandidates: productItems.length, searchAdNewCandidates: searchAdItems.length,
+      keywordtoolChecked: backfill.length, ratioOnlyCandidateCount, errors: errors.slice(0, 20) });
+  } catch (error) { await persist({ state: "failed", message: "신규 시장 후보 수집 실패 · 마지막 정상 캐시 유지", failedAt: new Date().toISOString(), durationMs: Date.now() - started, errors: [error.message, ...errors].slice(0, 20) }); }
+};
+
+exports._test = { collectYoutube, numericVolume, toolRows, PRODUCT_BATCH, MAX_CACHE, MAX_KEYWORDTOOL_BACKFILL };
