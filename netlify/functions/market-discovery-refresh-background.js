@@ -78,13 +78,14 @@ exports.handler = async (event) => {
     const previousYoutubeStatus = { youtubeQuotaDate: previous?.youtube?.quotaDate || status.youtubeQuotaDate,
       youtubeSearchCallsToday: previous?.youtube?.searchCallsToday ?? status.youtubeSearchCallsToday,
       youtubeApiCallsToday: previous?.youtube?.apiCallsToday ?? status.youtubeApiCallsToday };
-    let youtube = { items: [], videos: 0, videoItems: [], counters: {
+    let youtube = { items: [], videos: Number(previous?.youtube?.collectedVideos || 0), videoItems: [], counters: {
       search: previousYoutubeStatus.youtubeQuotaDate === seoulDay() ? Number(previousYoutubeStatus.youtubeSearchCallsToday || 0) : 0,
       api: previousYoutubeStatus.youtubeQuotaDate === seoulDay() ? Number(previousYoutubeStatus.youtubeApiCallsToday || 0) : 0,
-    }, quotaDate: seoulDay(), reused: true };
+    }, quotaDate: seoulDay(), reused: true, generatedCandidates: Number(previous?.youtube?.generatedCandidates || 0) };
     try {
-      if (String(process.env.YOUTUBE_API_KEY || "").trim()) youtube = await collectYoutube(previousYoutubeStatus, productCache.items, trustedChannels);
-      else errors.push("YOUTUBE_API_KEY 미설정 · 기존 소스로 계속 진행");
+      if (String(process.env.YOUTUBE_API_KEY || "").trim()) {
+        if (youtube.counters.search < MAX_SEARCH_CALLS_PER_DAY) youtube = await collectYoutube(previousYoutubeStatus, productCache.items, trustedChannels);
+      } else errors.push("YOUTUBE_API_KEY 미설정 · 기존 소스로 계속 진행");
     } catch (error) { errors.push(error.message); }
     if (!youtube.reused && youtube.videoItems?.length) await writeYoutubeSnapshot({ version: 1, refreshedAt: new Date().toISOString(), items: youtube.videoItems });
     let items = selectMarketCacheItems(mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]), MAX_CACHE);
@@ -125,7 +126,8 @@ exports.handler = async (event) => {
       productBackfill: { cursor: productCache.items.length, processedThisRun: productCache.items.length, total: productCache.items.length, completeCycle: true },
       youtube: { enabled: Boolean(String(process.env.YOUTUBE_API_KEY || "").trim()), quotaDate: youtube.quotaDate,
         searchCallsToday: youtube.counters.search, apiCallsToday: youtube.counters.api,
-        remainingSearchQuotaEstimate: Math.max(0, 100 - youtube.counters.search), collectedVideos: youtube.videos, generatedCandidates: youtube.items.length,
+        remainingSearchQuotaEstimate: Math.max(0, 100 - youtube.counters.search), collectedVideos: youtube.videos,
+        generatedCandidates: youtube.reused ? youtube.generatedCandidates : youtube.items.length,
         lastSuccessAt: youtube.reused ? previous?.youtube?.lastSuccessAt || null : refreshedAt, lastError: errors.find((item) => item.includes("YouTube")) || null },
       keywordtool: { checkedThisRun: backfill.length, apiCalls: metrics.apiCalls, retries: metrics.retries }, errors: errors.slice(0, 20) };
     await writeCache(cache);

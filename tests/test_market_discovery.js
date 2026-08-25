@@ -21,6 +21,16 @@ test("product cache creates only verified brand/product-context candidates", () 
   assert.ok(!keys.has("비타민d"));
 });
 
+test("product cache preserves repeated brand plus compound product expressions", () => {
+  const ahc = [
+    { product: "AHC 리얼 아이크림 포페이스", adGroupId: "a1" },
+    { product: "AHC 리얼아이크림 기획", adGroupId: "a2" },
+    { product: "AHC 선크림", adGroupId: "a3" },
+  ];
+  const keys = new Set(core.productCandidates(ahc, { limit: 100 }).map((item) => item.normalizedKeyword));
+  assert.ok(keys.has("ahc아이크림"));
+});
+
 test("youtube extraction merges repeated brand/product evidence", () => {
   const videos = [
     { videoId: "v1", channelId: "c1", title: "넘버즈인 파우더 신제품 리뷰", description: "넘버즈인 파우더", publishedAt: new Date().toISOString() },

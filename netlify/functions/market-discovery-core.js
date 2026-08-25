@@ -53,15 +53,26 @@ function productCandidates(products, options = {}) {
       evidence: [evidence], productEvidence: [evidence], sourceConfidence: evidence.confidence });
   };
   for (const [brand, items] of byBrand) {
-    const lineCounts = new Map();
+    const lineCounts = new Map(); const compoundCounts = new Map();
     for (const item of items) for (const token of cleanTokens(item.product)) {
       const value = compact(token); if (value === brand || GENERIC_BRAND.has(value) || VERIFIED_TYPES.some((type) => compact(type) === value)) continue;
       lineCounts.set(value, (lineCounts.get(value) || 0) + 1);
+      const type = productTypeIn(value); const typeKey = compact(type);
+      if (typeKey && value.endsWith(typeKey) && value.length > typeKey.length + 1) {
+        const prefix = value.slice(0, -typeKey.length);
+        for (let size = 1; size <= Math.min(4, prefix.length); size += 1) {
+          const line = prefix.slice(-size); const expression = `${line}${typeKey}`;
+          const record = compoundCounts.get(expression) || { expression, line, type, count: 0 };
+          record.count += 1; compoundCounts.set(expression, record);
+        }
+      }
     }
     const repeatedLines = [...lineCounts].filter(([, count]) => count >= 2).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([line]) => line);
     add(brand, { source: "product-cache", brand, confidence: 45, productCount: items.length });
     const types = [...new Set(items.map((item) => productTypeIn(item.product)).filter(Boolean))];
     for (const type of types) add(`${brand}${type}`, { source: "product-cache", brand, productType: type, confidence: 72, productCount: items.length });
+    for (const record of compoundCounts.values()) if (record.count >= 2) add(`${brand}${record.expression}`, { source: "product-cache", brand,
+      productLine: record.line, productType: record.type, confidence: 82, productCount: record.count });
     for (const line of repeatedLines) {
       add(`${brand}${line}`, { source: "product-cache", brand, productLine: line, confidence: 68, productCount: lineCounts.get(line) });
       add(line, { source: "product-cache", brand, productLine: line, confidence: 55, productCount: lineCounts.get(line) });
@@ -157,7 +168,7 @@ function discoveryPriority(item, now = Date.now()) {
 }
 function selectMarketCacheItems(items, limit = 5000) {
   const sorted = (items || []).slice().sort((a, b) => discoveryPriority(b) - discoveryPriority(a));
-  const selected = []; const keys = new Set(); const brandCounts = new Map();
+  const selected = []; const keys = new Set(); const brandCounts = new Map(); const lineBrandCounts = new Map();
   const add = (item, perBrandLimit = Infinity) => {
     if (!item || selected.length >= limit || keys.has(item.normalizedKeyword)) return;
     const brand = item.relatedBrand || ""; if (brand && Number(brandCounts.get(brand) || 0) >= perBrandLimit) return;
@@ -166,6 +177,11 @@ function selectMarketCacheItems(items, limit = 5000) {
   sorted.filter((item) => (item.discoverySource || []).length > 1).forEach((item) => add(item, 30));
   sorted.filter((item) => item.discoverySource?.includes("youtube")).forEach((item) => add(item, 30));
   sorted.filter((item) => item.discoverySource?.includes("searchad-new-query")).forEach((item) => add(item, 40));
+  sorted.filter((item) => item.discoverySource?.includes("product-cache") && item.relatedProductLine && item.relatedProductType
+    && (!item.relatedBrand || !item.normalizedKeyword.startsWith(normalizedKeyword(item.relatedBrand)))).forEach((item) => {
+      const brand = item.relatedBrand || "__unbranded__"; if (Number(lineBrandCounts.get(brand) || 0) >= 12 || keys.has(item.normalizedKeyword) || selected.length >= limit) return;
+      keys.add(item.normalizedKeyword); selected.push(item); lineBrandCounts.set(brand, Number(lineBrandCounts.get(brand) || 0) + 1);
+    });
   sorted.filter((item) => item.discoverySource?.includes("product-cache") && item.relatedBrand
     && (item.relatedProductType || item.relatedProductLine)).forEach((item) => add(item, 20));
   sorted.forEach((item) => add(item, 50));
