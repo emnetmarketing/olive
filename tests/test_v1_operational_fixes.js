@@ -41,3 +41,11 @@ test("shared current job and download history endpoints are wired into the dashb
   assert.match(analysisCache, /acquireJob[\s\S]*readCurrentJob\(\{ markStale: true \}\)/);
   assert.match(fs.readFileSync("netlify/functions/download-history-cache.js", "utf8"), /shared-history\/v1/);
 });
+
+test("production trend batches are paced and retry transient API throttling", () => {
+  const source = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  assert.match(source, /TREND_BATCH_DELAY_MS\s*=\s*1500/);
+  assert.match(source, /response\.status !== 429/);
+  assert.match(source, /retry-after/);
+  assert.match(source, /await sleep\(TREND_BATCH_DELAY_MS\)/);
+});

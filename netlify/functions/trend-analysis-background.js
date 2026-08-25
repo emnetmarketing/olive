@@ -15,6 +15,7 @@ const RELATIVE_SURGE_PERCENT = 50;
 const RELATIVE_SURGE_MIN_LIFT = 100;
 const LOW_INTENSITY_SURGE_PERCENT = 20;
 const LOW_INTENSITY_SURGE_MIN_LIFT = 40;
+const TREND_BATCH_DELAY_MS = 1500;
 const CANDIDATE_GROUP_QUOTAS = { new: 1500, highVolume: 1250, recentChange: 1000, priorSurge: 750, domainEvidence: 500 };
 const BUSINESS_DOMAIN_TERMS = [
   "유산균", "프로바이오틱", "프리바이오틱", "콜라겐", "비타민", "영양제", "건강식품", "오메가", "프로틴", "단백질", "단백바", "쉐이크",
@@ -149,6 +150,7 @@ function surgePassSignals(metrics, surgeThreshold) {
 }
 
 function chunks(values, size) { const out = []; for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size)); return out; }
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 async function responseJson(response, name) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`${name} 호출 실패: HTTP ${response.status} · ${payload.errMsg || payload.errorMessage || payload.message || "응답 오류"}`);
@@ -160,11 +162,16 @@ async function api(path, { method = "GET", params, body } = {}) {
   if (!id || !secret) throw new Error("NAVER API HUB 인증정보가 없습니다.");
   const url = new URL(path, API_HUB);
   Object.entries(params || {}).forEach(([key, value]) => url.searchParams.set(key, String(value)));
-  const response = await fetch(url, { method, headers: {
-    "X-NCP-APIGW-API-KEY-ID": id, "X-NCP-APIGW-API-KEY": secret,
-    ...(body ? { "Content-Type": "application/json" } : {})
-  }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
-  return responseJson(response, path);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(url, { method, headers: {
+      "X-NCP-APIGW-API-KEY-ID": id, "X-NCP-APIGW-API-KEY": secret,
+      ...(body ? { "Content-Type": "application/json" } : {})
+    }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
+    if (response.status !== 429 || attempt === 3) return responseJson(response, path);
+    const retryAfterSeconds = Number(response.headers.get("retry-after") || 0);
+    await sleep(retryAfterSeconds > 0 ? Math.min(30000, retryAfterSeconds * 1000) : 5000 * (attempt + 1));
+  }
+  throw new Error(`${path} 호출 실패: HTTP 429`);
 }
 
 function normalize(value) { return String(value || "").toLocaleLowerCase("ko-KR").replace(/[^0-9a-z가-힣]/g, ""); }
@@ -491,6 +498,7 @@ exports.handler = async (event) => {
       processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
       job.currentStage = "search-trend"; job.processedCount = processed; job.totalCount = trendCandidates.length;
       await persist({ message: `검색어트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${trendCandidates.length.toLocaleString("ko-KR")}`, progress: 5 + Math.round(processed / trendCandidates.length * 35) });
+      await sleep(TREND_BATCH_DELAY_MS);
     }
     await persist({ message: "키워드별 쇼핑 트렌드 조회 중", progress: 42 });
     const shoppingMap = new Map(); processed = 0;
@@ -506,6 +514,7 @@ exports.handler = async (event) => {
         processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
         job.currentStage = "shopping-trend"; job.processedCount = processed; job.totalCount = eligible.length;
         await persist({ message: `키워드별 쇼핑 트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${eligible.length.toLocaleString("ko-KR")}`, progress: 42 + Math.round(processed / eligible.length * 30) });
+        await sleep(TREND_BATCH_DELAY_MS);
       }
     }
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
