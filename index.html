@@ -2586,7 +2586,7 @@
         const item = row.match.item;
         return `
           <tr>
-            <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
+            <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
             <td>${row.today.toLocaleString("ko-KR")} / ${Number(row.estimatedPeak || row.today).toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
             <td>+${row.lift.toLocaleString("ko-KR")}</td>
             <td>${formatSurgeHistory(row.surgeHistoryState)}</td>
@@ -2628,7 +2628,7 @@
         const references = (signal.referenceProducts || []).slice(0, 3)
           .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
         return `<tr>
-          <td><strong>${escapeHtml(row.keyword)}</strong><br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
+          <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
           <td><strong>+${Number(row.lift || row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</strong></td>
           <td>${escapeHtml(signal.signalType === "brand" ? "브랜드 급등" : signal.signalType === "ingredient" ? "성분 관련" : signal.signalType === "product_line" ? "제품/제품라인 관련" : "제품군/카테고리 관련")}</td>
           <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
@@ -2640,6 +2640,15 @@
           <td>${escapeHtml(row.latestDataDate || "-")}</td>
         </tr>`;
       }).join("");
+    }
+
+    function surgeSignalSummary(row) {
+      const absolute = Boolean(row.absoluteSurgePassed);
+      const relative = Boolean(row.relativeSurgePassed);
+      const label = absolute && relative ? "절대·상대 급등" : relative ? "상대 관심도 급등" : "절대 급등";
+      const detail = relative && Number.isFinite(Number(row.peakRelativeLiftPct))
+        ? ` · 평소 대비 +${Math.round(Number(row.peakRelativeLiftPct)).toLocaleString("ko-KR")}% · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}` : "";
+      return `<span class="pill">${escapeHtml(label)}</span><span class="muted">${escapeHtml(detail)}</span>`;
     }
 
     function formatSurgeHistory(history) {
@@ -2770,18 +2779,25 @@
     }
 
     function buildExcelExport() {
-      const headers = ["resultType", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "관련 브랜드", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
+      const headers = ["resultType", "급등 유형", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "관련 브랜드", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
         const item = row.match?.item || {};
         const signal = row.relatedSignal || {};
         return [
           row.resultType || "product_match",
+          row.absoluteSurgePassed && row.relativeSurgePassed ? "절대 급등 + 상대 관심도 급등" : row.relativeSurgePassed ? "상대 관심도 급등" : "절대 급등",
+          row.absoluteSurgePassed ? "Y" : "N",
+          row.relativeSurgePassed ? "Y" : "N",
           row.keyword,
           row.category || "unknown",
           row.today,
           row.estimatedPeak,
           row.yesterday,
           row.lift,
+          row.peakRelativeLiftPct === null || row.peakRelativeLiftPct === undefined ? "" : `${Number(row.peakRelativeLiftPct).toFixed(2)}%`,
+          Math.round(Number(row.peakEstimatedSearches || 0)),
+          Math.round(Number(row.peakBaseline || 0)),
+          row.peakDate || "",
           signal.relatedBrand || item.brand || "",
           Number(signal.relatedProductCount || 0),
           (signal.referenceProducts || []).map((entry) => entry.product || entry.brand || "").join(" / "),

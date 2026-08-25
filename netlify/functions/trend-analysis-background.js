@@ -8,6 +8,8 @@ const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeSt
 const API_HUB = "https://naverapihub.apigw.ntruss.com";
 const CATEGORY_IDS = { beauty: "50000002", health: "50000023" };
 const MAX_ACTIVE_CANDIDATES = 5000;
+const RELATIVE_SURGE_PERCENT = 50;
+const RELATIVE_SURGE_MIN_LIFT = 100;
 const CANDIDATE_GROUP_QUOTAS = { new: 1500, highVolume: 1250, recentChange: 1000, priorSurge: 750, domainEvidence: 500 };
 const BUSINESS_DOMAIN_TERMS = [
   "유산균", "프로바이오틱", "프리바이오틱", "콜라겐", "비타민", "영양제", "건강식품", "오메가", "프로틴", "단백질", "단백바", "쉐이크",
@@ -89,6 +91,24 @@ function classifySurgeResult(candidate, match, products, matchThreshold) {
   const domainSignal = buildDomainRelatedSignal(candidate, match, products);
   if (domainSignal) return { resultType: "domain_related_signal", relatedSignal: domainSignal };
   return { resultType: null, reason: "insufficient_relation_evidence" };
+}
+
+function surgePassSignals(metrics, surgeThreshold) {
+  const peakDailyLift = Number(metrics?.peakDailyLift ?? metrics?.surgeCount ?? 0);
+  const peakBaseline = Number(metrics?.peakDailyBaseline ?? metrics?.baseline ?? 0);
+  const peakEstimatedSearches = Number(metrics?.peakDailyEstimated ?? metrics?.latest ?? 0);
+  const peakRelativeLiftPct = peakBaseline > 0 ? peakDailyLift / peakBaseline * 100 : null;
+  return {
+    absoluteSurgePassed: Number(metrics?.surgeCount || 0) >= Number(surgeThreshold || 0),
+    relativeTrendPassed: peakRelativeLiftPct !== null
+      && peakRelativeLiftPct >= RELATIVE_SURGE_PERCENT
+      && peakDailyLift >= RELATIVE_SURGE_MIN_LIFT,
+    peakDailyLift,
+    peakRelativeLiftPct,
+    peakBaseline,
+    peakEstimatedSearches,
+    peakDate: metrics?.peakDailyDate || metrics?.latestPeriod || null,
+  };
 }
 
 function chunks(values, size) { const out = []; for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size)); return out; }
@@ -336,7 +356,9 @@ exports.handler = async (event) => {
       surge: { positive: 0, from0To99: 0, from100To199: 0, from200To299: 0, from300To499: 0, from500To999: 0, atLeast1000: 0,
         atLeast100: 0, atLeast500: 0, atLeast5000: 0, atLeast10000: 0, atUserThreshold: 0 },
       matching: { atLeast30: 0, atLeast40: 0, atLeast50: 0, atLeast60: 0, atLeast70: 0, atLeast80: 0, atLeast90: 0, atUserThreshold: 0 },
-      resultClassification: { productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, unrelatedOrInsufficient: 0 }
+      resultClassification: { productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, unrelatedOrInsufficient: 0 },
+      relativeSurge: { trendEligible: 0, passedWithDomainEvidence: 0, relativeOnlyAdded: 0,
+        productMatch: 0, brandSignal: 0, domainRelatedSignal: 0, insufficientDomainEvidence: 0 }
     };
     await persist({ message: `검색어트렌드 조회 중 · 0 / ${eligible.length.toLocaleString("ko-KR")}`, totalCandidates: eligible.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: eligible.length,
@@ -402,6 +424,7 @@ exports.handler = async (event) => {
       );
       if (!series.length) { funnel.searchTrend.emptySeries += 1; funnel.searchTrend.validSeries -= 1; continue; }
       const metrics = job.mode === "instant" ? instantMetrics(series) : periodMetrics(series, job.startDate, job.endDate);
+      const surgeSignals = surgePassSignals(metrics, job.surgeThreshold);
       const diagnosticRow = surgeDiagnostic(candidate, metrics, series);
       calculated.push({ candidate, metrics, diagnosticRow });
       if (metrics.surgeCount > 0) funnel.surge.positive += 1;
@@ -423,8 +446,9 @@ exports.handler = async (event) => {
           matchScore: Number(boundaryMatch?.score || 0), judgment: boundaryClassification.relatedSignal?.judgment || boundaryMatch?.judgment || null,
           reason: boundaryClassification.relatedSignal?.reason || boundaryMatch?.reason || null });
       }
-      if (metrics.surgeCount < job.surgeThreshold) continue;
-      funnel.surge.atUserThreshold += 1;
+      if (surgeSignals.absoluteSurgePassed) funnel.surge.atUserThreshold += 1;
+      if (surgeSignals.relativeTrendPassed) funnel.relativeSurge.trendEligible += 1;
+      if (!surgeSignals.absoluteSurgePassed && !surgeSignals.relativeTrendPassed) continue;
       const match = findBestMatch(candidate.keyword, productCache.items, productIndex);
       const score = Number(match?.score || 0);
       if (score >= 30) funnel.matching.atLeast30 += 1;
@@ -451,11 +475,23 @@ exports.handler = async (event) => {
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
         match, sources: candidate.sources, news: null };
       const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
+      const relativeSurgePassed = surgeSignals.relativeTrendPassed && Boolean(classification.resultType);
+      if (surgeSignals.relativeTrendPassed) {
+        if (classification.resultType) funnel.relativeSurge.passedWithDomainEvidence += 1;
+        else funnel.relativeSurge.insufficientDomainEvidence += 1;
+        if (classification.resultType === "product_match") funnel.relativeSurge.productMatch += 1;
+        else if (classification.resultType === "brand_or_category_signal") funnel.relativeSurge.brandSignal += 1;
+        else if (classification.resultType === "domain_related_signal") funnel.relativeSurge.domainRelatedSignal += 1;
+        if (!surgeSignals.absoluteSurgePassed && classification.resultType) funnel.relativeSurge.relativeOnlyAdded += 1;
+      }
       if (classification.resultType === "product_match") funnel.resultClassification.productMatch += 1;
       else if (classification.resultType === "brand_or_category_signal") funnel.resultClassification.brandSignal += 1;
       else if (classification.resultType === "domain_related_signal") funnel.resultClassification.domainRelatedSignal += 1;
       else funnel.resultClassification.unrelatedOrInsufficient += 1;
-      if (classification.resultType) rows.push({ ...baseRow, resultType: classification.resultType, relatedSignal: classification.relatedSignal || null });
+      if (classification.resultType) rows.push({ ...baseRow, ...surgeSignals, relativeSurgePassed,
+        surgeSignalType: surgeSignals.absoluteSurgePassed && relativeSurgePassed ? "absolute_and_relative"
+          : relativeSurgePassed ? "relative" : "absolute",
+        resultType: classification.resultType, relatedSignal: classification.relatedSignal || null });
     }
     let surgeHistoryManifest = surgeHistoryCache.manifest;
     if (job.mode === "instant") {
@@ -511,6 +547,6 @@ exports.handler = async (event) => {
   }
 };
 
-exports._test = { estimate, periodMetrics, instantMetrics, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
+exports._test = { estimate, periodMetrics, instantMetrics, surgePassSignals, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
   evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, hasBusinessDomainEvidence, productBrandToken,
   median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, domainEvidenceScore, isRecentCandidate };

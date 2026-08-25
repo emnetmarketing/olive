@@ -137,18 +137,46 @@ function evaluateMatch(keyword, item) {
 
 function buildProductIndex(items) {
   const index = new Map();
+  const brandPositions = new Map();
   items.forEach((item, position) => { for (const token of indexKeys(`${item.brand || ""} ${item.product || ""}`)) {
     if (!index.has(token)) index.set(token, []); if (index.get(token).length < 500) index.get(token).push(position);
-  } });
+  }
+    const explicitBrand = compact(item.brand);
+    const inferredBrand = compact(matchTokens(item.product)[0] || "");
+    const brand = explicitBrand || inferredBrand;
+    if (brand.length >= 2 && !PRODUCT_TYPES.has(brand) && !INGREDIENTS.has(brand) && !GENERIC_WORDS.has(brand)) {
+      if (!brandPositions.has(brand)) brandPositions.set(brand, []);
+      brandPositions.get(brand).push(position);
+    }
+  });
+  index.brandPositions = brandPositions;
   return index;
+}
+function detectQueryBrand(keyword, index) {
+  const query = compact(keyword);
+  if (!query || !index?.brandPositions) return "";
+  return [...index.brandPositions.keys()]
+    .filter((brand) => query.startsWith(brand))
+    .sort((a, b) => b.length - a.length)[0] || "";
 }
 function findBestMatch(keyword, items, index) {
   const positionScores = new Map();
   for (const token of indexKeys(keyword)) for (const position of index.get(token) || []) positionScores.set(position, Number(positionScores.get(position) || 0) + 1);
+  const queryBrand = detectQueryBrand(keyword, index);
+  for (const position of index.brandPositions?.get(queryBrand) || []) {
+    positionScores.set(position, Number(positionScores.get(position) || 0) + 1000);
+  }
   const shortlist = [...positionScores].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 500).map(([position]) => items[position]);
-  const evaluated = shortlist.map((item, order) => ({ item, candidate: item.product, order, ...evaluateMatch(keyword, item) }))
+  let evaluated = shortlist.map((item, order) => ({ item, candidate: item.product, order, ...evaluateMatch(keyword, item) }))
     .sort((a, b) => b.score - a.score || a.order - b.order);
   if (!evaluated.length) return null;
+  if (queryBrand) {
+    const sameBrand = evaluated.filter((entry) => {
+      const itemBrand = compact(entry.item?.brand) || compact(matchTokens(entry.item?.product)[0] || "");
+      return itemBrand === queryBrand;
+    });
+    if (sameBrand.length) evaluated = sameBrand;
+  }
   const bestBase = evaluated[0];
   const strongMatches = evaluated.filter((entry) => entry.score >= 60 && entry.score >= bestBase.score - 5
     && (entry.signals.ingredientMatch && entry.signals.concentrationMatch
@@ -173,4 +201,4 @@ function findBestMatch(keyword, items, index) {
     additionalMatches: ranked.slice(1, 6).map(({ item, candidate, score, judgment, reason, signals }) => ({ item, candidate, score, judgment, reason, signals })) };
 }
 
-module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, indexKeys, auxiliarySimilarity, evaluateMatch, buildProductIndex, findBestMatch };
+module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, indexKeys, auxiliarySimilarity, evaluateMatch, buildProductIndex, detectQueryBrand, findBestMatch };

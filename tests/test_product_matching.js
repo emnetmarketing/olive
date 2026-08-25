@@ -75,4 +75,13 @@ assert.equal(compoundMatch.signals.brandMatch, true);
 assert.equal(compoundMatch.signals.productLineMatch, true);
 assert.ok(compoundMatch.signals.productLineMatches.includes("트윈립"));
 assert.ok(compoundMatch.score >= 40);
+
+const brandConflictProducts = [
+  { brand: "식물나라", product: "식물나라 멀티 선 파우더 팩트", account: "계정1" },
+  { brand: "오휘", product: "오휘 3HR 블러링 선파우더 교체 퍼프 1매", account: "계정2" }
+];
+const brandConflictMatch = findBestMatch("오휘선파우더", brandConflictProducts, buildProductIndex(brandConflictProducts));
+assert.ok(brandConflictMatch);
+assert.equal(brandConflictMatch.item.brand, "오휘");
+assert.notEqual(brandConflictMatch.item.brand, "식물나라");
 console.log("Structured product matching signals and judgments OK");
