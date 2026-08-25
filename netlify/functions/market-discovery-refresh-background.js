@@ -74,14 +74,27 @@ exports.handler = async (event) => {
     let items = mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]);
     const metrics = { apiCalls: 0, retries: 0 }; const toolAccount = accounts().find((item) => item.apiKey && item.secretKey && item.customerId);
     const backfill = items.filter((item) => item.monthlySearchStatus !== "available").sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_KEYWORDTOOL_BACKFILL);
+    const applyKeywordtoolRow = (item, row) => {
+      const pc = numericVolume(row?.monthlyPcQcCnt), mobile = numericVolume(row?.monthlyMobileQcCnt);
+      item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = pc !== null && mobile !== null ? "available" : "keywordtool-unavailable";
+      item.monthlyPcSearches = pc; item.monthlyMobileSearches = mobile; item.monthlyTotalSearches = pc !== null && mobile !== null ? pc + mobile : null;
+    };
     if (toolAccount) for (const batch of chunks(backfill, 5)) {
       try {
         const payload = await searchAdGet(toolAccount, "/keywordstool", { hintKeywords: batch.map((item) => item.keyword).join(","), showDetail: 1 }, metrics);
         const byKeyword = new Map(toolRows(payload).map((row) => [normalizedKeyword(row.relKeyword || row.keyword), row]));
-        for (const item of batch) { const row = byKeyword.get(item.normalizedKeyword); const pc = numericVolume(row?.monthlyPcQcCnt), mobile = numericVolume(row?.monthlyMobileQcCnt);
-          item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = pc !== null && mobile !== null ? "available" : "keywordtool-unavailable";
-          item.monthlyPcSearches = pc; item.monthlyMobileSearches = mobile; item.monthlyTotalSearches = pc !== null && mobile !== null ? pc + mobile : null; }
-      } catch (error) { errors.push(error.message); for (const item of batch) { item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = "request-failed"; } }
+        for (const item of batch) applyKeywordtoolRow(item, byKeyword.get(item.normalizedKeyword));
+      } catch (batchError) {
+        const retries = await Promise.allSettled(batch.map(async (item) => {
+          const payload = await searchAdGet(toolAccount, "/keywordstool", { hintKeywords: item.keyword, showDetail: 1 }, metrics);
+          const row = toolRows(payload).find((entry) => normalizedKeyword(entry.relKeyword || entry.keyword) === item.normalizedKeyword);
+          applyKeywordtoolRow(item, row);
+        }));
+        retries.forEach((result, index) => { if (result.status === "rejected") {
+          const item = batch[index]; item.keywordtoolCheckedAt = new Date().toISOString(); item.monthlySearchStatus = "request-failed";
+          errors.push(result.reason?.message || batchError.message);
+        } });
+      }
     }
     items = items.filter((item) => Date.now() - Date.parse(item.lastSeenAt || item.discoveredAt || 0) <= 45 * 86400000)
       .sort((a, b) => discoveryPriority(b) - discoveryPriority(a)).slice(0, MAX_CACHE);
