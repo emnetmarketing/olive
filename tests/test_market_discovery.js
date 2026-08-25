@@ -112,6 +112,17 @@ test("unavailable strong market evidence uses ratio-only slot without fabricated
   assert.equal(selected.ratioOnly[0].monthlyTotalSearches, null);
 });
 
+test("qualified ratio-only signals retain a bounded lane when numeric market candidates exceed 500", () => {
+  const numeric = Array.from({ length: 600 }, (_, i) => ({ keyword: `수치후보${i}`, discoverySource: ["product-cache"],
+    sourceConfidence: 80, relatedBrand: `브랜드${i}`, relatedProductType: "크림", monthlySearchStatus: "available", monthlyTotalSearches: 1000 + i }));
+  const ratio = Array.from({ length: 200 }, (_, i) => ({ keyword: `비율후보${i}`, discoverySource: ["product-cache", "youtube"],
+    sourceConfidence: 90, relatedBrand: `비율브랜드${i}`, relatedProductType: "쿠션", monthlySearchStatus: "keywordtool-unavailable" }));
+  const selected = analysis.selectWithMarketDiscovery([], [...numeric, ...ratio], new Map(), 5000, 500);
+  assert.equal(selected.diagnostics.marketSelected, 500);
+  assert.equal(selected.diagnostics.marketNumeric, 350);
+  assert.equal(selected.diagnostics.marketRatioOnly, 150);
+});
+
 test("unused market slots are fully returned to existing candidates", () => {
   const base = Array.from({ length: 100 }, (_, i) => ({ keyword: `기존${i}`, category: "beauty", categoryEvidence: "keyword", sources: ["searchad-query"],
     firstSeenAt: "2026-01-01T00:00:00.000Z", monthlyVolumeStatus: "available", monthlyTotalSearches: 1000 + i, priorityScore: i }));

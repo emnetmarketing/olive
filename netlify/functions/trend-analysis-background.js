@@ -382,7 +382,20 @@ function selectWithMarketDiscovery(baseCandidates, marketItems, priorSignals, li
     && (item.sources.length > 2 || item.sources.includes("searchad-new-query") || item.relatedBrand && (item.relatedProductType || item.relatedProductLine)))
     .sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0));
   const marketSelected = []; const keys = new Set();
-  for (const item of [...numericMarket, ...ratioOnly]) { if (marketSelected.length >= marketLimit) break; const key = normalizeKeyword(item.keyword); if (keys.has(key)) continue; keys.add(key); marketSelected.push(item); }
+  const add = (items, cap) => {
+    let added = 0;
+    for (const item of items) {
+      if (marketSelected.length >= marketLimit || added >= cap) break;
+      const key = normalizeKeyword(item.keyword); if (keys.has(key)) continue;
+      keys.add(key); marketSelected.push(item); added += 1;
+    }
+  };
+  // Keep a bounded lane for high-confidence ratio-only market signals. Any unused
+  // capacity is immediately returned to numeric market candidates (and then base).
+  const ratioOnlyReserve = Math.min(ratioOnly.length, Math.floor(marketLimit * 0.3));
+  add(numericMarket, marketLimit - ratioOnlyReserve);
+  add(ratioOnly, ratioOnlyReserve);
+  add([...numericMarket, ...ratioOnly], marketLimit - marketSelected.length);
   const numericKeys = new Set(numericMarket.map((item) => normalizeKeyword(item.keyword)));
   const selectedNumericMarket = marketSelected.filter((item) => numericKeys.has(normalizeKeyword(item.keyword)));
   const selectedRatioOnly = marketSelected.filter((item) => !numericKeys.has(normalizeKeyword(item.keyword)));
