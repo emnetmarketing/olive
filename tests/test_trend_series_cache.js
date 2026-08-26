@@ -48,6 +48,15 @@ test("quota preflight blocks work that exceeds the configured remaining budget",
   if (previous === undefined) delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET; else process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = previous;
 });
 
+test("quota usage for both API families is merged in one document", () => {
+  const usage = { daily: {}, monthly: {}, exhausted: {} };
+  quota.applyUsage(usage, { searchTrend: { calls: 20, retries: 15, exhausted: true }, shoppingInsight: { calls: 7, retries: 1 } });
+  assert.equal(usage.daily.searchTrend, 20);
+  assert.equal(usage.daily.shoppingInsight, 7);
+  assert.equal(usage.daily.searchTrendRetries, 15);
+  assert.equal(usage.exhausted.searchTrend, true);
+});
+
 test("market discovery and new Search Ad candidates receive fetch priority", () => {
   const prior = new Map([["이력후보", { estimatedSurgeCount: 800 }]]);
   const market = analysis.trendFetchPriority({ keyword: "시장후보", marketDiscovery: true, sources: [] }, prior);

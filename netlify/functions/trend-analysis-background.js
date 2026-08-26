@@ -5,7 +5,7 @@ const { discoveryPriority } = require("./market-discovery-core");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: lookupTrendSeries,
   upsert: upsertTrendSeries, writeDirty: writeDirtyTrendSeries } = require("./trend-series-cache");
-const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsage: recordQuotaUsage } = require("./trend-api-quota");
+const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch } = require("./trend-api-quota");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -451,11 +451,10 @@ exports.handler = async (event) => {
   let quotaUsageRecorded = false;
   const recordObservedUsage = async () => {
     if (quotaUsageRecorded) return; quotaUsageRecorded = true;
-    // Blob updates are serialized so the second API family cannot overwrite the
-    // first family counters after reading the same previous usage document.
-    for (const [type, metrics] of Object.entries(apiMetrics)) {
-      await recordQuotaUsage(type, metrics.calls, { exhausted: metrics.exhausted, retries: metrics.retries }).catch(() => null);
-    }
+    // Both API families are persisted in one Blob write. Netlify Blob reads are
+    // eventually consistent, so separate read-modify-write calls could otherwise
+    // overwrite the first family's counters with the second family's stale read.
+    await recordQuotaUsageBatch(apiMetrics).catch(() => null);
   };
   try {
     const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage] = await Promise.all([

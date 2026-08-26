@@ -24,10 +24,18 @@ function statusFor(usage, type, expectedCalls = 0) {
     remaining: Math.min(dailyRemaining, monthlyRemaining), expectedCalls, exhausted: Boolean(usage.exhausted[type]),
     sufficient: !usage.exhausted[type] && expectedCalls <= Math.min(dailyRemaining, monthlyRemaining) };
 }
-async function recordUsage(type, calls, { exhausted = false, retries = 0 } = {}) {
-  const usage = await readUsage(); usage.daily[type] = Number(usage.daily[type] || 0) + Number(calls || 0);
-  usage.monthly[type] = Number(usage.monthly[type] || 0) + Number(calls || 0); usage.exhausted[type] = Boolean(usage.exhausted[type] || exhausted);
-  usage.daily[`${type}Retries`] = Number(usage.daily[`${type}Retries`] || 0) + Number(retries || 0); usage.updatedAt = new Date().toISOString();
+function applyUsage(usage, metricsByType) {
+  for (const [type, metrics] of Object.entries(metricsByType || {})) {
+    usage.daily[type] = Number(usage.daily[type] || 0) + Number(metrics.calls || 0);
+    usage.monthly[type] = Number(usage.monthly[type] || 0) + Number(metrics.calls || 0);
+    usage.exhausted[type] = Boolean(usage.exhausted[type] || metrics.exhausted);
+    usage.daily[`${type}Retries`] = Number(usage.daily[`${type}Retries`] || 0) + Number(metrics.retries || 0);
+  }
+  usage.updatedAt = new Date().toISOString(); return usage;
+}
+async function recordUsageBatch(metricsByType) {
+  const usage = applyUsage(await readUsage(), metricsByType);
   await store().setJSON(USAGE_KEY, usage); return usage;
 }
-module.exports = { connect, readUsage, statusFor, recordUsage, limits, seoulParts, USAGE_KEY };
+async function recordUsage(type, calls, options = {}) { return recordUsageBatch({ [type]: { calls, ...options } }); }
+module.exports = { connect, readUsage, statusFor, recordUsage, recordUsageBatch, applyUsage, limits, seoulParts, USAGE_KEY };
