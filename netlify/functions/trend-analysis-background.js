@@ -3,6 +3,9 @@ const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readMarketDiscoveryCache } = require("./market-discovery-cache");
 const { discoveryPriority } = require("./market-discovery-core");
 const { readCache: readProductCache } = require("./search-ad-cache");
+const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: lookupTrendSeries,
+  upsert: upsertTrendSeries, writeDirty: writeDirtyTrendSeries } = require("./trend-series-cache");
+const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsage: recordQuotaUsage } = require("./trend-api-quota");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -156,18 +159,23 @@ async function responseJson(response, name) {
   if (!response.ok) throw new Error(`${name} 호출 실패: HTTP ${response.status} · ${payload.errMsg || payload.errorMessage || payload.message || "응답 오류"}`);
   return payload;
 }
-async function api(path, { method = "GET", params, body } = {}) {
+async function api(path, { method = "GET", params, body, metrics } = {}) {
   const id = String(process.env.NAVER_CLIENT_ID || "").trim();
   const secret = String(process.env.NAVER_CLIENT_SECRET || "").trim();
   if (!id || !secret) throw new Error("NAVER API HUB 인증정보가 없습니다.");
   const url = new URL(path, API_HUB);
   Object.entries(params || {}).forEach(([key, value]) => url.searchParams.set(key, String(value)));
   for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (metrics) metrics.calls += 1;
     const response = await fetch(url, { method, headers: {
       "X-NCP-APIGW-API-KEY-ID": id, "X-NCP-APIGW-API-KEY": secret,
       ...(body ? { "Content-Type": "application/json" } : {})
     }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
-    if (response.status !== 429 || attempt === 3) return responseJson(response, path);
+    if (response.status !== 429 || attempt === 3) {
+      if (response.status === 429 && metrics) metrics.exhausted = true;
+      return responseJson(response, path);
+    }
+    if (metrics) metrics.retries += 1;
     const retryAfterSeconds = Number(response.headers.get("retry-after") || 0);
     await sleep(retryAfterSeconds > 0 ? Math.min(30000, retryAfterSeconds * 1000) : 5000 * (attempt + 1));
   }
@@ -381,6 +389,13 @@ function marketCandidateForAnalysis(item) {
     relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "" };
 }
 
+function trendFetchPriority(candidate, priorSignals) {
+  return Number(Boolean(candidate?.marketDiscovery)) * 1000000
+    + Number(Boolean(candidate?.isNewSearchQuery || candidate?.sources?.includes("searchad-new-query"))) * 500000
+    + Number(Number(priorSignals?.get(candidate?.keyword)?.estimatedSurgeCount || 0) > 0) * 250000
+    + Number(candidate?.priorityScore || 0);
+}
+
 function selectWithMarketDiscovery(baseCandidates, marketItems, priorSignals, limit = MAX_ACTIVE_CANDIDATES, marketLimit = 500) {
   const marketPool = (marketItems || []).map(marketCandidateForAnalysis);
   const numericMarket = marketPool.filter((item) => item.monthlyVolumeStatus === "available" && Number(item.monthlyTotalSearches || 0) >= LOW_INTENSITY_SURGE_MIN_LIFT)
@@ -416,16 +431,30 @@ function selectWithMarketDiscovery(baseCandidates, marketItems, priorSignals, li
 }
 
 exports.handler = async (event) => {
-  connect(event);
+  connect(event); connectTrendCache(event); connectQuota(event);
   let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
   let job = await readJob(input.jobId) || input.job;
   if (!job?.jobId || job.state !== "running") return;
   const persist = async (patch) => { job = { ...job, ...patch, updatedAt: new Date().toISOString() }; await writeJob(job.jobId, job); };
   const started = Date.now();
+  let seriesCache = null; const dirtyTrendKeys = new Set();
+  let cacheStats = null;
+  const apiMetrics = { searchTrend: { calls: 0, retries: 0, exhausted: false }, shoppingInsight: { calls: 0, retries: 0, exhausted: false } };
+  let quotaUsageRecorded = false;
+  const recordObservedUsage = async () => {
+    if (quotaUsageRecorded) return; quotaUsageRecorded = true;
+    // Blob updates are serialized so the second API family cannot overwrite the
+    // first family counters after reading the same previous usage document.
+    for (const [type, metrics] of Object.entries(apiMetrics)) {
+      await recordQuotaUsage(type, metrics.calls, { exhausted: metrics.exhausted, retries: metrics.retries }).catch(() => null);
+    }
+  };
   try {
-    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache] = await Promise.all([
-      readCandidateCache(), readMarketDiscoveryCache().catch(() => null), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory()
+    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage] = await Promise.all([
+      readCandidateCache(), readMarketDiscoveryCache().catch(() => null), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory(),
+      readTrendSeriesCache(), readQuotaUsage()
     ]);
+    seriesCache = loadedSeriesCache;
     const priorSignals = new Map((priorSignalCache?.items || []).map((item) => [item.keyword, item]));
     const allCandidates = candidateCache.candidates;
     for (const candidate of allCandidates) {
@@ -478,45 +507,104 @@ exports.handler = async (event) => {
       monthlySearchStatus: candidate.monthlyVolumeStatus, monthlyTotalSearches: candidate.monthlyTotalSearches,
       searchTrendRequested: true, searchTrendStatus: "pending", marketDiscovery: Boolean(candidate.marketDiscovery)
     }]));
-    await persist({ message: `검색어트렌드 조회 중 · 0 / ${trendCandidates.length.toLocaleString("ko-KR")}`, totalCandidates: trendCandidates.length, progress: 5,
+    const trendMap = new Map(); const shoppingMap = new Map();
+    cacheStats = { searchTrend: { hits: 0, misses: 0, stale: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 },
+      shoppingInsight: { hits: 0, misses: 0, stale: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 } };
+    const searchFetchQueue = [];
+    for (const candidate of trendCandidates) {
+      const cached = lookupTrendSeries(seriesCache.entries, candidate.keyword, "search", candidate.category, job.queryStartDate, job.endDate);
+      if (cached.state === "hit") {
+        cacheStats.searchTrend.hits += 1; trendMap.set(candidate.keyword, cached.series);
+        const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
+        if (trace) Object.assign(trace, { cacheHit: true, trendFetchedAt: cached.record.fetchedAt, dataFreshness: "cache-current" });
+      } else {
+        cacheStats.searchTrend[cached.state === "stale" ? "stale" : "misses"] += 1; searchFetchQueue.push(candidate);
+      }
+    }
+    searchFetchQueue.sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
+    const shoppingFetchByCategory = new Map([["beauty", []], ["health", []]]);
+    for (const candidate of eligible) {
+      const cached = lookupTrendSeries(seriesCache.entries, candidate.keyword, "shopping", candidate.category, job.queryStartDate, job.endDate);
+      if (cached.state === "hit") { cacheStats.shoppingInsight.hits += 1; shoppingMap.set(candidate.keyword, cached.series); }
+      else { cacheStats.shoppingInsight[cached.state === "stale" ? "stale" : "misses"] += 1; shoppingFetchByCategory.get(candidate.category).push(candidate); }
+    }
+    for (const values of shoppingFetchByCategory.values()) values.sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
+    const expectedSearchCalls = Math.ceil(searchFetchQueue.length / 5);
+    const expectedShoppingCalls = [...shoppingFetchByCategory.values()].reduce((sum, values) => sum + Math.ceil(values.length / 5), 0);
+    const searchQuota = quotaStatusFor(quotaUsage, "searchTrend", expectedSearchCalls);
+    const shoppingQuota = quotaStatusFor(quotaUsage, "shoppingInsight", expectedShoppingCalls);
+    funnel.trendCache = { searchTrend: { ...cacheStats.searchTrend, expectedApiCalls: expectedSearchCalls },
+      shoppingInsight: { ...cacheStats.shoppingInsight, expectedApiCalls: expectedShoppingCalls }, quota: { searchTrend: searchQuota, shoppingInsight: shoppingQuota } };
+    if (!searchQuota.sufficient || !shoppingQuota.sufficient) {
+      const shortage = [searchQuota, shoppingQuota].filter((item) => !item.sufficient)
+        .map((item) => `${item.type}: 필요 ${item.expectedCalls.toLocaleString("ko-KR")} / 잔여 ${item.remaining.toLocaleString("ko-KR")}`).join(", ");
+      throw new Error(`현재 NAVER Data Lab 잔여 한도가 부족합니다. API 호출 없이 분석을 중단했습니다. (${shortage})`);
+    }
+    await persist({ message: `검색어트렌드 캐시 ${cacheStats.searchTrend.hits.toLocaleString("ko-KR")}건 재사용 · 신규 ${searchFetchQueue.length.toLocaleString("ko-KR")}건`, totalCandidates: trendCandidates.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: trendCandidates.length,
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30: [], matchTop30: [], calculationSamples: [] } });
-    const trendMap = new Map(); let processed = 0;
-    for (const requestBatch of chunks(chunks(trendCandidates, 5), 5)) {
+    let processed = cacheStats.searchTrend.hits;
+    for (const requestBatch of chunks(chunks(searchFetchQueue, 5), 5)) {
       let results;
       try {
         results = await Promise.all(requestBatch.map((batch) => api("/search-trend/v1/search", { method: "POST", body: {
           startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date",
           keywordGroups: batch.map((item) => ({ groupName: item.keyword, keywords: [item.keyword] }))
-        } }).catch((error) => { error.candidateCount = batch.length; throw error; })));
+        }, metrics: apiMetrics.searchTrend }).catch((error) => { error.candidateCount = batch.length; throw error; })));
       } catch (error) {
         funnel.searchTrend.apiErrorCandidates += Number(error.candidateCount || 0);
+        cacheStats.searchTrend.apiCalls = apiMetrics.searchTrend.calls; cacheStats.searchTrend.retries = apiMetrics.searchTrend.retries;
         await persist({ diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30: [], matchTop30: [], calculationSamples: [] } });
         throw error;
       }
-      for (const payload of results) for (const result of payload.results || []) trendMap.set(result.title, result.data || []);
+      const fetchedAt = new Date().toISOString();
+      for (let responseIndex = 0; responseIndex < results.length; responseIndex += 1) {
+        const returned = new Map((results[responseIndex].results || []).map((result) => [normalizeKeyword(result.title), result.data || []]));
+        for (const candidate of requestBatch[responseIndex]) {
+          const series = returned.get(normalizeKeyword(candidate.keyword)) || [];
+          trendMap.set(candidate.keyword, series); dirtyTrendKeys.add(upsertTrendSeries(seriesCache.entries, { keyword: candidate.keyword,
+            source: "search", startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt }));
+          const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
+          if (trace) Object.assign(trace, { cacheHit: false, trendFetchedAt: fetchedAt, dataFreshness: "fresh-fetch" });
+        }
+      }
       processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
       job.currentStage = "search-trend"; job.processedCount = processed; job.totalCount = trendCandidates.length;
       await persist({ message: `검색어트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${trendCandidates.length.toLocaleString("ko-KR")}`, progress: 5 + Math.round(processed / trendCandidates.length * 35) });
       await sleep(TREND_BATCH_DELAY_MS);
     }
     await persist({ message: "키워드별 쇼핑 트렌드 조회 중", progress: 42 });
-    const shoppingMap = new Map(); processed = 0;
-    job.currentStage = "shopping-trend"; job.processedCount = 0; job.totalCount = eligible.length;
+    processed = cacheStats.shoppingInsight.hits;
+    job.currentStage = "shopping-trend"; job.processedCount = processed; job.totalCount = eligible.length;
     for (const category of ["beauty", "health"]) {
-      const categoryItems = eligible.filter((item) => item.category === category);
+      const categoryItems = shoppingFetchByCategory.get(category);
       for (const requestBatch of chunks(chunks(categoryItems, 5), 5)) {
         const results = await Promise.all(requestBatch.map((batch) => api("/shopping/v1/category/keywords", { method: "POST", body: {
           startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date", category: CATEGORY_IDS[category],
           keyword: batch.map((item) => ({ name: item.keyword, param: [item.keyword] }))
-        } })));
-        for (const payload of results) for (const result of payload.results || []) shoppingMap.set(result.title, result.data || []);
+        }, metrics: apiMetrics.shoppingInsight })));
+        const fetchedAt = new Date().toISOString();
+        for (let responseIndex = 0; responseIndex < results.length; responseIndex += 1) {
+          const returned = new Map((results[responseIndex].results || []).map((result) => [normalizeKeyword(result.title), result.data || []]));
+          for (const candidate of requestBatch[responseIndex]) {
+            const series = returned.get(normalizeKeyword(candidate.keyword)) || [];
+            shoppingMap.set(candidate.keyword, series); dirtyTrendKeys.add(upsertTrendSeries(seriesCache.entries, { keyword: candidate.keyword,
+              source: "shopping", category, startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt }));
+          }
+        }
         processed += requestBatch.reduce((sum, batch) => sum + batch.length, 0);
         job.currentStage = "shopping-trend"; job.processedCount = processed; job.totalCount = eligible.length;
         await persist({ message: `키워드별 쇼핑 트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${eligible.length.toLocaleString("ko-KR")}`, progress: 42 + Math.round(processed / eligible.length * 30) });
         await sleep(TREND_BATCH_DELAY_MS);
       }
     }
+    if (dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys);
+    cacheStats.searchTrend.freshFetchCandidates = searchFetchQueue.length; cacheStats.searchTrend.apiCalls = apiMetrics.searchTrend.calls; cacheStats.searchTrend.retries = apiMetrics.searchTrend.retries;
+    cacheStats.shoppingInsight.freshFetchCandidates = [...shoppingFetchByCategory.values()].reduce((sum, values) => sum + values.length, 0);
+    cacheStats.shoppingInsight.apiCalls = apiMetrics.shoppingInsight.calls; cacheStats.shoppingInsight.retries = apiMetrics.shoppingInsight.retries;
+    funnel.trendCache.searchTrend = { ...funnel.trendCache.searchTrend, ...cacheStats.searchTrend };
+    funnel.trendCache.shoppingInsight = { ...funnel.trendCache.shoppingInsight, ...cacheStats.shoppingInsight };
+    await recordObservedUsage();
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
     job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
     const productIndex = buildProductIndex(productCache.items);
@@ -598,6 +686,7 @@ exports.handler = async (event) => {
         estimatedSurgeCount: Math.round(metrics.surgeCount), riseRate: metrics.baseline > 0 ? (metrics.surgeCount / metrics.baseline * 100) : null,
         endLift: Math.round(metrics.endLift), peakLift: Math.round(metrics.peakLift), peakDailyLift: Math.round(metrics.peakDailyLift || metrics.peakLift),
         sustainedLift: Math.round(metrics.sustainedLift || 0), peakDailyDate: metrics.peakDailyDate || null, latestDataDate: metrics.latestPeriod,
+        trendFetchedAt: trace?.trendFetchedAt || null, cacheHit: Boolean(trace?.cacheHit), dataFreshness: trace?.dataFreshness || null,
         trendSeries: metrics.series, trendSlope: slope(metrics.series.map((point) => point.estimated)),
         shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
@@ -657,7 +746,9 @@ exports.handler = async (event) => {
       rows.push({ keyword: candidate.keyword, category: candidate.category, monthlySearches: null, estimatedBaseline: null, estimatedLatest: null,
         estimatedPeak: null, estimatedSurgeCount: null, riseRate: null, endLift: null, peakLift: null, peakDailyLift: null,
         peakRelativeLiftPct: ratioMetrics.relativeRatioLift, peakBaseline: null, peakEstimatedSearches: null, peakDate: ratioMetrics.peakDate,
-        latestDataDate: ratioMetrics.series.at(-1)?.period || null, trendSeries: ratioMetrics.series, trendSlope: slope(ratioMetrics.series.map((point) => point.ratio)),
+        latestDataDate: ratioMetrics.series.at(-1)?.period || null, trendFetchedAt: trace?.trendFetchedAt || null,
+        cacheHit: Boolean(trace?.cacheHit), dataFreshness: trace?.dataFreshness || null,
+        trendSeries: ratioMetrics.series, trendSlope: slope(ratioMetrics.series.map((point) => point.ratio)),
         shoppingTrend: [], shoppingRise: 0, newSearchAdQuery: candidate.sources.includes("searchad-new-query"),
         searchAdImpressions30d: candidate.impressions30d, match, sources: candidate.sources, news: null,
         absoluteSurgePassed: false, relativeSurgePassed: false, lowIntensityEarlySignal: false,
@@ -716,6 +807,9 @@ exports.handler = async (event) => {
     await persist({ state: "completed", message: "분석 완료", progress: 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
       currentStage: "completed", processedCount: trendCandidates.length, totalCount: trendCandidates.length,
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
+      cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
+      staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
+      shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
       productMatchResultCount: rows.filter((row) => row.resultType === "product_match").length,
       brandCategorySignalCount: rows.filter((row) => row.resultType === "brand_or_category_signal").length,
       domainRelatedSignalCount: rows.filter((row) => row.resultType === "domain_related_signal").length,
@@ -729,11 +823,21 @@ exports.handler = async (event) => {
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
     await writeLastSuccess(job);
   } catch (error) {
-    await persist({ state: "failed", message: "분석 실패", failedAt: new Date().toISOString(), durationMs: Date.now() - started, errors: [error.message] });
+    if (seriesCache && dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys).catch(() => null);
+    await recordObservedUsage();
+    if (cacheStats) {
+      cacheStats.searchTrend.apiCalls = apiMetrics.searchTrend.calls; cacheStats.searchTrend.retries = apiMetrics.searchTrend.retries;
+      cacheStats.shoppingInsight.apiCalls = apiMetrics.shoppingInsight.calls; cacheStats.shoppingInsight.retries = apiMetrics.shoppingInsight.retries;
+    }
+    await persist({ state: "failed", message: "분석 실패", failedAt: new Date().toISOString(), durationMs: Date.now() - started,
+      cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
+      staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
+      shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
+      errors: [error.message] });
   }
 };
 
 exports._test = { estimate, periodMetrics, instantMetrics, surgePassSignals, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
   evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, classifyLowIntensitySignal, hasBusinessDomainEvidence, productBrandToken,
   median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, selectWithMarketDiscovery,
-  marketCandidateForAnalysis, ratioOnlyMetrics, domainEvidenceScore, isRecentCandidate };
+  marketCandidateForAnalysis, ratioOnlyMetrics, domainEvidenceScore, isRecentCandidate, trendFetchPriority };

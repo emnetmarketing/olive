@@ -1541,6 +1541,7 @@
           <strong>신규 시장 후보 (marketDiscovery)</strong><br>
           <span id="marketDiscoverySummary">신규 시장 후보 상태를 확인하는 중입니다.</span><br>
           <span id="marketDiscoveryProgress" class="muted"></span>
+          <div id="trendCacheSummary" class="muted" style="margin-top:6px;">Trend 캐시/호출 예산을 확인하는 중입니다.</div>
           <div id="marketDiscoveryDiagnostic" style="display:none;margin-top:12px;">
             <strong>시장 후보 검색</strong>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
@@ -2622,6 +2623,16 @@
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`); renderMarketDiscoveryStatus(payload);
       } catch (error) { $("marketDiscoverySummary").textContent = `신규 시장 후보 상태 조회 실패: ${error.message}`; }
     }
+    async function loadTrendCacheStatus() {
+      if (!canEdit()) return;
+      try {
+        const response = await fetch("/.netlify/functions/trend-cache-status", { cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        const search = payload.quota?.searchTrend || {}; const shopping = payload.quota?.shoppingInsight || {};
+        $("trendCacheSummary").textContent = `Trend 캐시 ${Number(payload.cache?.loadedEntryCount || 0).toLocaleString("ko-KR")}건 · 오늘 Search Trend ${Number(search.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(search.dailyLimit || 0).toLocaleString("ko-KR")}회 · Shopping Insight ${Number(shopping.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(shopping.dailyLimit || 0).toLocaleString("ko-KR")}회`;
+      } catch (error) { $("trendCacheSummary").textContent = `Trend 캐시/호출 예산 조회 실패: ${error.message}`; }
+    }
     async function refreshMarketDiscovery() {
       if (!requireEdit("신규 시장 후보 새로고침")) return;
       $("refreshMarketDiscoveryBtn").disabled = true; $("marketDiscoveryProgress").textContent = "신규 시장 후보 수집을 시작하는 중입니다.";
@@ -3350,6 +3361,7 @@
       loadSearchAdCacheStatus();
       loadCandidateStatus();
       loadMarketDiscoveryStatus();
+      loadTrendCacheStatus();
       $("clearDownloadHistoryBtn").style.display = "none";
       renderDownloadHistoryShared();
       applyAuthState();
