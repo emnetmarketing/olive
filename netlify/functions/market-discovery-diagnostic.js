@@ -4,6 +4,7 @@ const { readCache: readProductCache } = require("./search-ad-cache");
 const { readDiagnosticIndex, readLastSuccess } = require("./trend-analysis-cache");
 const { normalizedKeyword, discoveryPriority } = require("./market-discovery-core");
 const { buildProductIndex, findBestMatch } = require("./product-matching");
+const { connect: connectTrendCache, readCache: readTrendCache } = require("./trend-series-cache");
 
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 function isRatioEligible(item) { return item?.monthlySearchStatus === "keywordtool-unavailable" && Number(item.sourceConfidence || 0) >= 75
@@ -20,11 +21,11 @@ function safeMatch(match) { if (!match) return null; return { product: match.ite
   score: match.score, judgment: match.judgment, reason: match.reason, matchingCandidateCount: match.matchingCandidateCount }; }
 
 exports.handler = async (event) => {
-  connect(event); if (event.httpMethod !== "GET") return json(405, { error: "GET 요청만 허용됩니다." });
+  connect(event); connectTrendCache(event); if (event.httpMethod !== "GET") return json(405, { error: "GET 요청만 허용됩니다." });
   const keyword = String(event.queryStringParameters?.keyword || "").trim(); if (!keyword) return json(400, { error: "keyword가 필요합니다." });
   try {
-    const [market, candidateCache, productCache, analysisIndex, lastSuccess, youtubeSnapshot] = await Promise.all([
-      readCache(), readCandidateCache(), readProductCache(), readDiagnosticIndex(), readLastSuccess("latest"), readYoutubeSnapshot()
+    const [market, candidateCache, productCache, analysisIndex, lastSuccess, youtubeSnapshot, trendCache] = await Promise.all([
+      readCache(), readCandidateCache(), readProductCache(), readDiagnosticIndex(), readLastSuccess("latest"), readYoutubeSnapshot(), readTrendCache()
     ]);
     const key = normalizedKeyword(keyword); const marketItems = market?.items || []; const protectedItems = protectedSelection(marketItems);
     const item = marketItems.find((entry) => entry.normalizedKeyword === key) || null;
@@ -38,6 +39,7 @@ exports.handler = async (event) => {
       return textKey.length >= 2 && (contentKey.includes(textKey) || titleKey.length >= 3 && textKey.includes(titleKey));
     }).slice(0, 20);
     const match = productCache?.items?.length ? findBestMatch(keyword, productCache.items, buildProductIndex(productCache.items)) : null;
+    const trendRecord = trendCache.entries.get(key)?.search || null;
     let exclusionReason = null;
     if (!item && !existingCandidate) exclusionReason = "marketDiscovery와 기존 후보 캐시에 없음";
     else if (item && protectedRank < 1 && !existingCandidate) exclusionReason = item.monthlySearchStatus === "not-requested" ? "keywordstool 미조회로 monthly-search/ratio-only 유형 미확정"
@@ -56,6 +58,8 @@ exports.handler = async (event) => {
       selectedForAnalysis: Boolean(trace), analysis: trace, finalResult: finalResult ? { resultType: finalResult.resultType,
         estimatedSurgeCount: finalResult.estimatedSurgeCount, peakDailyLift: finalResult.peakDailyLift,
         peakRelativeLiftPct: finalResult.peakRelativeLiftPct, relativeRatioLift: finalResult.relativeRatioLift } : null,
+      trendCache: trendRecord ? { status: "completed", requestStartDate: trendRecord.requestStartDate, requestEndDate: trendRecord.requestEndDate,
+        latestDataDate: trendRecord.latestDataDate, fetchedAt: trendRecord.fetchedAt } : { status: trace?.searchTrendStatus === "pending-cache" ? "quota-wait" : "not-fetched" },
       productMatch: safeMatch(match), youtubeRawMatches: youtubeMatches.map((video) => ({ videoId: video.videoId, channelTitle: video.channelTitle,
         title: video.title, publishedAt: video.publishedAt, sourceQuery: video.sourceQuery })), exclusionReason });
   } catch (error) { return json(500, { error: `시장 후보 진단 실패: ${error.message}` }); }

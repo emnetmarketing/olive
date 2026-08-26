@@ -8,7 +8,7 @@ function seoulParts(now = new Date()) {
   return { date: `${p.year}-${p.month}-${p.day}`, month: `${p.year}-${p.month}` };
 }
 function limits() {
-  return { searchTrend: { daily: Number(process.env.NAVER_SEARCH_TREND_DAILY_BUDGET || 1000), monthly: Number(process.env.NAVER_SEARCH_TREND_MONTHLY_BUDGET || 50000) },
+  return { searchTrend: { daily: Number(process.env.DAILY_TREND_FETCH_BUDGET || process.env.NAVER_SEARCH_TREND_DAILY_BUDGET || 300), monthly: Number(process.env.NAVER_SEARCH_TREND_MONTHLY_BUDGET || 50000) },
     shoppingInsight: { daily: Number(process.env.NAVER_SHOPPING_INSIGHT_DAILY_BUDGET || 1000), monthly: Number(process.env.NAVER_SHOPPING_INSIGHT_MONTHLY_BUDGET || 50000) } };
 }
 async function readUsage(now = new Date()) {
@@ -21,6 +21,7 @@ function statusFor(usage, type, expectedCalls = 0) {
   const limit = limits()[type]; const dailyUsed = Number(usage.daily[type] || 0); const monthlyUsed = Number(usage.monthly[type] || 0);
   const dailyRemaining = Math.max(0, limit.daily - dailyUsed); const monthlyRemaining = Math.max(0, limit.monthly - monthlyUsed);
   return { type, dailyLimit: limit.daily, monthlyLimit: limit.monthly, dailyUsed, monthlyUsed, dailyRemaining, monthlyRemaining,
+    dailyKeywords: Number(usage.daily[`${type}Keywords`] || 0),
     remaining: Math.min(dailyRemaining, monthlyRemaining), expectedCalls, exhausted: Boolean(usage.exhausted[type]),
     sufficient: !usage.exhausted[type] && expectedCalls <= Math.min(dailyRemaining, monthlyRemaining) };
 }
@@ -30,6 +31,7 @@ function applyUsage(usage, metricsByType) {
     usage.monthly[type] = Number(usage.monthly[type] || 0) + Number(metrics.calls || 0);
     usage.exhausted[type] = Boolean(usage.exhausted[type] || metrics.exhausted);
     usage.daily[`${type}Retries`] = Number(usage.daily[`${type}Retries`] || 0) + Number(metrics.retries || 0);
+    usage.daily[`${type}Keywords`] = Number(usage.daily[`${type}Keywords`] || 0) + Number(metrics.keywords || 0);
   }
   usage.updatedAt = new Date().toISOString(); return usage;
 }

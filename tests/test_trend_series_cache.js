@@ -48,6 +48,14 @@ test("quota preflight blocks work that exceeds the configured remaining budget",
   if (previous === undefined) delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET; else process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = previous;
 });
 
+test("default internal Search Trend safety budget is 300 calls per Seoul day", () => {
+  const modern = process.env.DAILY_TREND_FETCH_BUDGET; const legacy = process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
+  delete process.env.DAILY_TREND_FETCH_BUDGET; delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
+  assert.equal(quota.limits().searchTrend.daily, 300);
+  if (modern !== undefined) process.env.DAILY_TREND_FETCH_BUDGET = modern;
+  if (legacy !== undefined) process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = legacy;
+});
+
 test("quota usage for both API families is merged in one document", () => {
   const usage = { daily: {}, monthly: {}, exhausted: {} };
   quota.applyUsage(usage, { searchTrend: { calls: 20, retries: 15, exhausted: true }, shoppingInsight: { calls: 7, retries: 1 } });
@@ -66,6 +74,31 @@ test("market discovery and new Search Ad candidates receive fetch priority", () 
   assert.ok(market > searchAd && searchAd > history && history > ordinary);
 });
 
+test("an empty 5,000-keyword cache schedules only the internal daily budget", () => {
+  const queue = Array.from({ length: 5000 }, (_, index) => ({ keyword: `후보${index}` }));
+  const plan = analysis.planTrendFetch(queue, { remaining: 300, dailyRemaining: 300 });
+  assert.equal(plan.expectedCalls, 300);
+  assert.equal(plan.selected.length, 1500);
+  assert.equal(plan.pending.length, 3500);
+});
+
+test("an exhausted provider quota schedules no API calls and leaves all candidates pending", () => {
+  const queue = Array.from({ length: 5000 }, (_, index) => ({ keyword: `후보${index}` }));
+  const plan = analysis.planTrendFetch(queue, { remaining: 300, dailyRemaining: 300, exhausted: true });
+  assert.equal(plan.expectedCalls, 0);
+  assert.equal(plan.selected.length, 0);
+  assert.equal(plan.pending.length, 5000);
+});
+
+test("a later run continues from cache misses and a complete cache needs zero calls", () => {
+  const remaining = Array.from({ length: 700 }, (_, index) => ({ keyword: `미완료${index}` }));
+  const continued = analysis.planTrendFetch(remaining, { remaining: 300, dailyRemaining: 300 });
+  assert.equal(continued.selected.length, 700);
+  assert.equal(continued.expectedCalls, 140);
+  const complete = analysis.planTrendFetch([], { remaining: 300, dailyRemaining: 300 });
+  assert.equal(complete.expectedCalls, 0);
+});
+
 test("period surge calculation remains unchanged by cache integration", () => {
   const series = [100, 100, 100, 100, 100, 100, 100, 500].map((estimated, index) => ({ period: `2026-08-${String(index + 1).padStart(2, "0")}`, estimated }));
   const result = analysis.periodMetrics(series, "2026-08-08", "2026-08-08");
@@ -80,4 +113,12 @@ test("persistent 429 stops safely and preserves completed cache work and last-su
   assert.match(source, /metrics\?\.exhausted[\s\S]*NAVER 일일 호출 한도 소진 상태/);
   assert.match(source, /catch \(error\)[\s\S]*writeDirtyTrendSeries\(seriesCache, dirtyTrendKeys\)/);
   assert.match(source, /await persist\(\{ state: "completed"[\s\S]*await writeLastSuccess\(job\)/);
+});
+
+test("partial analysis records pending coverage instead of failing the job", () => {
+  const source = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  assert.match(source, /const pendingTrendCacheCount = Math\.max/);
+  assert.match(source, /const partialAnalysis = pendingTrendCacheCount > 0/);
+  assert.match(source, /state: "completed"[\s\S]*partialAnalysis, trendAvailableCount, pendingTrendCacheCount, trendCoveragePct/);
+  assert.doesNotMatch(source, /잔여 한도가 부족합니다[\s\S]*throw new Error/);
 });

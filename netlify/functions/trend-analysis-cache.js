@@ -8,6 +8,7 @@ const STALE_JOB_MS = 12 * 60 * 1000;
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE); }
 function lastSuccessKeys(mode) { return { mode: `last-success/${mode}`, latest: "last-success/latest" }; }
+function lastPartialKeys(mode) { return { mode: `last-partial/${mode}`, latest: "last-partial/latest" }; }
 async function readJob(jobId) { return store().get(`jobs/${jobId}`, { type: "json" }); }
 async function writeJob(jobId, value) { await store().setJSON(`jobs/${jobId}`, value); return value; }
 async function writeLastSuccess(job) {
@@ -22,6 +23,19 @@ async function readLastSuccess(mode = "latest") {
   if (!pointer?.jobId) return null;
   const job = await readJob(pointer.jobId);
   return job?.state === "completed" ? job : null;
+}
+async function writeLastPartial(job) {
+  if (!job?.jobId || job.state !== "completed" || !job.partialAnalysis) throw new Error("Only a completed partial analysis job can be published.");
+  const pointer = { jobId: job.jobId, mode: job.mode, completedAt: job.completedAt, updatedAt: new Date().toISOString() };
+  const keys = lastPartialKeys(job.mode);
+  await Promise.all([store().setJSON(keys.mode, pointer), store().setJSON(keys.latest, pointer)]);
+  return pointer;
+}
+async function readLastPartial(mode = "latest") {
+  const pointer = await store().get(`last-partial/${mode}`, { type: "json" });
+  if (!pointer?.jobId) return null;
+  const job = await readJob(pointer.jobId);
+  return job?.state === "completed" && job.partialAnalysis ? job : null;
 }
 async function writeDiagnosticIndex(value) { await store().setJSON(DIAGNOSTIC_INDEX_KEY, value); return value; }
 async function readDiagnosticIndex() { return store().get(DIAGNOSTIC_INDEX_KEY, { type: "json" }).catch(() => null); }
@@ -64,4 +78,5 @@ async function acquireJob(input) {
 }
 
 module.exports = { connect, store, readJob, writeJob, createJob, acquireJob, readCurrentJob, writeLastSuccess, readLastSuccess,
-  writeDiagnosticIndex, readDiagnosticIndex, lastSuccessKeys, CURRENT_JOB_KEY, DIAGNOSTIC_INDEX_KEY, STALE_JOB_MS };
+  writeLastPartial, readLastPartial, writeDiagnosticIndex, readDiagnosticIndex, lastSuccessKeys, lastPartialKeys,
+  CURRENT_JOB_KEY, DIAGNOSTIC_INDEX_KEY, STALE_JOB_MS };

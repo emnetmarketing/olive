@@ -1542,14 +1542,28 @@
           <span id="marketDiscoverySummary">신규 시장 후보 상태를 확인하는 중입니다.</span><br>
           <span id="marketDiscoveryProgress" class="muted"></span>
           <div id="trendCacheSummary" class="muted" style="margin-top:6px;">Trend 캐시/호출 예산을 확인하는 중입니다.</div>
-          <div id="marketDiscoveryDiagnostic" style="display:none;margin-top:12px;">
-            <strong>시장 후보 검색</strong>
+          <div id="marketDiscoveryNewList" style="display:none;margin-top:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+              <strong>신규 발견 후보 TOP 100</strong>
+              <select id="marketDiscoveryWindow" style="width:auto;min-width:130px;">
+                <option value="today">오늘 처음 발견</option><option value="24h" selected>최근 24시간</option>
+                <option value="3d">최근 3일</option><option value="7d">최근 7일</option><option value="all">전체</option>
+              </select>
+            </div>
+            <div class="table-wrap" style="max-height:420px;margin-top:8px;overflow:auto;">
+              <table><thead><tr><th>순위</th><th>키워드</th><th>발견 소스</th><th>최초/최근 발견</th><th>신뢰도</th><th>브랜드·제품 문맥</th><th>월간검색량</th><th>보호 슬롯</th><th>Trend 상태</th></tr></thead>
+                <tbody id="marketDiscoveryNewBody"><tr><td colspan="9" class="muted">신규 후보를 불러오는 중입니다.</td></tr></tbody></table>
+            </div>
+          </div>
+          <details id="marketDiscoveryDiagnostic" style="display:none;margin-top:12px;">
+            <summary><strong>관리자 상세 진단</strong></summary>
+            <div style="margin-top:10px;"><strong>시장 후보 검색</strong></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
               <input id="marketDiscoveryKeyword" type="text" placeholder="검색어 입력" style="min-width:220px;flex:1;">
               <button id="marketDiscoverySearchBtn" class="secondary" type="button">검색</button>
             </div>
             <pre id="marketDiscoveryDiagnosticResult" style="max-height:360px;overflow:auto;white-space:pre-wrap;font-size:12px;margin-top:8px;"></pre>
-          </div>
+          </details>
         </div>
         <div id="analysisProgressPanel" class="api-errors" style="margin-bottom:16px;">
           <strong>분석 진행 상태</strong><br><span id="analysisProgressText"></span>
@@ -1954,6 +1968,7 @@
       $("adminAccessCard").style.display = master ? "block" : "none";
       if ($("headerAccessBtn")) $("headerAccessBtn").style.display = master ? "inline-flex" : "none";
       if ($("marketDiscoveryDiagnostic")) $("marketDiscoveryDiagnostic").style.display = editable ? "block" : "none";
+      if ($("marketDiscoveryNewList")) $("marketDiscoveryNewList").style.display = editable ? "block" : "none";
 
       const editableIds = [
         "surgeThreshold", "matchThreshold",
@@ -2354,11 +2369,19 @@
     let analysisPollTimer = null;
     let currentJobWatchTimer = null;
     let activeAnalysisJobId = null;
+    let lastMarketTrendStatusLoad = 0;
     const CURRENT_JOB_WATCH_INTERVAL_MS = 8000;
 
     function startCurrentJobWatcher() {
       if (currentJobWatchTimer || !state.currentUser) return;
-      currentJobWatchTimer = setInterval(() => { if (state.currentUser) loadCurrentAnalysis(); }, CURRENT_JOB_WATCH_INTERVAL_MS);
+      currentJobWatchTimer = setInterval(() => {
+        if (!state.currentUser) return;
+        loadCurrentAnalysis();
+        if (canEdit() && Date.now() - lastMarketTrendStatusLoad >= 30000) {
+          lastMarketTrendStatusLoad = Date.now();
+          loadTrendCacheStatus(); loadMarketDiscoveryNewList();
+        }
+      }, CURRENT_JOB_WATCH_INTERVAL_MS);
     }
 
     function stopCurrentJobWatcher() {
@@ -2435,16 +2458,17 @@
       render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount,
         news: results.filter((row) => row.news).length }, results, results.slice(0, 10), job.completedAt);
       $("analysisProgressPanel").classList.toggle("visible", !restored);
-      $("analysisProgressText").textContent = `${restored ? "마지막 정상 결과 복원" : "분석 완료"} · ${job.mode === "instant" ? "즉시 분석" : "기간 분석"} · 후보 ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")}건 · 결과 ${results.length.toLocaleString("ko-KR")}건 · 기준 ${Number(job.surgeThreshold).toLocaleString("ko-KR")} / ${job.matchThreshold}%`;
+      const coverage = job.partialAnalysis ? ` · 부분 분석 · Trend 커버리지 ${Number(job.trendAvailableCount || 0).toLocaleString("ko-KR")} / ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 대기 ${Number(job.pendingTrendCacheCount || 0).toLocaleString("ko-KR")}건` : " · 전체 분석";
+      $("analysisProgressText").textContent = `${restored ? "저장 결과 복원" : "분석 완료"} · ${job.mode === "instant" ? "즉시 분석" : "기간 분석"}${coverage} · 결과 ${results.length.toLocaleString("ko-KR")}건 · 기준 ${Number(job.surgeThreshold).toLocaleString("ko-KR")} / ${job.matchThreshold}%`;
       return results;
     }
 
     async function loadLastSuccessfulAnalysis(mode = "latest") {
       try {
-        const response = await fetch(`/.netlify/functions/trend-analysis-latest?mode=${encodeURIComponent(mode)}`, { cache: "no-store" });
-        if (response.status === 404) return null;
-        const job = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(job.error || `마지막 분석 결과 HTTP ${response.status}`);
+        const responses = await Promise.all(["full", "partial"].map((result) => fetch(`/.netlify/functions/trend-analysis-latest?mode=${encodeURIComponent(mode)}&result=${result}`, { cache: "no-store" })));
+        const jobs = await Promise.all(responses.map(async (response) => response.ok ? response.json().catch(() => null) : null));
+        const job = jobs.filter(Boolean).sort((a, b) => Date.parse(b.completedAt || 0) - Date.parse(a.completedAt || 0))[0];
+        if (!job) return null;
         if (job.state !== "completed") return null;
         displayCompletedAnalysis(job, { restored: true });
         return job;
@@ -2472,6 +2496,7 @@
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
         const results = displayCompletedAnalysis(job);
+        await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList()]);
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
         finishAnalysisControls();
       } catch (error) {
@@ -2630,14 +2655,34 @@
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         const search = payload.quota?.searchTrend || {}; const shopping = payload.quota?.shoppingInsight || {};
-        $("trendCacheSummary").textContent = `Trend 캐시 ${Number(payload.cache?.loadedEntryCount || 0).toLocaleString("ko-KR")}건 · 오늘 Search Trend ${Number(search.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(search.dailyLimit || 0).toLocaleString("ko-KR")}회 · Shopping Insight ${Number(shopping.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(shopping.dailyLimit || 0).toLocaleString("ko-KR")}회`;
+        const cached = Number(payload.cache?.searchTrendEntryCount || 0); const target = Number(state.currentAnalysisJob?.analyzedCandidateCount || 5000);
+        $("trendCacheSummary").textContent = `Trend 캐시 구축 ${cached.toLocaleString("ko-KR")} / ${target.toLocaleString("ko-KR")} · 미완료 ${Math.max(0, target - cached).toLocaleString("ko-KR")} · 내부 안전 budget ${Number(search.dailyLimit || 0).toLocaleString("ko-KR")}/day · 오늘 사용 ${Number(search.dailyUsed || 0).toLocaleString("ko-KR")}회 · 남음 ${Number(search.dailyRemaining || 0).toLocaleString("ko-KR")}회 · 오늘 완료 키워드 ${Number(search.dailyKeywords || 0).toLocaleString("ko-KR")}건 · NAVER 실제 quota는 API HUB 콘솔 확인 필요`;
       } catch (error) { $("trendCacheSummary").textContent = `Trend 캐시/호출 예산 조회 실패: ${error.message}`; }
+    }
+    const TREND_STATUS_LABELS = { completed: "Trend 완료", pending: "Trend 조회 대기", "quota-wait": "API quota 대기", "not-selected": "보호 슬롯 대기" };
+    async function loadMarketDiscoveryNewList() {
+      if (!canEdit()) return;
+      const windowName = $("marketDiscoveryWindow")?.value || "24h";
+      try {
+        const response = await fetch(`/.netlify/functions/market-discovery-list?window=${encodeURIComponent(windowName)}&limit=100`, { cache: "no-store" });
+        const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        const rows = payload.items || [];
+        $("marketDiscoveryNewBody").innerHTML = rows.length ? rows.map((item) => `<tr>
+          <td>${Number(item.rank)}</td><td><strong>${escapeHtml(item.keyword)}</strong></td>
+          <td>${escapeHtml((item.discoverySource || []).join(" + ") || "-")}</td>
+          <td>${item.discoveredAt ? formatHistoryDate(item.discoveredAt) : "-"}<br><small>${item.lastSeenAt ? formatHistoryDate(item.lastSeenAt) : "-"}</small></td>
+          <td>${Number(item.sourceConfidence || 0)}</td><td>${escapeHtml([item.relatedBrand, item.relatedProductLine || item.relatedProductType].filter(Boolean).join(" · ") || "-")}</td>
+          <td>${item.monthlyTotalSearches == null ? escapeHtml(item.monthlySearchStatus || "ratio-only") : Number(item.monthlyTotalSearches).toLocaleString("ko-KR")}</td>
+          <td>${item.selectedForProtectedSlot ? `#${Number(item.protectedSlotRank)}` : "-"}</td>
+          <td>${escapeHtml(TREND_STATUS_LABELS[item.trendStatus] || item.trendStatus || "Trend 미조회")}${item.trendFetchedAt ? `<br><small>${formatHistoryDate(item.trendFetchedAt)}</small>` : ""}</td>
+        </tr>`).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
+      } catch (error) { $("marketDiscoveryNewBody").innerHTML = `<tr><td colspan="9" class="muted">신규 후보 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
     }
     async function refreshMarketDiscovery() {
       if (!requireEdit("신규 시장 후보 새로고침")) return;
       $("refreshMarketDiscoveryBtn").disabled = true; $("marketDiscoveryProgress").textContent = "신규 시장 후보 수집을 시작하는 중입니다.";
       try { const response = await fetch("/.netlify/functions/market-discovery-refresh", { method: "POST" }); const payload = await response.json().catch(() => ({}));
-        if (response.status !== 409 && !response.ok) throw new Error(payload.error || `HTTP ${response.status}`); await loadMarketDiscoveryStatus();
+        if (response.status !== 409 && !response.ok) throw new Error(payload.error || `HTTP ${response.status}`); await loadMarketDiscoveryStatus(); await loadMarketDiscoveryNewList();
       } catch (error) { $("marketDiscoveryProgress").textContent = `신규 시장 후보 수집 시작 실패: ${error.message}`; $("refreshMarketDiscoveryBtn").disabled = !canEdit(); }
     }
     async function searchMarketDiscovery() {
@@ -3306,6 +3351,7 @@
     bindEvent("refreshMarketDiscoveryBtn", "click", refreshMarketDiscovery);
     bindEvent("marketDiscoverySearchBtn", "click", searchMarketDiscovery);
     bindEvent("marketDiscoveryKeyword", "keydown", (event) => { if (event.key === "Enter") searchMarketDiscovery(); });
+    bindEvent("marketDiscoveryWindow", "change", loadMarketDiscoveryNewList);
     bindEvent("scheduleBtn", "click", toggleSchedulePanel);
     bindEvent("startScheduleBtn", "click", startScheduledCollection);
     bindEvent("stopScheduleBtn", "click", () => stopScheduledCollection(true));
@@ -3362,6 +3408,7 @@
       loadCandidateStatus();
       loadMarketDiscoveryStatus();
       loadTrendCacheStatus();
+      loadMarketDiscoveryNewList();
       $("clearDownloadHistoryBtn").style.display = "none";
       renderDownloadHistoryShared();
       applyAuthState();

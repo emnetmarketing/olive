@@ -8,7 +8,9 @@ exports.handler = async (event) => {
     const [cache, usage] = await Promise.all([readCache(), readUsage()]);
     return { statusCode: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }, body: JSON.stringify({
       ok: true,
-      cache: { ...(cache.manifest || {}), loadedEntryCount: cache.entries.size },
+      cache: { ...(cache.manifest || {}), loadedEntryCount: cache.entries.size,
+        searchTrendEntryCount: [...cache.entries.values()].filter((entry) => entry.search).length,
+        shoppingInsightEntryCount: [...cache.entries.values()].filter((entry) => Object.keys(entry.shopping || {}).length).length },
       quota: { searchTrend: statusFor(usage, "searchTrend"), shoppingInsight: statusFor(usage, "shoppingInsight"), updatedAt: usage.updatedAt },
     }) };
   } catch (error) {
