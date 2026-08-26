@@ -166,18 +166,26 @@ async function api(path, { method = "GET", params, body, metrics } = {}) {
   const url = new URL(path, API_HUB);
   Object.entries(params || {}).forEach(([key, value]) => url.searchParams.set(key, String(value)));
   for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (metrics?.exhausted) throw new Error(`${path} 호출 중단: NAVER 일일 호출 한도 소진 상태`);
     if (metrics) metrics.calls += 1;
     const response = await fetch(url, { method, headers: {
       "X-NCP-APIGW-API-KEY-ID": id, "X-NCP-APIGW-API-KEY": secret,
       ...(body ? { "Content-Type": "application/json" } : {})
     }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
+    const retryAfterSeconds = Number(response.headers.get("retry-after") || 0);
+    // API HUB supplies Retry-After for recoverable throttling. A bare 429 has
+    // consistently represented the exhausted daily budget in Production, so
+    // retrying it only burns more calls and cannot make forward progress.
+    if (response.status === 429 && retryAfterSeconds <= 0) {
+      if (metrics) metrics.exhausted = true;
+      return responseJson(response, path);
+    }
     if (response.status !== 429 || attempt === 3) {
       if (response.status === 429 && metrics) metrics.exhausted = true;
       return responseJson(response, path);
     }
     if (metrics) metrics.retries += 1;
-    const retryAfterSeconds = Number(response.headers.get("retry-after") || 0);
-    await sleep(retryAfterSeconds > 0 ? Math.min(30000, retryAfterSeconds * 1000) : 5000 * (attempt + 1));
+    await sleep(Math.min(30000, retryAfterSeconds * 1000));
   }
   throw new Error(`${path} 호출 실패: HTTP 429`);
 }

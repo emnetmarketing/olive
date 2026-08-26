@@ -67,6 +67,8 @@ test("period surge calculation remains unchanged by cache integration", () => {
 test("persistent 429 stops safely and preserves completed cache work and last-success publication order", () => {
   const source = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
   assert.match(source, /response\.status === 429 && metrics[\s\S]*metrics\.exhausted = true/);
+  assert.match(source, /response\.status === 429 && retryAfterSeconds <= 0/);
+  assert.match(source, /metrics\?\.exhausted[\s\S]*NAVER 일일 호출 한도 소진 상태/);
   assert.match(source, /catch \(error\)[\s\S]*writeDirtyTrendSeries\(seriesCache, dirtyTrendKeys\)/);
   assert.match(source, /await persist\(\{ state: "completed"[\s\S]*await writeLastSuccess\(job\)/);
 });
