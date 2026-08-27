@@ -48,10 +48,14 @@ test("quota preflight blocks work that exceeds the configured remaining budget",
   if (previous === undefined) delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET; else process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = previous;
 });
 
-test("default internal Search Trend safety budget is 300 calls per Seoul day", () => {
+test("default Search Trend operating budget is monthly and dynamically capped per Seoul day", () => {
   const modern = process.env.DAILY_TREND_FETCH_BUDGET; const legacy = process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
   delete process.env.DAILY_TREND_FETCH_BUDGET; delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
-  assert.equal(quota.limits().searchTrend.daily, 300);
+  assert.equal(quota.limits().searchTrend.operatingMonthly, 20000);
+  assert.equal(quota.limits().searchTrend.dailyCap, 1000);
+  const usage = { daily: {}, monthly: {}, exhausted: {} };
+  const daily = quota.dynamicDailyLimit(usage, "searchTrend", new Date("2026-08-01T00:00:00+09:00"));
+  assert.equal(daily, Math.floor(20000 / 31));
   if (modern !== undefined) process.env.DAILY_TREND_FETCH_BUDGET = modern;
   if (legacy !== undefined) process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = legacy;
 });

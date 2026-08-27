@@ -6,6 +6,8 @@ const { readCache: readProductCache } = require("./search-ad-cache");
 const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: lookupTrendSeries,
   upsert: upsertTrendSeries, writeDirty: writeDirtyTrendSeries } = require("./trend-series-cache");
 const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch } = require("./trend-api-quota");
+const { candidateTier, isDueForCollection, priorityWeight } = require("./trend-collection-policy");
+const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-cache");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -400,6 +402,7 @@ function marketCandidateForAnalysis(item) {
 function trendFetchPriority(candidate, priorSignals) {
   const sources = candidate?.sources || [];
   const discoveredAt = Date.parse(candidate?.firstSeenAt || 0); const ageDays = Number.isFinite(discoveredAt) ? Math.max(0, (Date.now() - discoveredAt) / 86400000) : 9999;
+  const tier = candidateTier(candidate, priorSignals?.get(candidate?.keyword));
   return Number(Boolean(candidate?.marketDiscovery)) * 8000000
     + Number(sources.includes("youtube")) * 4000000
     + Number(Boolean(candidate?.isNewSearchQuery || sources.includes("searchad-new-query"))) * 2000000
@@ -407,7 +410,7 @@ function trendFetchPriority(candidate, priorSignals) {
     + Number(Number(priorSignals?.get(candidate?.keyword)?.estimatedSurgeCount || 0) > 0) * 500000
     + Number(Boolean(candidate?.relatedBrand && (candidate?.relatedProductType || candidate?.relatedProductLine))) * 250000
     + Math.max(0, 10000 - Math.round(ageDays * 100))
-    + Number(candidate?.priorityScore || 0);
+    + priorityWeight(tier) + Number(candidate?.priorityScore || 0);
 }
 
 function planTrendFetch(fetchQueue, quotaStatus, groupSize = 5) {
@@ -452,7 +455,7 @@ function selectWithMarketDiscovery(baseCandidates, marketItems, priorSignals, li
 }
 
 exports.handler = async (event) => {
-  connect(event); connectTrendCache(event); connectQuota(event);
+  connect(event); connectTrendCache(event); connectQuota(event); connectSnapshot(event);
   let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
   let job = await readJob(input.jobId) || input.job;
   if (!job?.jobId || job.state !== "running") return;
@@ -530,15 +533,22 @@ exports.handler = async (event) => {
     const trendMap = new Map(); const shoppingMap = new Map();
     cacheStats = { searchTrend: { hits: 0, misses: 0, stale: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 },
       shoppingInsight: { hits: 0, misses: 0, stale: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 } };
-    const searchFetchQueue = [];
+    const searchFetchQueue = []; const tierCounts = { hot: 0, warm: 0, cold: 0 };
+    const tierPendingCounts = { hot: 0, warm: 0, cold: 0 };
     for (const candidate of trendCandidates) {
       const cached = lookupTrendSeries(seriesCache.entries, candidate.keyword, "search", candidate.category, job.queryStartDate, job.endDate);
-      if (cached.state === "hit") {
-        cacheStats.searchTrend.hits += 1; trendMap.set(candidate.keyword, cached.series);
+      const tierState = isDueForCollection(candidate, priorSignals.get(candidate.keyword), cached.record);
+      candidate.candidateTier = tierState.tier; tierCounts[tierState.tier] += 1;
+      const coveredCachedSeries = cached.record?.requestStartDate <= job.queryStartDate && cached.record?.requestEndDate >= job.endDate
+        ? (cached.record.rawRatioSeries || []).filter((point) => point.period >= job.queryStartDate && point.period <= job.endDate) : null;
+      if (cached.state === "hit" || (coveredCachedSeries && (job.fastPath || !tierState.due))) {
+        cacheStats.searchTrend.hits += 1; trendMap.set(candidate.keyword, cached.state === "hit" ? cached.series : coveredCachedSeries);
         const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
-        if (trace) Object.assign(trace, { cacheHit: true, trendFetchedAt: cached.record.fetchedAt, dataFreshness: "cache-current" });
+        if (trace) Object.assign(trace, { cacheHit: true, trendFetchedAt: cached.record.fetchedAt,
+          dataFreshness: cached.state === "hit" ? "cache-current" : "tier-cache-reuse", candidateTier: tierState.tier });
       } else {
-        cacheStats.searchTrend[cached.state === "stale" ? "stale" : "misses"] += 1; searchFetchQueue.push(candidate);
+        cacheStats.searchTrend[cached.state === "stale" ? "stale" : "misses"] += 1;
+        searchFetchQueue.push(candidate); tierPendingCounts[tierState.tier] += 1;
       }
     }
     searchFetchQueue.sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
@@ -550,7 +560,8 @@ exports.handler = async (event) => {
     }
     for (const values of shoppingFetchByCategory.values()) values.sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
     const searchQuota = quotaStatusFor(quotaUsage, "searchTrend", 0);
-    const searchPlan = planTrendFetch(searchFetchQueue, searchQuota);
+    const searchPlan = job.fastPath ? { selected: [], pending: searchFetchQueue, callBudget: 0, expectedCalls: 0 }
+      : planTrendFetch(searchFetchQueue, searchQuota);
     const pendingTrendKeys = new Set(searchPlan.pending.map((candidate) => normalizeKeyword(candidate.keyword)));
     let quotaStopped = searchQuota.exhausted;
     let eligibleShoppingFetch = new Map([["beauty", []], ["health", []]]);
@@ -558,7 +569,8 @@ exports.handler = async (event) => {
     let shoppingQuota = quotaStatusFor(quotaUsage, "shoppingInsight", 0);
     funnel.trendCache = { searchTrend: { ...cacheStats.searchTrend, requestedMisses: searchFetchQueue.length,
       scheduledFetchCandidates: searchPlan.selected.length, pendingCandidates: searchPlan.pending.length, expectedApiCalls: searchPlan.expectedCalls },
-      shoppingInsight: { ...cacheStats.shoppingInsight, expectedApiCalls: expectedShoppingCalls }, quota: { searchTrend: searchQuota, shoppingInsight: shoppingQuota } };
+      shoppingInsight: { ...cacheStats.shoppingInsight, expectedApiCalls: expectedShoppingCalls }, quota: { searchTrend: searchQuota, shoppingInsight: shoppingQuota },
+      candidateTiers: tierCounts, tierPending: tierPendingCounts, executionPath: job.fastPath ? "fast" : "slow" };
     for (const candidate of searchPlan.pending) {
       const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
       if (trace) Object.assign(trace, { searchTrendStatus: "pending-cache", exclusionReason: "내부 Trend 호출 예산 대기" });
@@ -603,49 +615,21 @@ exports.handler = async (event) => {
     const shoppingMissesWithTrend = [...shoppingFetchByCategory.values()].flat().filter((candidate) => trendMap.has(candidate.keyword))
       .sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
     shoppingQuota = quotaStatusFor(quotaUsage, "shoppingInsight", 0);
-    const shoppingPlan = planTrendFetch(shoppingMissesWithTrend, shoppingQuota);
-    eligibleShoppingFetch = new Map(["beauty", "health"].map((category) => [category, shoppingPlan.selected.filter((candidate) => candidate.category === category)]));
-    expectedShoppingCalls = shoppingPlan.expectedCalls;
+    // Shopping Insight is intentionally deferred until Search Trend, surge and
+    // business relevance have produced a small meaningful result set.
+    const shoppingPlan = { selected: [], pending: shoppingMissesWithTrend, expectedCalls: 0 };
+    eligibleShoppingFetch = new Map([["beauty", []], ["health", []]]);
+    expectedShoppingCalls = 0;
     funnel.trendCache.shoppingInsight.expectedApiCalls = expectedShoppingCalls;
     funnel.trendCache.shoppingInsight.pendingCandidates = shoppingPlan.pending.length;
     funnel.trendCache.quota.shoppingInsight = { ...shoppingQuota, expectedCalls: expectedShoppingCalls };
-    await persist({ message: "키워드별 쇼핑 트렌드 조회 중", progress: 42 });
-    processed = cacheStats.shoppingInsight.hits;
-    job.currentStage = "shopping-trend"; job.processedCount = processed; job.totalCount = eligible.length;
-    shoppingFetchLoop: for (const category of ["beauty", "health"]) {
-      const categoryItems = eligibleShoppingFetch.get(category);
-      for (const requestBatch of chunks(chunks(categoryItems, 5), 5)) {
-        const settled = await Promise.allSettled(requestBatch.map((batch) => api("/shopping/v1/category/keywords", { method: "POST", body: {
-          startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date", category: CATEGORY_IDS[category],
-          keyword: batch.map((item) => ({ name: item.keyword, param: [item.keyword] }))
-        }, metrics: apiMetrics.shoppingInsight })));
-        const fetchedAt = new Date().toISOString();
-        for (let responseIndex = 0; responseIndex < settled.length; responseIndex += 1) {
-          if (settled[responseIndex].status === "rejected") continue;
-          const returned = new Map((settled[responseIndex].value.results || []).map((result) => [normalizeKeyword(result.title), result.data || []]));
-          for (const candidate of requestBatch[responseIndex]) {
-            const series = returned.get(normalizeKeyword(candidate.keyword)) || [];
-            shoppingMap.set(candidate.keyword, series); dirtyTrendKeys.add(upsertTrendSeries(seriesCache.entries, { keyword: candidate.keyword,
-              source: "shopping", category, startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt }));
-            apiMetrics.shoppingInsight.keywords += 1;
-          }
-        }
-        processed = shoppingMap.size;
-        if (dirtyTrendKeys.size) { await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys); dirtyTrendKeys.clear(); }
-        job.currentStage = "shopping-trend"; job.processedCount = processed; job.totalCount = eligible.length;
-        await persist({ message: `키워드별 쇼핑 트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${eligible.length.toLocaleString("ko-KR")}`, progress: 42 + Math.round(processed / eligible.length * 30) });
-        if (apiMetrics.shoppingInsight.exhausted) break shoppingFetchLoop;
-        await sleep(TREND_BATCH_DELAY_MS);
-      }
-    }
-    if (dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys);
+    await persist({ message: job.fastPath ? "저장된 Trend 캐시로 분석 중" : "Trend 신호 계산 준비", progress: 42 });
     cacheStats.searchTrend.freshFetchCandidates = [...analysisTrace.values()].filter((trace) => trace.dataFreshness === "fresh-fetch").length;
     cacheStats.searchTrend.pendingCandidates = pendingTrendKeys.size; cacheStats.searchTrend.apiCalls = apiMetrics.searchTrend.calls; cacheStats.searchTrend.retries = apiMetrics.searchTrend.retries;
     cacheStats.shoppingInsight.freshFetchCandidates = [...eligibleShoppingFetch.values()].reduce((sum, values) => sum + values.length, 0);
     cacheStats.shoppingInsight.apiCalls = apiMetrics.shoppingInsight.calls; cacheStats.shoppingInsight.retries = apiMetrics.shoppingInsight.retries;
     funnel.trendCache.searchTrend = { ...funnel.trendCache.searchTrend, ...cacheStats.searchTrend };
     funnel.trendCache.shoppingInsight = { ...funnel.trendCache.shoppingInsight, ...cacheStats.shoppingInsight };
-    await recordObservedUsage();
     const trendAvailableCount = trendMap.size;
     const pendingTrendCacheCount = Math.max(0, trendCandidates.length - trendAvailableCount);
     const trendCoveragePct = trendCandidates.length ? Math.round(trendAvailableCount / trendCandidates.length * 10000) / 100 : 0;
@@ -740,7 +724,7 @@ exports.handler = async (event) => {
         trendSeries: metrics.series, trendSlope: slope(metrics.series.map((point) => point.estimated)),
         shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
         newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
-        match, sources: candidate.sources, news: null };
+        match, sources: candidate.sources, candidateTier: candidate.candidateTier || candidateTier(candidate, priorSignals.get(candidate.keyword)), news: null };
       const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
       const relativeSurgePassed = surgeSignals.relativeTrendPassed && Boolean(classification.resultType);
       const lowIntensityOnlyEligible = !surgeSignals.absoluteSurgePassed && !relativeSurgePassed && surgeSignals.lowIntensityTrendPassed;
@@ -801,12 +785,62 @@ exports.handler = async (event) => {
         cacheHit: Boolean(trace?.cacheHit), dataFreshness: trace?.dataFreshness || null,
         trendSeries: ratioMetrics.series, trendSlope: slope(ratioMetrics.series.map((point) => point.ratio)),
         shoppingTrend: [], shoppingRise: 0, newSearchAdQuery: candidate.sources.includes("searchad-new-query"),
-        searchAdImpressions30d: candidate.impressions30d, match, sources: candidate.sources, news: null,
+        searchAdImpressions30d: candidate.impressions30d, match, sources: candidate.sources,
+        candidateTier: candidate.candidateTier || candidateTier(candidate, priorSignals.get(candidate.keyword)), news: null,
         absoluteSurgePassed: false, relativeSurgePassed: false, lowIntensityEarlySignal: false,
         ratioOnlyMarketSignal: true, ratioPeak: ratioMetrics.ratioPeak, ratioBaseline: ratioMetrics.ratioBaseline,
         relativeRatioLift: ratioMetrics.relativeRatioLift, latestRatio: ratioMetrics.latestRatio,
         resultType: "ratio_only_market_signal", surgeSignalType: "ratio_only", relatedSignal: evidenceSignal, marketEvidence: candidate.marketEvidence || [] });
     }
+    // Slow Path only: enrich the already selected business signals. This keeps
+    // Shopping Insight out of the 5,000-candidate fan-out while preserving the
+    // existing shoppingRise UI for candidates where data is available.
+    if (!job.fastPath && rows.length) {
+      const candidateByKey = new Map(trendCandidates.map((candidate) => [normalizeKeyword(candidate.keyword), candidate]));
+      const shoppingCandidates = rows.map((row) => candidateByKey.get(normalizeKeyword(row.keyword))).filter(Boolean)
+        .filter((candidate) => !shoppingMap.has(candidate.keyword));
+      shoppingQuota = quotaStatusFor(await readQuotaUsage(), "shoppingInsight", 0);
+      const deferredPlan = planTrendFetch(shoppingCandidates, shoppingQuota);
+      eligibleShoppingFetch = new Map(["beauty", "health"].map((category) => [category, deferredPlan.selected.filter((candidate) => candidate.category === category)]));
+      expectedShoppingCalls = deferredPlan.expectedCalls;
+      funnel.trendCache.shoppingInsight.expectedApiCalls = expectedShoppingCalls;
+      funnel.trendCache.shoppingInsight.pendingCandidates = deferredPlan.pending.length;
+      await persist({ message: `신호 후보 쇼핑 트렌드 보강 중 · ${deferredPlan.selected.length.toLocaleString("ko-KR")}건`,
+        currentStage: "shopping-trend", progress: 89 });
+      shoppingFetchLoop: for (const category of ["beauty", "health"]) {
+        for (const requestBatch of chunks(chunks(eligibleShoppingFetch.get(category), 5), 5)) {
+          const settled = await Promise.allSettled(requestBatch.map((batch) => api("/shopping/v1/category/keywords", { method: "POST", body: {
+            startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date", category: CATEGORY_IDS[category],
+            keyword: batch.map((item) => ({ name: item.keyword, param: [item.keyword] }))
+          }, metrics: apiMetrics.shoppingInsight })));
+          const fetchedAt = new Date().toISOString();
+          for (let responseIndex = 0; responseIndex < settled.length; responseIndex += 1) {
+            if (settled[responseIndex].status === "rejected") continue;
+            const returned = new Map((settled[responseIndex].value.results || []).map((result) => [normalizeKeyword(result.title), result.data || []]));
+            for (const candidate of requestBatch[responseIndex]) {
+              const series = returned.get(normalizeKeyword(candidate.keyword)) || [];
+              shoppingMap.set(candidate.keyword, series); dirtyTrendKeys.add(upsertTrendSeries(seriesCache.entries, { keyword: candidate.keyword,
+                source: "shopping", category, startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt }));
+              apiMetrics.shoppingInsight.keywords += 1;
+            }
+          }
+          if (dirtyTrendKeys.size) { await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys); dirtyTrendKeys.clear(); }
+          if (apiMetrics.shoppingInsight.exhausted) break shoppingFetchLoop;
+          await sleep(TREND_BATCH_DELAY_MS);
+        }
+      }
+      for (const row of rows) {
+        const series = shoppingMap.get(row.keyword); if (!series) continue;
+        const ratios = series.map((point) => Number(point.ratio || 0)); row.shoppingTrend = series;
+        row.shoppingRise = ratios.length > 1 ? ratios.at(-1) - median(ratios.slice(-8, -1)) : 0;
+      }
+      cacheStats.shoppingInsight.freshFetchCandidates = apiMetrics.shoppingInsight.keywords;
+      cacheStats.shoppingInsight.apiCalls = apiMetrics.shoppingInsight.calls;
+      cacheStats.shoppingInsight.retries = apiMetrics.shoppingInsight.retries;
+      funnel.trendCache.shoppingInsight = { ...funnel.trendCache.shoppingInsight, ...cacheStats.shoppingInsight,
+        expectedApiCalls: expectedShoppingCalls, pendingCandidates: deferredPlan.pending.length };
+    }
+    await recordObservedUsage();
     let surgeHistoryManifest = surgeHistoryCache.manifest;
     if (job.mode === "instant") {
       const latestHistoryCache = await readSurgeHistory();
@@ -835,7 +869,7 @@ exports.handler = async (event) => {
       || Number(b.relativeRatioLift || 0) - Number(a.relativeRatioLift || 0) || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
     await persist({ message: "상위 급등 검색어 뉴스 확인 중", progress: 90 });
     job.currentStage = "news"; job.processedCount = 0; job.totalCount = Math.min(rows.length, 20);
-    const newsResults = await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
+    const newsResults = job.fastPath ? [] : await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
       const payload = await api("/search/v1/news", { params: { query: row.keyword, display: 3, start: 1, sort: "date" } });
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
     }));
@@ -875,6 +909,7 @@ exports.handler = async (event) => {
         calculationSamples: samples.slice(0, 5),
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
+    await writeSnapshot(job);
     if (partialAnalysis) await writeLastPartial(job); else await writeLastSuccess(job);
   } catch (error) {
     if (seriesCache && dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys).catch(() => null);
