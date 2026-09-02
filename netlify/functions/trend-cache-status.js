@@ -7,16 +7,18 @@ exports.handler = async (event) => {
   connect(event); connectQuota(event); connectAnalysis(event); connectSnapshot(event);
   if (event.httpMethod !== "GET") return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
   try {
-    const [cache, usage, full, partial, snapshot, latestAnalysis, collectionPointer] = await Promise.all([readCache(), readUsage(), readLastSuccess().catch(() => null),
-      readLastPartial().catch(() => null), readLatestSnapshot().catch(() => null), readLatestAnalysis().catch(() => null), readLatestCollection().catch(() => null)]);
+    const [cache, usage, full, partial, snapshot, latestAnalysis, collectionPointer] = await Promise.all([readCache(), readUsage(), readLastSuccess("instant").catch(() => null),
+      readLastPartial("instant").catch(() => null), readLatestSnapshot("instant").catch(() => null), readLatestAnalysis("instant").catch(() => null), readLatestCollection().catch(() => null)]);
     const latestJob = [full, partial].filter(Boolean).sort((a, b) => Date.parse(b.completedAt || 0) - Date.parse(a.completedAt || 0))[0] || null;
     const searchRecords = [...cache.entries.values()].map((entry) => entry.search).filter(Boolean);
     const cacheCollectedAt = searchRecords.map((record) => record.fetchedAt).filter(Boolean).sort().at(-1) || null;
     const cacheLatestDataDate = searchRecords.map((record) => record.latestDataDate).filter(Boolean).sort().at(-1) || null;
     const latestCollection = collectionPointer || (cacheCollectedAt ? { collectedAt: cacheCollectedAt, latestDataDate: cacheLatestDataDate,
       source: "trend-cache-records" } : null);
-    const validSnapshot = snapshot || (full ? { jobId: full.jobId, generatedAt: full.completedAt, latestDataDate: full.latestDataDate,
-      trendCoveragePct: full.trendCoveragePct ?? 100, items: full.results || [], source: "last-full-fallback" } : null);
+    const fallbackJob = [full, partial].filter((job) => job?.latestDataDate && Number(job?.trendCoveragePct || 0) >= 10)
+      .sort((a, b) => Date.parse(b.completedAt || 0) - Date.parse(a.completedAt || 0))[0] || null;
+    const validSnapshot = snapshot || (fallbackJob ? { jobId: fallbackJob.jobId, generatedAt: fallbackJob.completedAt, latestDataDate: fallbackJob.latestDataDate,
+      trendCoveragePct: fallbackJob.trendCoveragePct ?? 100, items: fallbackJob.results || [], source: "instant-analysis-fallback" } : null);
     return { statusCode: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }, body: JSON.stringify({
       ok: true,
       cache: { ...(cache.manifest || {}), loadedEntryCount: cache.entries.size,

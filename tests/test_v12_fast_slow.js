@@ -79,7 +79,7 @@ test("HTTP response classes are persisted separately from total API calls", () =
 
 test("dashboard separates cached analysis from administrator data collection", () => {
   const html = fs.readFileSync("index.html", "utf8");
-  assert.match(html, /저장된 최신 데이터로 빠른 분석/);
+  assert.match(html, /저장된 최신 데이터로 최신 결과를 다시 계산/);
   assert.match(html, /latestDataCollectionBtn/);
   assert.match(html, /trend-data-collection-start/);
   assert.match(html, /HOT\/WARM\/COLD/);
