@@ -1608,10 +1608,7 @@
         <h2>어제 급등 확인</h2>
         <div id="yesterdaySurgeMeta" class="muted">NAVER Trend 최신 확정 결과를 불러오는 중입니다.</div>
         <p class="muted">NAVER Trend 최신 확정 데이터를 기준으로 이전 기간 대비 상승을 확인한 결과입니다.</p>
-      </section>
-
-      <section class="panel">
-        <h2>어제 급등 TOP 10 키워드</h2>
+        <h3 style="margin:18px 0 10px;">TOP 10 결과</h3>
         <div id="trendChart" class="trend-chart">
           <div class="trend-empty">분석 후 급등 키워드 증감 그래프가 표시됩니다.</div>
         </div>
@@ -2788,7 +2785,7 @@
         const item = row.match.item;
         return `
           <tr>
-            <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
+            <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
             <td>${row.today.toLocaleString("ko-KR")} / ${Number(row.estimatedPeak || row.today).toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
             <td>+${row.lift.toLocaleString("ko-KR")}</td>
             <td>${formatSurgeHistory(row.surgeHistoryState)}</td>
@@ -2817,7 +2814,7 @@
       const body = $("ratioOnlySignalBody");
       if (!results.length) { body.innerHTML = '<tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr>'; return; }
       body.innerHTML = results.map((row) => { const signal = row.relatedSignal || {}; const refs = (signal.referenceProducts || []).slice(0, 3).map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
-        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong></td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${Number(row.ratioBaseline || 0).toFixed(2)}</td><td>+${Number(row.relativeRatioLift || 0).toFixed(2)}%</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
+        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}</td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${Number(row.ratioBaseline || 0).toFixed(2)}</td><td>+${Number(row.relativeRatioLift || 0).toFixed(2)}%</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
       }).join("");
     }
 
@@ -2840,7 +2837,7 @@
         const references = (signal.referenceProducts || []).slice(0, 3)
           .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
         return `<tr>
-          <td><strong>${escapeHtml(row.keyword)}</strong></td>
+          <td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}</td>
           <td>${escapeHtml(row.peakDate || row.peakDailyDate || "-")}</td>
           <td><strong>+${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</strong></td>
           <td>+${Number(row.peakRelativeLiftPct || 0).toFixed(2)}%</td>
@@ -2865,7 +2862,7 @@
         const references = (signal.referenceProducts || []).slice(0, 3)
           .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
         return `<tr>
-          <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
+          <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
           <td><strong>+${Number(row.lift || row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</strong></td>
           <td>${escapeHtml(signal.signalType === "brand" ? "브랜드 급등" : signal.signalType === "ingredient" ? "성분 관련" : signal.signalType === "product_line" ? "제품/제품라인 관련" : "제품군/카테고리 관련")}</td>
           <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
@@ -2887,6 +2884,13 @@
       const detail = relative && Number.isFinite(Number(row.peakRelativeLiftPct))
         ? ` · 평소 대비 +${Math.round(Number(row.peakRelativeLiftPct)).toLocaleString("ko-KR")}% · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}` : "";
       return `<span class="pill">${escapeHtml(label)}</span><span class="muted">${escapeHtml(detail)}</span>`;
+    }
+
+    function marketConfidenceSummary(row) {
+      if (row.marketConfidenceScore == null) return '<span class="muted">종합 신뢰도: 이전 결과에는 미계산</span>';
+      const grades = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
+      const reasons = (row.marketConfidenceReasons || []).slice(0, 5).join(" · ");
+      return `<span class="pill">종합 신뢰도 ${Number(row.marketConfidenceScore)}/100 · ${escapeHtml(grades[row.marketConfidenceGrade] || "참고")}</span>${reasons ? `<br><small class="muted">${escapeHtml(reasons)}</small>` : ""}`;
     }
 
     function formatSurgeHistory(history) {
@@ -3017,7 +3021,7 @@
     }
 
     function buildExcelExport() {
-      const headers = ["resultType", "급등 유형", "저강도 선행 신호", "ratio-only 시장 신호", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "Peak ratio", "Ratio baseline", "상대 ratio 상승률", "관련 브랜드", "관련 제품군/제품라인", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
+      const headers = ["resultType", "급등 유형", "저강도 선행 신호", "ratio-only 시장 신호", "절대 급등 통과", "상대 급등 통과", "급등 키워드", "종합 신뢰도", "신뢰도 등급", "신뢰도 근거", "카테고리", "추정 최신 검색량", "추정 최대 검색량", "추정 기준 검색량", "추정 급등수", "상대 상승률", "Peak 추정검색량", "Peak baseline", "Peak 날짜", "Peak ratio", "Ratio baseline", "상대 ratio 상승률", "관련 브랜드", "관련 제품군/제품라인", "관련 상품 수", "대표/참고 상품", "상승률(참고)", "출처", "대표 계정", "대표 브랜드", "대표 상품", "추가 매칭 상품", "동일 강도 후보 수", "캠페인", "광고그룹", "일치율", "매칭 판단", "판단 근거", "최신 데이터 기준일", "관련 뉴스"];
       const rows = state.results.map((row) => {
         const item = row.match?.item || {};
         const signal = row.relatedSignal || {};
@@ -3029,6 +3033,9 @@
           row.absoluteSurgePassed ? "Y" : "N",
           row.relativeSurgePassed ? "Y" : "N",
           row.keyword,
+          row.marketConfidenceScore ?? "",
+          ({ very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" })[row.marketConfidenceGrade] || "",
+          (row.marketConfidenceReasons || []).join(" / "),
           row.category || "unknown",
           row.today,
           row.estimatedPeak,
@@ -3153,7 +3160,9 @@
         today: Number(row.today || 0),
         yesterday: Number(row.yesterday || 0),
         lift: Number(row.today || 0) - Number(row.yesterday || 0),
-        rate: Number(row.yesterday || 0) > 0 ? ((Number(row.today || 0) - Number(row.yesterday || 0)) / Number(row.yesterday || 0)) * 100 : 100
+        rate: Number(row.yesterday || 0) > 0 ? ((Number(row.today || 0) - Number(row.yesterday || 0)) / Number(row.yesterday || 0)) * 100 : 100,
+        marketConfidenceScore: row.marketConfidenceScore, marketConfidenceGrade: row.marketConfidenceGrade,
+        marketConfidenceReasons: row.marketConfidenceReasons || []
       })).sort((a, b) => b.lift - a.lift).slice(0, 10);
 
       if (!topRows.length) {
@@ -3169,6 +3178,7 @@
             <div class="trend-name">
               ${escapeHtml(row.keyword)}
               <span class="trend-sub">추정 기준 ${row.yesterday.toLocaleString("ko-KR")} → 추정 최신/최대 ${row.today.toLocaleString("ko-KR")}</span>
+              <span class="trend-sub">${marketConfidenceSummary(row)}</span>
             </div>
             <div class="trend-track" aria-label="${escapeHtml(row.keyword)} 증가량">
               <div class="trend-fill" style="width:${width}%"></div>

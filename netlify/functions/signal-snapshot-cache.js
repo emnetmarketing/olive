@@ -8,7 +8,9 @@ function compactItem(row) { return { keyword: row.keyword, resultType: row.resul
   peakRelativeLiftPct: row.peakRelativeLiftPct,
   relatedBrand: row.relatedSignal?.relatedBrand || row.match?.item?.brand || "", relatedProduct: row.match?.item?.product || "",
   matchScore: Number(row.match?.score || 0), productMatchScore: Number(row.match?.score || 0), shoppingRise: row.shoppingRise ?? null, discoverySource: row.sources || [],
-  candidateTier: row.candidateTier || null, latestDataDate: row.latestDataDate, trendFetchedAt: row.trendFetchedAt } }
+  candidateTier: row.candidateTier || null, latestDataDate: row.latestDataDate, trendFetchedAt: row.trendFetchedAt,
+  marketConfidenceScore: row.marketConfidenceScore ?? null, marketConfidenceGrade: row.marketConfidenceGrade || null,
+  marketConfidenceReasons: row.marketConfidenceReasons || [] } }
 function isValidSnapshot(snapshot) { return Number(snapshot?.trendCoveragePct || 0) > 0 && Boolean(snapshot?.latestDataDate); }
 function shouldAdvanceCollection(job) { return !job?.fastPath && Number(job?.freshFetchCount || 0) > 0; }
 async function writeSnapshot(job) {

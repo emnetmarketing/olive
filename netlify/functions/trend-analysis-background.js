@@ -10,6 +10,7 @@ const { candidateTier, isDueForCollection, priorityWeight } = require("./trend-c
 const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-cache");
 const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
 const earlySignals = require("./today-early-signal-cache");
+const { calculateMarketConfidence } = require("./market-confidence");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -400,6 +401,8 @@ function marketCandidateForAnalysis(item) {
     sources: [...new Set([...(item.discoverySource || []), "market-discovery"])], firstSeenAt: item.discoveredAt, lastSeenAt: item.lastSeenAt,
     isNewSearchQuery: item.discoverySource?.includes("searchad-new-query"), impressions30d: Number(item.searchAdEvidence?.recentImpressions || 0),
     clicks30d: Number(item.searchAdEvidence?.recentClicks || 0), impressionDelta: Number(item.searchAdEvidence?.recentImpressions || 0),
+    confidenceImpressionDelta: Number.isFinite(Number(item.searchAdEvidence?.previousImpressions))
+      ? Number(item.searchAdEvidence?.recentImpressions || 0) - Number(item.searchAdEvidence.previousImpressions) : 0,
     monthlyPcSearches: item.monthlyPcSearches ?? null, monthlyMobileSearches: item.monthlyMobileSearches ?? null,
     monthlyTotalSearches: item.monthlyTotalSearches ?? null, monthlyVolumeStatus: item.monthlySearchStatus || "not-requested",
     priorityScore: discoveryPriority(item), marketDiscovery: true, marketEvidence: item.evidence || [], sourceConfidence: item.sourceConfidence,
@@ -487,9 +490,9 @@ exports.handler = async (event) => {
     await recordQuotaUsageBatch(apiMetrics).catch(() => null);
   };
   try {
-    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage] = await Promise.all([
+    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage, loadedEarlyCache] = await Promise.all([
       readCandidateCache(), readMarketDiscoveryCache().catch(() => null), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory(),
-      readTrendSeriesCache(), readQuotaUsage()
+      readTrendSeriesCache(), readQuotaUsage(), earlySignals.readCache().catch(() => null)
     ]);
     seriesCache = loadedSeriesCache;
     const priorSignals = new Map((priorSignalCache?.items || []).map((item) => [item.keyword, item]));
@@ -756,8 +759,12 @@ exports.handler = async (event) => {
         trendFetchedAt: trace?.trendFetchedAt || null, cacheHit: Boolean(trace?.cacheHit), dataFreshness: trace?.dataFreshness || null,
         trendSeries: metrics.series, trendSlope: slope(metrics.series.map((point) => point.estimated)),
         shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
-        newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdImpressions30d: candidate.impressions30d,
-        match, sources: candidate.sources, candidateTier: candidate.candidateTier || candidateTier(candidate, priorSignals.get(candidate.keyword)), news: null };
+        newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdNewQuery: Boolean(candidate.isNewSearchQuery),
+        searchAdImpressions30d: candidate.impressions30d, searchAdImpressionDelta: Number(candidate.confidenceImpressionDelta ?? candidate.impressionDelta ?? 0), searchAdClicks30d: Number(candidate.clicks30d || 0),
+        match, sources: candidate.sources, discoverySource: candidate.sources, marketSourceConfidence: Number(candidate.sourceConfidence || 0),
+        marketEvidence: candidate.marketEvidence || [], earlyMarketEvidence: (loadedEarlyCache?.history || []).filter((item) => item.normalizedKeyword === normalizeKeyword(candidate.keyword)
+          && item.earlySignalDate <= metrics.latestPeriod).sort((a, b) => b.earlySignalDate.localeCompare(a.earlySignalDate))[0] || null,
+        candidateTier: candidate.candidateTier || candidateTier(candidate, priorSignals.get(candidate.keyword)), news: null };
       const classification = classifySurgeResult(candidate, match, productCache.items, job.matchThreshold);
       const relativeSurgePassed = surgeSignals.relativeTrendPassed && Boolean(classification.resultType);
       const lowIntensityOnlyEligible = !surgeSignals.absoluteSurgePassed && !relativeSurgePassed && surgeSignals.lowIntensityTrendPassed;
@@ -817,8 +824,11 @@ exports.handler = async (event) => {
         latestDataDate: ratioMetrics.series.at(-1)?.period || null, trendFetchedAt: trace?.trendFetchedAt || null,
         cacheHit: Boolean(trace?.cacheHit), dataFreshness: trace?.dataFreshness || null,
         trendSeries: ratioMetrics.series, trendSlope: slope(ratioMetrics.series.map((point) => point.ratio)),
-        shoppingTrend: [], shoppingRise: 0, newSearchAdQuery: candidate.sources.includes("searchad-new-query"),
-        searchAdImpressions30d: candidate.impressions30d, match, sources: candidate.sources,
+        shoppingTrend: [], shoppingRise: 0, newSearchAdQuery: candidate.sources.includes("searchad-new-query"), searchAdNewQuery: Boolean(candidate.isNewSearchQuery),
+        searchAdImpressions30d: candidate.impressions30d, searchAdImpressionDelta: Number(candidate.confidenceImpressionDelta ?? candidate.impressionDelta ?? 0), searchAdClicks30d: Number(candidate.clicks30d || 0),
+        match, sources: candidate.sources, discoverySource: candidate.sources, marketSourceConfidence: Number(candidate.sourceConfidence || 0),
+        earlyMarketEvidence: (loadedEarlyCache?.history || []).filter((item) => item.normalizedKeyword === normalizeKeyword(candidate.keyword)
+          && item.earlySignalDate <= (ratioMetrics.series.at(-1)?.period || "")).sort((a, b) => b.earlySignalDate.localeCompare(a.earlySignalDate))[0] || null,
         candidateTier: candidate.candidateTier || candidateTier(candidate, priorSignals.get(candidate.keyword)), news: null,
         absoluteSurgePassed: false, relativeSurgePassed: false, lowIntensityEarlySignal: false,
         ratioOnlyMarketSignal: true, ratioPeak: ratioMetrics.ratioPeak, ratioBaseline: ratioMetrics.ratioBaseline,
@@ -907,6 +917,7 @@ exports.handler = async (event) => {
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
     }));
     newsResults.forEach((result) => { if (result.status === "fulfilled") { const row = rows.find((item) => item.keyword === result.value.keyword); if (row) row.news = result.value; } });
+    for (const row of rows) Object.assign(row, calculateMarketConfidence(row, job.surgeThreshold));
     const latestDataDate = [...trendMap.values()].flatMap((data) => (data || []).map((point) => point.period)).filter(Boolean).sort().at(-1) || null;
     const resultByKeyword = new Map(rows.map((row) => [normalizeKeyword(row.keyword), row]));
     for (const trace of analysisTrace.values()) {
@@ -949,7 +960,7 @@ exports.handler = async (event) => {
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
     await writeSnapshot(job);
     const discoveryHistory = await readDiscoveryHistory().catch(() => null);
-    const earlyCache = await earlySignals.readCache().catch(() => null);
+    const earlyCache = loadedEarlyCache;
     const confirmedEarlyCache = earlyCache ? earlySignals.confirmSignals(earlyCache, [...analysisTrace.values()], rows, latestDataDate) : null;
     if (confirmedEarlyCache) await earlySignals.writeCache(confirmedEarlyCache).catch(() => null);
     if (discoveryHistory) {
