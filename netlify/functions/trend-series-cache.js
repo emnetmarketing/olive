@@ -40,6 +40,9 @@ function lookup(entries, keyword, source, category, startDate, endDate, now = ne
   const entry = entries.get(normalizedKeyword(keyword));
   const record = source === "search" ? entry?.search : entry?.shopping?.[category];
   if (!record) return { state: "miss", record: null, series: null };
+  if (record.requestStartDate > startDate || record.requestEndDate < endDate) {
+    return { state: "window-unavailable", reason: "cache_window_unavailable", record, series: null };
+  }
   if (!validSeriesRecord(record, startDate, endDate, now)) return { state: "stale", record, series: null };
   return { state: "hit", record, series: record.rawRatioSeries.filter((point) => point.period >= startDate && point.period <= endDate) };
 }

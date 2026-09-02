@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const { candidateTier, isDueForCollection } = require("../netlify/functions/trend-collection-policy");
-const { compactItem } = require("../netlify/functions/signal-snapshot-cache");
+const { compactItem, isValidSnapshot, shouldAdvanceCollection } = require("../netlify/functions/signal-snapshot-cache");
 
 test("new discovery and recent surge stay HOT while stable candidates rotate WARM/COLD", () => {
   const now = new Date("2026-08-26T00:00:00Z");
@@ -50,6 +50,30 @@ test("signal snapshot preserves operational fields without changing calculation 
     peakDailyLift: 300, peakRelativeLiftPct: 50, match: { score: 83, item: { brand: "브랜드", product: "상품" } },
     shoppingRise: 10, candidateTier: "hot", latestDataDate: "2026-08-24" });
   assert.equal(item.estimatedSurgeCount, 300); assert.equal(item.productMatchScore, 83); assert.equal(item.candidateTier, "hot");
+});
+
+test("zero coverage partial snapshot is not valid and Fast Path cannot advance collection time", () => {
+  assert.equal(isValidSnapshot({ trendCoveragePct: 0, latestDataDate: null }), false);
+  assert.equal(isValidSnapshot({ trendCoveragePct: 25, latestDataDate: "2026-08-31" }), true);
+  assert.equal(shouldAdvanceCollection({ fastPath: true, freshFetchCount: 100 }), false);
+  assert.equal(shouldAdvanceCollection({ fastPath: false, freshFetchCount: 100 }), true);
+  const source = fs.readFileSync("netlify/functions/signal-snapshot-cache.js", "utf8");
+  assert.match(source, /if \(valid\)[\s\S]*LATEST_VALID_KEY/);
+  assert.doesNotMatch(source, /setJSON\(LATEST_KEY[\s\S]*return snapshot/);
+});
+
+test("pending states distinguish provider quota, internal budget, cache window and Fast Path waits", () => {
+  const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  const list = fs.readFileSync("netlify/functions/market-discovery-list.js", "utf8");
+  for (const state of ["provider_quota_wait", "internal_budget_wait", "cache_window_unavailable", "fast_path_cache_wait"]) {
+    assert.match(background, new RegExp(state)); assert.match(list, /trendWaitReason/);
+  }
+});
+
+test("HTTP response classes are persisted separately from total API calls", () => {
+  const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  assert.match(background, /searchTrendHttp200Count/); assert.match(background, /searchTrendHttp429Count/);
+  assert.match(background, /searchTrendHttpOtherCount/);
 });
 
 test("dashboard separates cached analysis from administrator data collection", () => {

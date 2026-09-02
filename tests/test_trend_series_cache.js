@@ -21,7 +21,9 @@ test("historical Search Trend cache reuses an exact or covered range", () => {
 test("cache miss and insufficient range are distinguished", () => {
   const entries = new Map(); historicalRecord(entries);
   assert.equal(cache.lookup(entries, "없는키워드", "search", "beauty", "2026-08-23", "2026-08-24").state, "miss");
-  assert.equal(cache.lookup(entries, "테스트키워드", "search", "beauty", "2026-07-01", "2026-08-24").state, "stale");
+  const unavailable = cache.lookup(entries, "테스트키워드", "search", "beauty", "2026-07-01", "2026-08-24");
+  assert.equal(unavailable.state, "window-unavailable");
+  assert.equal(unavailable.reason, "cache_window_unavailable");
 });
 
 test("an empty upstream series is negative-cached", () => {
@@ -42,9 +44,10 @@ test("current-day data must have been fetched on the same Seoul date", () => {
 test("quota preflight blocks work that exceeds the configured remaining budget", () => {
   const previous = process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
   process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = "1000";
-  const usage = { daily: { searchTrend: 700 }, monthly: { searchTrend: 900 }, exhausted: {} };
-  assert.equal(quota.statusFor(usage, "searchTrend", 300).sufficient, true);
-  assert.equal(quota.statusFor(usage, "searchTrend", 301).sufficient, false);
+  const usage = { daily: { searchTrend: 345 }, monthly: { searchTrend: 345 }, exhausted: {} };
+  const now = new Date("2026-08-01T12:00:00+09:00");
+  assert.equal(quota.statusFor(usage, "searchTrend", 300, now).sufficient, true);
+  assert.equal(quota.statusFor(usage, "searchTrend", 301, now).sufficient, false);
   if (previous === undefined) delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET; else process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = previous;
 });
 
@@ -60,13 +63,25 @@ test("default Search Trend operating budget is monthly and dynamically capped pe
   if (legacy !== undefined) process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = legacy;
 });
 
+test("daily allocation stays fixed after calls are used and never displays used above the limit", () => {
+  const modern = process.env.DAILY_TREND_FETCH_BUDGET; const legacy = process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
+  delete process.env.DAILY_TREND_FETCH_BUDGET; delete process.env.NAVER_SEARCH_TREND_DAILY_BUDGET;
+  const now = new Date("2026-09-01T18:00:00+09:00");
+  const usage = { daily: { searchTrend: 666 }, monthly: { searchTrend: 666 }, exhausted: {} };
+  const status = quota.statusFor(usage, "searchTrend", 0, now);
+  assert.equal(status.dailyLimit, 666); assert.equal(status.dailyUsed, 666); assert.equal(status.dailyRemaining, 0);
+  if (modern !== undefined) process.env.DAILY_TREND_FETCH_BUDGET = modern;
+  if (legacy !== undefined) process.env.NAVER_SEARCH_TREND_DAILY_BUDGET = legacy;
+});
+
 test("quota usage for both API families is merged in one document", () => {
   const usage = { daily: {}, monthly: {}, exhausted: {} };
-  quota.applyUsage(usage, { searchTrend: { calls: 20, retries: 15, exhausted: true }, shoppingInsight: { calls: 7, retries: 1 } });
+  quota.applyUsage(usage, { searchTrend: { calls: 20, retries: 15, exhausted: true, http200: 18, http429: 1, httpOther: 1 }, shoppingInsight: { calls: 7, retries: 1 } });
   assert.equal(usage.daily.searchTrend, 20);
   assert.equal(usage.daily.shoppingInsight, 7);
   assert.equal(usage.daily.searchTrendRetries, 15);
   assert.equal(usage.exhausted.searchTrend, true);
+  assert.equal(usage.daily.searchTrendHttp200, 18); assert.equal(usage.monthly.searchTrendHttp429, 1);
 });
 
 test("market discovery and new Search Ad candidates receive fetch priority", () => {

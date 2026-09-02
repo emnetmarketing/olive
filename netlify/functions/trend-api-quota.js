@@ -15,8 +15,11 @@ function limits() {
 }
 function daysRemainingInMonth(now = new Date()) { const period = seoulParts(now); const last = new Date(Date.UTC(Number(period.month.slice(0, 4)), Number(period.month.slice(5, 7)), 0)).getUTCDate(); return Math.max(1, last - Number(period.date.slice(8, 10)) + 1); }
 function dynamicDailyLimit(usage, type, now = new Date()) {
-  const limit = limits()[type]; const monthlyUsed = Number(usage.monthly[type] || 0);
-  const operatingRemaining = Math.max(0, limit.operatingMonthly - monthlyUsed);
+  const limit = limits()[type]; const monthlyUsed = Number(usage.monthly[type] || 0); const dailyUsed = Number(usage.daily[type] || 0);
+  // Fix the day's allocation at the amount that was available at the start of
+  // the Seoul date. Recomputing it from the post-use monthly balance made the
+  // displayed limit shrink below dailyUsed (for example 666 used / 644 limit).
+  const operatingRemaining = Math.max(0, limit.operatingMonthly - Math.max(0, monthlyUsed - dailyUsed));
   return Math.max(0, Math.min(limit.dailyCap, Math.floor(operatingRemaining / daysRemainingInMonth(now))));
 }
 async function readUsage(now = new Date()) {
@@ -31,6 +34,10 @@ function statusFor(usage, type, expectedCalls = 0, now = new Date()) {
   return { type, dailyLimit, dailyCap: limit.dailyCap, monthlyLimit: limit.monthly, operatingMonthlyBudget: limit.operatingMonthly,
     daysRemaining: daysRemainingInMonth(now), dailyUsed, monthlyUsed, dailyRemaining, monthlyRemaining,
     dailyKeywords: Number(usage.daily[`${type}Keywords`] || 0),
+    http200: Number(usage.daily[`${type}Http200`] || 0), http429: Number(usage.daily[`${type}Http429`] || 0),
+    httpOther: Number(usage.daily[`${type}HttpOther`] || 0),
+    monthlyHttp200: Number(usage.monthly[`${type}Http200`] || 0), monthlyHttp429: Number(usage.monthly[`${type}Http429`] || 0),
+    monthlyHttpOther: Number(usage.monthly[`${type}HttpOther`] || 0),
     remaining: Math.min(dailyRemaining, monthlyRemaining), expectedCalls, exhausted: Boolean(usage.exhausted[type]),
     sufficient: !usage.exhausted[type] && expectedCalls <= Math.min(dailyRemaining, monthlyRemaining) };
 }
@@ -41,6 +48,11 @@ function applyUsage(usage, metricsByType) {
     usage.exhausted[type] = Boolean(usage.exhausted[type] || metrics.exhausted);
     usage.daily[`${type}Retries`] = Number(usage.daily[`${type}Retries`] || 0) + Number(metrics.retries || 0);
     usage.daily[`${type}Keywords`] = Number(usage.daily[`${type}Keywords`] || 0) + Number(metrics.keywords || 0);
+    for (const code of ["Http200", "Http429", "HttpOther"]) {
+      const value = Number(metrics[code.charAt(0).toLowerCase() + code.slice(1)] || 0);
+      usage.daily[`${type}${code}`] = Number(usage.daily[`${type}${code}`] || 0) + value;
+      usage.monthly[`${type}${code}`] = Number(usage.monthly[`${type}${code}`] || 0) + value;
+    }
   }
   usage.updatedAt = new Date().toISOString(); return usage;
 }

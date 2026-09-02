@@ -58,8 +58,11 @@ exports.handler = async (event) => {
       selectedForAnalysis: Boolean(trace), analysis: trace, finalResult: finalResult ? { resultType: finalResult.resultType,
         estimatedSurgeCount: finalResult.estimatedSurgeCount, peakDailyLift: finalResult.peakDailyLift,
         peakRelativeLiftPct: finalResult.peakRelativeLiftPct, relativeRatioLift: finalResult.relativeRatioLift } : null,
-      trendCache: trendRecord ? { status: "completed", requestStartDate: trendRecord.requestStartDate, requestEndDate: trendRecord.requestEndDate,
-        latestDataDate: trendRecord.latestDataDate, fetchedAt: trendRecord.fetchedAt } : { status: trace?.searchTrendStatus === "pending-cache" ? "quota-wait" : "not-fetched" },
+      trendCache: trendRecord ? { status: trace?.trendWaitReason === "cache_window_unavailable" ? "cache_window_unavailable" : "completed",
+        requestStartDate: trendRecord.requestStartDate, requestEndDate: trendRecord.requestEndDate,
+        latestDataDate: trendRecord.latestDataDate, fetchedAt: trendRecord.fetchedAt,
+        usableForLastAnalysis: trace?.trendWaitReason !== "cache_window_unavailable" } : {
+          status: trace?.searchTrendStatus === "pending-cache" ? trace?.trendWaitReason || "fast_path_cache_wait" : "not-fetched" },
       productMatch: safeMatch(match), youtubeRawMatches: youtubeMatches.map((video) => ({ videoId: video.videoId, channelTitle: video.channelTitle,
         title: video.title, publishedAt: video.publishedAt, sourceQuery: video.sourceQuery })), exclusionReason });
   } catch (error) { return json(500, { error: `시장 후보 진단 실패: ${error.message}` }); }

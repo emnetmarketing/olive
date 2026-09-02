@@ -37,7 +37,7 @@ exports.handler = async (event) => {
       .map((item, index) => {
         const key = normalizedKeyword(item.keyword); const trendRecord = trend.entries.get(key)?.search || null; const trace = traces.get(key) || null;
         let trendStatus = trendRecord ? "completed" : protectedRanks.has(key) ? "pending" : "not-selected";
-        if (trace?.searchTrendStatus === "pending-cache") trendStatus = "quota-wait";
+        if (trace?.searchTrendStatus === "pending-cache") trendStatus = trace.trendWaitReason || "fast_path_cache_wait";
         else if (trace?.searchTrendStatus === "valid" || trace?.searchTrendStatus === "empty") trendStatus = "completed";
         return { rank: index + 1, keyword: item.keyword, normalizedKeyword: key, discoverySource: item.discoverySource || [],
           discoveredAt: item.discoveredAt || null, lastSeenAt: item.lastSeenAt || null, sourceConfidence: Number(item.sourceConfidence || 0),
@@ -45,7 +45,7 @@ exports.handler = async (event) => {
           monthlySearchStatus: item.monthlySearchStatus || "not-requested", monthlyTotalSearches: item.monthlyTotalSearches ?? null,
           marketDiscoveryRank: marketItems.findIndex((candidate) => candidate.normalizedKeyword === key) + 1,
           selectedForProtectedSlot: protectedRanks.has(key), protectedSlotRank: protectedRanks.get(key) || null,
-          trendStatus, trendFetchedAt: trendRecord?.fetchedAt || trace?.trendFetchedAt || null,
+          trendStatus, trendWaitReason: trace?.trendWaitReason || null, trendFetchedAt: trendRecord?.fetchedAt || trace?.trendFetchedAt || null,
           selectedForAnalysis: Boolean(trace), lastTrendResult: trace ? { status: trace.searchTrendStatus, finalIncluded: trace.finalIncluded,
             resultType: trace.resultType, exclusionReason: trace.exclusionReason } : null };
       });

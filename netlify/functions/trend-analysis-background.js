@@ -174,6 +174,11 @@ async function api(path, { method = "GET", params, body, metrics } = {}) {
       "X-NCP-APIGW-API-KEY-ID": id, "X-NCP-APIGW-API-KEY": secret,
       ...(body ? { "Content-Type": "application/json" } : {})
     }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
+    if (metrics) {
+      if (response.status === 200) metrics.http200 += 1;
+      else if (response.status === 429) metrics.http429 += 1;
+      else metrics.httpOther += 1;
+    }
     const retryAfterSeconds = Number(response.headers.get("retry-after") || 0);
     // API HUB supplies Retry-After for recoverable throttling. A bare 429 has
     // consistently represented the exhausted daily budget in Production, so
@@ -463,7 +468,11 @@ exports.handler = async (event) => {
   const started = Date.now();
   let seriesCache = null; const dirtyTrendKeys = new Set();
   let cacheStats = null;
-  const apiMetrics = { searchTrend: { calls: 0, retries: 0, keywords: 0, exhausted: false }, shoppingInsight: { calls: 0, retries: 0, keywords: 0, exhausted: false } };
+  const apiMetrics = {
+    searchTrend: { calls: 0, retries: 0, keywords: 0, exhausted: false, http200: 0, http429: 0, httpOther: 0 },
+    shoppingInsight: { calls: 0, retries: 0, keywords: 0, exhausted: false, http200: 0, http429: 0, httpOther: 0 }
+  };
+  let trendCollectedAt = null;
   let quotaUsageRecorded = false;
   const recordObservedUsage = async () => {
     if (quotaUsageRecorded) return; quotaUsageRecorded = true;
@@ -531,7 +540,7 @@ exports.handler = async (event) => {
       searchTrendRequested: true, searchTrendStatus: "pending", marketDiscovery: Boolean(candidate.marketDiscovery)
     }]));
     const trendMap = new Map(); const shoppingMap = new Map();
-    cacheStats = { searchTrend: { hits: 0, misses: 0, stale: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 },
+    cacheStats = { searchTrend: { hits: 0, misses: 0, stale: 0, windowUnavailable: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 },
       shoppingInsight: { hits: 0, misses: 0, stale: 0, freshFetchCandidates: 0, apiCalls: 0, retries: 0 } };
     const searchFetchQueue = []; const tierCounts = { hot: 0, warm: 0, cold: 0 };
     const tierPendingCounts = { hot: 0, warm: 0, cold: 0 };
@@ -547,7 +556,11 @@ exports.handler = async (event) => {
         if (trace) Object.assign(trace, { cacheHit: true, trendFetchedAt: cached.record.fetchedAt,
           dataFreshness: cached.state === "hit" ? "cache-current" : "tier-cache-reuse", candidateTier: tierState.tier });
       } else {
-        cacheStats.searchTrend[cached.state === "stale" ? "stale" : "misses"] += 1;
+        if (cached.state === "window-unavailable") {
+          cacheStats.searchTrend.windowUnavailable += 1;
+          const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
+          if (trace) Object.assign(trace, { trendWaitReason: "cache_window_unavailable", exclusionReason: "요청 기간을 충족하는 Trend 캐시 window 없음" });
+        } else cacheStats.searchTrend[cached.state === "stale" ? "stale" : "misses"] += 1;
         searchFetchQueue.push(candidate); tierPendingCounts[tierState.tier] += 1;
       }
     }
@@ -573,7 +586,14 @@ exports.handler = async (event) => {
       candidateTiers: tierCounts, tierPending: tierPendingCounts, executionPath: job.fastPath ? "fast" : "slow" };
     for (const candidate of searchPlan.pending) {
       const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
-      if (trace) Object.assign(trace, { searchTrendStatus: "pending-cache", exclusionReason: "내부 Trend 호출 예산 대기" });
+      if (trace) {
+        const trendWaitReason = trace.trendWaitReason || (job.fastPath ? "fast_path_cache_wait"
+          : searchQuota.exhausted ? "provider_quota_wait" : "internal_budget_wait");
+        const exclusionReason = trendWaitReason === "cache_window_unavailable" ? "요청 기간을 충족하는 Trend 캐시 window 없음"
+          : trendWaitReason === "provider_quota_wait" ? "NAVER API 429/공식 quota 제한 대기"
+            : trendWaitReason === "internal_budget_wait" ? "내부 일일 Trend budget 소진 대기" : "Fast Path Trend 캐시 대기";
+        Object.assign(trace, { searchTrendStatus: "pending-cache", trendWaitReason, exclusionReason });
+      }
     }
     await persist({ message: `검색어트렌드 캐시 ${cacheStats.searchTrend.hits.toLocaleString("ko-KR")}건 재사용 · 신규 ${searchFetchQueue.length.toLocaleString("ko-KR")}건`, totalCandidates: trendCandidates.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: trendCandidates.length,
@@ -598,6 +618,7 @@ exports.handler = async (event) => {
           trendMap.set(candidate.keyword, series); dirtyTrendKeys.add(upsertTrendSeries(seriesCache.entries, { keyword: candidate.keyword,
             source: "search", startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt }));
           apiMetrics.searchTrend.keywords += 1;
+          trendCollectedAt = fetchedAt;
           const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
           if (trace) Object.assign(trace, { cacheHit: false, trendFetchedAt: fetchedAt, dataFreshness: "fresh-fetch" });
         }
@@ -635,8 +656,12 @@ exports.handler = async (event) => {
     const trendCoveragePct = trendCandidates.length ? Math.round(trendAvailableCount / trendCandidates.length * 10000) / 100 : 0;
     const partialAnalysis = pendingTrendCacheCount > 0;
     for (const trace of analysisTrace.values()) if (!trendMap.has(trace.keyword)) {
-      trace.searchTrendStatus = "pending-cache"; trace.exclusionReason = quotaStopped || searchQuota.exhausted
-        ? "NAVER Trend 호출 예산/Quota 대기" : "Trend 캐시 구축 대기";
+      trace.searchTrendStatus = "pending-cache";
+      if (quotaStopped || apiMetrics.searchTrend.exhausted || searchQuota.exhausted) trace.trendWaitReason = "provider_quota_wait";
+      else if (!trace.trendWaitReason) trace.trendWaitReason = job.fastPath ? "fast_path_cache_wait" : "internal_budget_wait";
+      trace.exclusionReason = trace.trendWaitReason === "cache_window_unavailable" ? "요청 기간을 충족하는 Trend 캐시 window 없음"
+        : trace.trendWaitReason === "provider_quota_wait" ? "NAVER API 429/공식 quota 제한 대기"
+          : trace.trendWaitReason === "internal_budget_wait" ? "내부 일일 Trend budget 소진 대기" : "Fast Path Trend 캐시 대기";
     }
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
     job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
@@ -895,9 +920,14 @@ exports.handler = async (event) => {
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
       partialAnalysis, trendAvailableCount, pendingTrendCacheCount, trendCoveragePct,
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
-      cacheMissCount: Number(cacheStats?.searchTrend?.misses || 0) + Number(cacheStats?.searchTrend?.stale || 0),
+      cacheMissCount: Number(cacheStats?.searchTrend?.misses || 0) + Number(cacheStats?.searchTrend?.stale || 0) + Number(cacheStats?.searchTrend?.windowUnavailable || 0),
       staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
+      cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt,
+      searchTrendHttp200Count: Number(apiMetrics.searchTrend.http200 || 0), searchTrendHttp429Count: Number(apiMetrics.searchTrend.http429 || 0),
+      searchTrendHttpOtherCount: Number(apiMetrics.searchTrend.httpOther || 0),
       shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
+      shoppingInsightHttp200Count: Number(apiMetrics.shoppingInsight.http200 || 0), shoppingInsightHttp429Count: Number(apiMetrics.shoppingInsight.http429 || 0),
+      shoppingInsightHttpOtherCount: Number(apiMetrics.shoppingInsight.httpOther || 0),
       productMatchResultCount: rows.filter((row) => row.resultType === "product_match").length,
       brandCategorySignalCount: rows.filter((row) => row.resultType === "brand_or_category_signal").length,
       domainRelatedSignalCount: rows.filter((row) => row.resultType === "domain_related_signal").length,
@@ -921,7 +951,12 @@ exports.handler = async (event) => {
     await persist({ state: "failed", message: "분석 실패", failedAt: new Date().toISOString(), durationMs: Date.now() - started,
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
       staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
+      cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt,
+      searchTrendHttp200Count: Number(apiMetrics.searchTrend.http200 || 0), searchTrendHttp429Count: Number(apiMetrics.searchTrend.http429 || 0),
+      searchTrendHttpOtherCount: Number(apiMetrics.searchTrend.httpOther || 0),
       shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
+      shoppingInsightHttp200Count: Number(apiMetrics.shoppingInsight.http200 || 0), shoppingInsightHttp429Count: Number(apiMetrics.shoppingInsight.http429 || 0),
+      shoppingInsightHttpOtherCount: Number(apiMetrics.shoppingInsight.httpOther || 0),
       errors: [error.message] });
   }
 };
