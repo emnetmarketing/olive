@@ -32,6 +32,9 @@ exports.handler = async (event) => {
       snapshot: validSnapshot ? { jobId: validSnapshot.jobId, generatedAt: validSnapshot.generatedAt, latestDataDate: validSnapshot.latestDataDate,
         trendCoveragePct: validSnapshot.trendCoveragePct, resultCount: validSnapshot.items?.length || 0, source: validSnapshot.source || "signal-snapshot" } : null,
       latestCollection,
+      automation: { marketDiscoverySchedule: "every-6-hours", keywordCandidateSchedule: "daily-17:00-UTC",
+        trendCollectionSchedule: "daily-21:00-UTC", trendCollectionEnabled: String(process.env.DISABLE_SCHEDULED_TREND_COLLECTION || "false").toLowerCase() !== "true",
+        legacyEnableSetting: process.env.ENABLE_SCHEDULED_TREND_COLLECTION == null ? "unset" : String(process.env.ENABLE_SCHEDULED_TREND_COLLECTION) },
       latestAnalysis: latestAnalysis ? { jobId: latestAnalysis.jobId, analyzedAt: latestAnalysis.generatedAt,
         latestDataDate: latestAnalysis.latestDataDate, trendCoveragePct: latestAnalysis.trendCoveragePct,
         resultCount: latestAnalysis.items?.length || 0, executionPath: latestAnalysis.executionPath } : latestJob ? {
