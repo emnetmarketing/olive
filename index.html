@@ -1594,8 +1594,24 @@
         <div id="apiErrors" class="api-errors" role="alert"></div>
       </section>
 
+      <section class="panel" id="todayEarlySignalPanel">
+        <h2>오늘 급상승 신호</h2>
+        <div id="todayEarlySignalMeta" class="muted" style="margin-bottom:8px;">오늘 신호를 불러오는 중입니다.</div>
+        <p class="muted">오늘 수집되는 YouTube·Search Ad 최신 시장 신호를 기반으로 빠르게 포착한 키워드입니다. NAVER 당일 검색 급등 확정 결과는 아닙니다.</p>
+        <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
+          <thead><tr><th>키워드</th><th>신호 강도</th><th>점수</th><th>발견 시각</th><th>주요 탐지 근거</th><th>상품·브랜드</th><th>Source</th><th>전일 NAVER 상태</th></tr></thead>
+          <tbody id="todayEarlySignalBody"><tr><td colspan="8" class="muted">오늘 신호를 불러오는 중입니다.</td></tr></tbody>
+        </table></div>
+      </section>
+
+      <section class="panel" id="yesterdaySurgePanel">
+        <h2>어제 급등 확인</h2>
+        <div id="yesterdaySurgeMeta" class="muted">NAVER Trend 최신 확정 결과를 불러오는 중입니다.</div>
+        <p class="muted">NAVER Trend 최신 확정 데이터를 기준으로 이전 기간 대비 상승을 확인한 결과입니다.</p>
+      </section>
+
       <section class="panel">
-        <h2>급등 TOP 10 키워드</h2>
+        <h2>어제 급등 TOP 10 키워드</h2>
         <div id="trendChart" class="trend-chart">
           <div class="trend-empty">분석 후 급등 키워드 증감 그래프가 표시됩니다.</div>
         </div>
@@ -2391,7 +2407,7 @@
         loadCurrentAnalysis();
         if (canEdit() && Date.now() - lastMarketTrendStatusLoad >= 30000) {
           lastMarketTrendStatusLoad = Date.now();
-          loadTrendCacheStatus(); loadMarketDiscoveryNewList();
+          loadTrendCacheStatus(); loadMarketDiscoveryNewList(); loadTodayEarlySignals();
         }
       }, CURRENT_JOB_WATCH_INTERVAL_MS);
     }
@@ -2467,6 +2483,7 @@
       diagnosticPanel.style.display = job.diagnostic ? "block" : "none";
       $("analysisDiagnosticText").textContent = job.diagnostic ? JSON.stringify(job.diagnostic, null, 2) : "";
       $("latestDataDate").textContent = `최신 데이터 기준일: ${job.latestDataDate || "확인 불가"}`;
+      $("yesterdaySurgeMeta").textContent = `NAVER 데이터 기준 ${job.latestDataDate || "확인 불가"} · 분석 범위 ${Number(job.trendAvailableCount || 0).toLocaleString("ko-KR")} / ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%)`;
       render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount,
         news: results.filter((row) => row.news).length }, results, results.slice(0, 10), job.completedAt);
       $("analysisProgressPanel").classList.toggle("visible", !restored);
@@ -2508,7 +2525,7 @@
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
         const results = displayCompletedAnalysis(job);
-        await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList()]);
+        await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList(), loadTodayEarlySignals()]);
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
         finishAnalysisControls();
       } catch (error) {
@@ -2712,6 +2729,22 @@
           <td>${escapeHtml(TREND_STATUS_LABELS[item.trendStatus] || item.trendStatus || "Trend 미조회")}${item.trendFetchedAt ? `<br><small>${formatHistoryDate(item.trendFetchedAt)}</small>` : ""}</td>
         </tr>`).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
       } catch (error) { $("marketDiscoveryNewBody").innerHTML = `<tr><td colspan="9" class="muted">신규 후보 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
+    }
+    async function loadTodayEarlySignals() {
+      try {
+        const response = await fetch("/.netlify/functions/today-early-signals", { cache: "no-store" });
+        const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        $("todayEarlySignalMeta").textContent = `${payload.signalDate || "오늘"} · 최근 갱신 ${payload.generatedAt ? formatHistoryDate(payload.generatedAt) : "-"} · ${Number(payload.count || 0).toLocaleString("ko-KR")}건 · ${Number(payload.refreshIntervalHours || 6)}시간 주기`;
+        const labels = { strong: "🔥 강한 신호", rising: "↑ 상승 신호", watch: "• 관찰 신호" };
+        $("todayEarlySignalBody").innerHTML = (payload.items || []).length ? payload.items.map((item) => `<tr>
+          <td><strong>${escapeHtml(item.keyword)}</strong></td><td>${escapeHtml(labels[item.strength] || "• 관찰 신호")}</td>
+          <td><strong>${Number(item.todayEarlySignalScore || 0)}</strong></td><td>${item.detectedAt ? formatHistoryDate(item.detectedAt) : "-"}</td>
+          <td>${escapeHtml((item.reasons || []).join(" · ") || "-")}</td>
+          <td>${escapeHtml([item.relatedBrand, item.relatedProductLine || item.relatedProductType].filter(Boolean).join(" · ") || "-")}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
+          <td>${escapeHtml((item.sources || []).join(" + ") || "-")}</td>
+          <td>${item.previousNaverState?.everSurged ? `이전 상승 · +${Number(item.previousNaverState.estimatedSurgeCount || 0).toLocaleString("ko-KR")}` : "확인 전"}</td>
+        </tr>`).join("") : '<tr><td colspan="8" class="muted">현재 기준을 충족하는 오늘 급상승 신호가 없습니다.</td></tr>';
+      } catch (error) { $("todayEarlySignalBody").innerHTML = `<tr><td colspan="8" class="muted">오늘 신호 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
     }
     async function refreshMarketDiscovery() {
       if (!requireEdit("신규 시장 후보 새로고침")) return;
@@ -3445,6 +3478,7 @@
       loadMarketDiscoveryStatus();
       loadTrendCacheStatus();
       loadMarketDiscoveryNewList();
+      loadTodayEarlySignals();
       $("clearDownloadHistoryBtn").style.display = "none";
       renderDownloadHistoryShared();
       applyAuthState();

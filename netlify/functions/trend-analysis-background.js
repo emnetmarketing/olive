@@ -8,7 +8,8 @@ const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: loo
 const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch } = require("./trend-api-quota");
 const { candidateTier, isDueForCollection, priorityWeight } = require("./trend-collection-policy");
 const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-cache");
-const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory } = require("./market-discovery-history-cache");
+const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
+const earlySignals = require("./today-early-signal-cache");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -402,7 +403,8 @@ function marketCandidateForAnalysis(item) {
     monthlyPcSearches: item.monthlyPcSearches ?? null, monthlyMobileSearches: item.monthlyMobileSearches ?? null,
     monthlyTotalSearches: item.monthlyTotalSearches ?? null, monthlyVolumeStatus: item.monthlySearchStatus || "not-requested",
     priorityScore: discoveryPriority(item), marketDiscovery: true, marketEvidence: item.evidence || [], sourceConfidence: item.sourceConfidence,
-    relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "" };
+    relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
+    todayEarlySignalScore: Number(item.todayEarlySignalScore || 0) };
 }
 
 function trendFetchPriority(candidate, priorSignals) {
@@ -410,6 +412,7 @@ function trendFetchPriority(candidate, priorSignals) {
   const discoveredAt = Date.parse(candidate?.firstSeenAt || 0); const ageDays = Number.isFinite(discoveredAt) ? Math.max(0, (Date.now() - discoveredAt) / 86400000) : 9999;
   const tier = candidateTier(candidate, priorSignals?.get(candidate?.keyword));
   return Number(Boolean(candidate?.marketDiscovery)) * 8000000
+    + Number(candidate?.todayEarlySignalScore || 0) * 100000
     + Number(sources.includes("youtube")) * 4000000
     + Number(Boolean(candidate?.isNewSearchQuery || sources.includes("searchad-new-query"))) * 2000000
     + Number(new Set(sources.filter((source) => source !== "market-discovery")).size > 1) * 1000000
@@ -946,7 +949,13 @@ exports.handler = async (event) => {
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
     await writeSnapshot(job);
     const discoveryHistory = await readDiscoveryHistory().catch(() => null);
-    if (discoveryHistory) await writeDiscoveryHistory(mergeSignalHistory(discoveryHistory, rows, job.completedAt)).catch(() => null);
+    const earlyCache = await earlySignals.readCache().catch(() => null);
+    const confirmedEarlyCache = earlyCache ? earlySignals.confirmSignals(earlyCache, [...analysisTrace.values()], rows, latestDataDate) : null;
+    if (confirmedEarlyCache) await earlySignals.writeCache(confirmedEarlyCache).catch(() => null);
+    if (discoveryHistory) {
+      const signalHistory = mergeSignalHistory(discoveryHistory, rows, job.completedAt);
+      await writeDiscoveryHistory(mergeEarlySignalHistory(signalHistory, confirmedEarlyCache?.history || [], job.completedAt)).catch(() => null);
+    }
     if (partialAnalysis) await writeLastPartial(job); else await writeLastSuccess(job);
   } catch (error) {
     if (seriesCache && dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys).catch(() => null);

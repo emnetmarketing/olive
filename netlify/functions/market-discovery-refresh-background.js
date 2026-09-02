@@ -3,7 +3,8 @@ const { readCache: readProductCache } = require("./search-ad-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { accounts, searchAdGet } = require("./search-ad-cache");
 const { YOUTUBE_SEEDS, productCandidates, youtubeCandidates, mergeCandidates, discoveryPriority, selectMarketCacheItems, normalizedKeyword } = require("./market-discovery-core");
-const { readHistory, writeHistory, mergeHistory, restoreHistory } = require("./market-discovery-history-cache");
+const { readHistory, writeHistory, mergeHistory, restoreHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
+const earlySignals = require("./today-early-signal-cache");
 
 const PRODUCT_BATCH = 2500; const MAX_CACHE = 5000; const MAX_PRODUCT_CANDIDATES = 15000;
 const MAX_KEYWORDTOOL_BACKFILL = 750; const MAX_SEARCH_CALLS_PER_DAY = 90;
@@ -75,6 +76,7 @@ exports.handler = async (event) => {
       relatedBrand: "", relatedProductType: "", relatedProductLine: "", category: item.category, categoryEvidence: item.categoryEvidence,
       monthlySearchStatus: item.monthlyVolumeStatus, monthlyTotalSearches: item.monthlyTotalSearches,
       searchAdEvidence: { firstSeenAt: item.firstSeenAt, lastSeenAt: item.lastSeenAt, recentImpressions: item.impressions30d, recentClicks: item.clicks30d,
+        previousImpressions: item.previousImpressions30d, previousClicks: item.previousClicks30d,
         accountSources: item.accountNumbers || [] }, evidence: [{ source: "searchad-new-query", impressions: item.impressions30d, clicks: item.clicks30d }] }));
     const previousYoutubeStatus = { youtubeQuotaDate: previous?.youtube?.quotaDate || status.youtubeQuotaDate,
       youtubeSearchCallsToday: previous?.youtube?.searchCallsToday ?? status.youtubeSearchCallsToday,
@@ -132,8 +134,15 @@ exports.handler = async (event) => {
         generatedCandidates: youtube.reused ? youtube.generatedCandidates : youtube.items.length,
         lastSuccessAt: youtube.reused ? previous?.youtube?.lastSuccessAt || null : refreshedAt, lastError: errors.find((item) => item.includes("YouTube")) || null },
       keywordtool: { checkedThisRun: backfill.length, apiCalls: metrics.apiCalls, retries: metrics.retries }, errors: errors.slice(0, 20) };
-    await writeCache(cache);
-    await writeHistory(mergeHistory(history, discoveredItems, new Set(items.map((item) => item.normalizedKeyword)), refreshedAt));
+    const previousEarly = await earlySignals.readCache();
+    const todaySignals = earlySignals.buildEarlySignals(items, history, refreshedAt);
+    const earlyByKeyword = new Map(todaySignals.map((signal) => [signal.normalizedKeyword, signal]));
+    items = items.map((item) => ({ ...item, todayEarlySignalScore: earlyByKeyword.get(item.normalizedKeyword)?.todayEarlySignalScore || 0 }));
+    cache.items = items;
+    await Promise.all([writeCache(cache), earlySignals.writeCache(earlySignals.mergeCache(previousEarly, todaySignals, refreshedAt))]);
+    const mergedHistory = mergeHistory(history, discoveredItems.map((item) => ({ ...item,
+      todayEarlySignalScore: earlyByKeyword.get(item.normalizedKeyword)?.todayEarlySignalScore || 0 })), new Set(items.map((item) => item.normalizedKeyword)), refreshedAt);
+    await writeHistory(mergeEarlySignalHistory(mergedHistory, todaySignals, refreshedAt));
     await persist({ state: "completed", message: "신규 시장 후보 수집 완료", completedAt: refreshedAt, durationMs: Date.now() - started,
       candidateCount: items.length, sourceCounts: cache.sourceCounts, youtubeQuotaDate: youtube.quotaDate,
       youtubeSearchCallsToday: youtube.counters.search, youtubeApiCallsToday: youtube.counters.api, youtubeVideos: youtube.videos,

@@ -186,7 +186,7 @@ exports.handler = async (event) => {
             const category = classify(keyword, context.text);
             const existing = candidateMap.get(key) || { keyword, category, categoryEvidence: category === "unknown" ? "unknown" : (categoryCounts(keyword)[category] ? "keyword" : "adgroup-product"),
               sources: [], impressions30d: 0, clicks30d: 0, accountNumbers: [], relatedAdgroupIds: [], relatedProducts: [], relatedBrands: [],
-              firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, previousImpressions30d: Number(previous?.impressions30d || 0),
+              firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, previousImpressions30d: Number(previous?.impressions30d || 0), previousClicks30d: Number(previous?.clicks30d || 0),
               monthlyPcSearches: previous?.monthlyPcSearches ?? null, monthlyMobileSearches: previous?.monthlyMobileSearches ?? null,
               monthlyTotalSearches: previous?.monthlyTotalSearches ?? null, monthlyVolumeStatus: previous?.monthlyVolumeStatus || (previous?.monthlyTotalSearches != null ? "available" : null) };
             if (!existing.sources.includes("searchad-query")) existing.sources.push("searchad-query");
@@ -230,7 +230,7 @@ exports.handler = async (event) => {
         const category = classify(keyword, seedBatch.join(" "));
         const existing = candidateMap.get(key) || { keyword, category, categoryEvidence: category === "unknown" ? "unknown" : "keywordstool-seed",
           sources: [], impressions30d: 0, clicks30d: 0, accountNumbers: [], relatedAdgroupIds: [], relatedProducts: [], relatedBrands: [],
-          firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, previousImpressions30d: Number(previous?.impressions30d || 0),
+          firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, previousImpressions30d: Number(previous?.impressions30d || 0), previousClicks30d: Number(previous?.clicks30d || 0),
           monthlyPcSearches: previous?.monthlyPcSearches ?? null, monthlyMobileSearches: previous?.monthlyMobileSearches ?? null,
           monthlyTotalSearches: previous?.monthlyTotalSearches ?? null, monthlyVolumeStatus: previous?.monthlyVolumeStatus || (previous?.monthlyTotalSearches != null ? "available" : null) };
         if (!existing.sources.includes("keywordstool")) existing.sources.push("keywordstool");

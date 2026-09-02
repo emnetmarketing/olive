@@ -24,6 +24,7 @@ function mergeHistory(previous, discovered, activeKeys, now = new Date().toISOSt
       relatedProductType: item.relatedProductType || old.relatedProductType || "",
       relatedProductLine: item.relatedProductLine || old.relatedProductLine || "",
       sourceConfidence: Math.max(Number(old.sourceConfidence || 0), Number(item.sourceConfidence || 0)),
+      todayEarlySignalScore: Number(item.todayEarlySignalScore || 0),
       lastActiveAt: activeKeys.has(item.normalizedKeyword) ? now : old.lastActiveAt || null,
       active: activeKeys.has(item.normalizedKeyword),
     });
@@ -58,4 +59,17 @@ function mergeSignalHistory(previous, rows, analyzedAt = new Date().toISOString(
   return { version: 1, updatedAt: analyzedAt, items: [...records.values()] };
 }
 
-module.exports = { connect, readHistory, writeHistory, mergeHistory, restoreHistory, mergeSignalHistory, STORE_NAME, KEY };
+function mergeEarlySignalHistory(previous, signals, updatedAt = new Date().toISOString()) {
+  const records = new Map((previous?.items || []).map((item) => [item.normalizedKeyword, { ...item }]));
+  for (const signal of signals || []) {
+    const old = records.get(signal.normalizedKeyword) || { keyword: signal.keyword, normalizedKeyword: signal.normalizedKeyword, firstSeenAt: signal.firstSeenAt || updatedAt, discoverySource: [] };
+    const earlySignalHistory = [...(old.earlySignalHistory || []).filter((item) => item.earlySignalDate !== signal.earlySignalDate), {
+      earlySignalDate: signal.earlySignalDate, score: signal.todayEarlySignalScore, strength: signal.strength, sources: signal.sources, detectedAt: signal.detectedAt,
+      confirmation: signal.confirmation || null }].slice(-31);
+    records.set(signal.normalizedKeyword, { ...old, lastEarlySignalAt: signal.detectedAt, todayEarlySignalScore: signal.todayEarlySignalScore,
+      earlySignalHistory, discoverySource: [...new Set([...(old.discoverySource || []), ...(signal.sources || [])])] });
+  }
+  return { version: 1, updatedAt, items: [...records.values()] };
+}
+
+module.exports = { connect, readHistory, writeHistory, mergeHistory, restoreHistory, mergeSignalHistory, mergeEarlySignalHistory, STORE_NAME, KEY };
