@@ -8,6 +8,7 @@ const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: loo
 const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch } = require("./trend-api-quota");
 const { candidateTier, isDueForCollection, priorityWeight } = require("./trend-collection-policy");
 const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-cache");
+const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory } = require("./market-discovery-history-cache");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -473,6 +474,7 @@ exports.handler = async (event) => {
     shoppingInsight: { calls: 0, retries: 0, keywords: 0, exhausted: false, http200: 0, http429: 0, httpOther: 0 }
   };
   let trendCollectedAt = null;
+  let budgetMode = "normal";
   let quotaUsageRecorded = false;
   const recordObservedUsage = async () => {
     if (quotaUsageRecorded) return; quotaUsageRecorded = true;
@@ -572,7 +574,9 @@ exports.handler = async (event) => {
       else { cacheStats.shoppingInsight[cached.state === "stale" ? "stale" : "misses"] += 1; shoppingFetchByCategory.get(candidate.category).push(candidate); }
     }
     for (const values of shoppingFetchByCategory.values()) values.sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
-    const searchQuota = quotaStatusFor(quotaUsage, "searchTrend", 0);
+    const initialCoveragePct = trendCandidates.length ? cacheStats.searchTrend.hits / trendCandidates.length * 100 : 100;
+    budgetMode = !job.fastPath && initialCoveragePct < 90 ? "bootstrap" : "normal";
+    const searchQuota = quotaStatusFor(quotaUsage, "searchTrend", 0, new Date(), { bootstrap: budgetMode === "bootstrap" });
     const searchPlan = job.fastPath ? { selected: [], pending: searchFetchQueue, callBudget: 0, expectedCalls: 0 }
       : planTrendFetch(searchFetchQueue, searchQuota);
     const pendingTrendKeys = new Set(searchPlan.pending.map((candidate) => normalizeKeyword(candidate.keyword)));
@@ -583,7 +587,8 @@ exports.handler = async (event) => {
     funnel.trendCache = { searchTrend: { ...cacheStats.searchTrend, requestedMisses: searchFetchQueue.length,
       scheduledFetchCandidates: searchPlan.selected.length, pendingCandidates: searchPlan.pending.length, expectedApiCalls: searchPlan.expectedCalls },
       shoppingInsight: { ...cacheStats.shoppingInsight, expectedApiCalls: expectedShoppingCalls }, quota: { searchTrend: searchQuota, shoppingInsight: shoppingQuota },
-      candidateTiers: tierCounts, tierPending: tierPendingCounts, executionPath: job.fastPath ? "fast" : "slow" };
+      candidateTiers: tierCounts, tierPending: tierPendingCounts, executionPath: job.fastPath ? "fast" : "slow",
+      budgetMode, initialCoveragePct: Math.round(initialCoveragePct * 100) / 100 };
     for (const candidate of searchPlan.pending) {
       const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
       if (trace) {
@@ -922,7 +927,7 @@ exports.handler = async (event) => {
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
       cacheMissCount: Number(cacheStats?.searchTrend?.misses || 0) + Number(cacheStats?.searchTrend?.stale || 0) + Number(cacheStats?.searchTrend?.windowUnavailable || 0),
       staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
-      cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt,
+      cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt, budgetMode,
       searchTrendHttp200Count: Number(apiMetrics.searchTrend.http200 || 0), searchTrendHttp429Count: Number(apiMetrics.searchTrend.http429 || 0),
       searchTrendHttpOtherCount: Number(apiMetrics.searchTrend.httpOther || 0),
       shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
@@ -940,6 +945,8 @@ exports.handler = async (event) => {
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
     await writeSnapshot(job);
+    const discoveryHistory = await readDiscoveryHistory().catch(() => null);
+    if (discoveryHistory) await writeDiscoveryHistory(mergeSignalHistory(discoveryHistory, rows, job.completedAt)).catch(() => null);
     if (partialAnalysis) await writeLastPartial(job); else await writeLastSuccess(job);
   } catch (error) {
     if (seriesCache && dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys).catch(() => null);
@@ -951,7 +958,7 @@ exports.handler = async (event) => {
     await persist({ state: "failed", message: "분석 실패", failedAt: new Date().toISOString(), durationMs: Date.now() - started,
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
       staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
-      cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt,
+      cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt, budgetMode,
       searchTrendHttp200Count: Number(apiMetrics.searchTrend.http200 || 0), searchTrendHttp429Count: Number(apiMetrics.searchTrend.http429 || 0),
       searchTrendHttpOtherCount: Number(apiMetrics.searchTrend.httpOther || 0),
       shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),

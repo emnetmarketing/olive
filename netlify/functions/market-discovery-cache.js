@@ -12,12 +12,15 @@ async function readTrustedChannels() { return await store().get(TRUSTED_CHANNELS
 async function readYoutubeSnapshot() { return store().get(YOUTUBE_SNAPSHOT_KEY, { type: "json" }).catch(() => null); }
 async function writeYoutubeSnapshot(value) { await store().setJSON(YOUTUBE_SNAPSHOT_KEY, value); return value; }
 async function acquireJob() {
-  const current = await readStatus(); const age = Date.now() - Date.parse(current?.updatedAt || 0);
+  const entry = await store().getWithMetadata(STATUS_KEY, { type: "json" }); const current = entry?.data || null;
+  const age = Date.now() - Date.parse(current?.updatedAt || 0);
   if (current?.state === "running" && age < 30 * 60 * 1000) return { acquired: false, status: current };
   const now = new Date().toISOString(); const status = { jobId: crypto.randomUUID(), state: "running", message: "신규 시장 후보 수집 준비 중",
     startedAt: now, updatedAt: now, youtubeQuotaDate: current?.youtubeQuotaDate || null,
     youtubeSearchCallsToday: Number(current?.youtubeSearchCallsToday || 0), youtubeApiCallsToday: Number(current?.youtubeApiCallsToday || 0), errors: [] };
-  await writeStatus(status); return { acquired: true, status };
+  const lock = await store().setJSON(STATUS_KEY, status, entry?.etag ? { onlyIfMatch: entry.etag } : { onlyIfNew: true });
+  if (!lock.modified) return { acquired: false, status: await readStatus() };
+  return { acquired: true, status };
 }
 module.exports = { connect, store, readCache, writeCache, readStatus, writeStatus, readTrustedChannels,
   readYoutubeSnapshot, writeYoutubeSnapshot, acquireJob, CACHE_KEY, STATUS_KEY, YOUTUBE_SNAPSHOT_KEY };

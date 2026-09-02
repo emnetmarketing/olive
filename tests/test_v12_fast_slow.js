@@ -30,10 +30,11 @@ test("fast analysis cannot schedule external APIs and slow Shopping is deferred 
   assert.match(background, /const newsResults = job\.fastPath \? \[\]/);
 });
 
-test("scheduled live collection is opt-in while the provider monthly quota is exhausted", () => {
+test("scheduled live collection is automatic unless explicitly disabled", () => {
   const scheduled = fs.readFileSync("netlify/functions/trend-data-collection-scheduled.js", "utf8");
   assert.match(scheduled, /ENABLE_SCHEDULED_TREND_COLLECTION/);
-  assert.match(scheduled, /scheduled Trend collection is paused/);
+  assert.match(scheduled, /scheduled Trend collection is explicitly disabled/);
+  assert.match(scheduled, /\|\| "true"/);
 });
 
 test("same historical window is a cache hit and requires no fetch plan", () => {

@@ -19,7 +19,7 @@ test("multi-source recent YouTube discovery ranks above old single-source discov
 
 test("dashboard exposes automatic top list, novelty filters, and collapsed detailed search", () => {
   const html = fs.readFileSync("index.html", "utf8");
-  assert.match(html, /신규 발견 후보 TOP 100/);
+  assert.match(html, /최근 발견 키워드 TOP 100/);
   assert.match(html, /최근 24시간/);
   assert.match(html, /id="marketDiscoveryDiagnostic"[\s\S]*<summary><strong>관리자 상세 진단/);
   assert.match(html, /market-discovery-list/);

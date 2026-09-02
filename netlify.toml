@@ -8,6 +8,9 @@
 [functions."market-discovery-scheduled"]
   schedule = "0 */6 * * *"
 
+[functions."keyword-candidate-scheduled"]
+  schedule = "0 17 * * *"
+
 [functions."trend-data-collection-scheduled"]
   schedule = "0 21 * * *"
 

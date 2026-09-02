@@ -36,7 +36,8 @@ async function readCandidateStatus() { return store().get(STATUS_KEY, { type: "j
 async function writeCandidateStatus(value) { await store().setJSON(STATUS_KEY, value); return value; }
 
 async function acquireCandidateJob() {
-  const current = await readCandidateStatus();
+  const entry = await store().getWithMetadata(STATUS_KEY, { type: "json" });
+  const current = entry?.data || null;
   const age = Date.now() - Date.parse(current?.updatedAt || 0);
   // The background worker writes a heartbeat every 40 ad groups. A five-minute
   // stale window prevents duplicate live jobs while allowing recovery after a
@@ -48,7 +49,8 @@ async function acquireCandidateJob() {
     startedAt: now, updatedAt: now, processedAdgroups: 0, totalAdgroups: 0,
     processedSeeds: 0, totalSeeds: 0, apiCalls: 0, retries: 0, errors: []
   };
-  await writeCandidateStatus(status);
+  const lock = await store().setJSON(STATUS_KEY, status, entry?.etag ? { onlyIfMatch: entry.etag } : { onlyIfNew: true });
+  if (!lock.modified) return { acquired: false, status: await readCandidateStatus() };
   return { acquired: true, status };
 }
 

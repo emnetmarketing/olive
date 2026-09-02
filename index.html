@@ -1338,16 +1338,22 @@
         <button id="instantRunBtn" type="button">⚡ 즉시 분석</button>
       </div>
       <div class="toolbar header-toolbar header-management-controls">
-        <button id="refreshSearchAdBtn" class="secondary" type="button">↻ Search Ad 상품 새로고침</button>
-        <button id="refreshCandidatesBtn" class="secondary" type="button">↻ 검색어 후보 새로고침</button>
-        <button id="refreshMarketDiscoveryBtn" class="secondary" type="button">↻ 신규 시장 후보 새로고침</button>
-        <button id="latestDataCollectionBtn" class="secondary" type="button">↻ 최신 데이터 수집</button>
-        <button id="scheduleBtn" class="secondary" type="button">⏱ 자동 수집 설정</button>
         <button id="teamsBtn" class="success">↗ Teams 전송</button>
         <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">권한 관리 <span id="pendingBadge" class="badge-count">0</span></button>
         <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
         <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
       </div>
+      <details id="adminDataManagement" style="display:none;">
+        <summary><strong>관리자 데이터 관리</strong></summary>
+        <div class="toolbar" style="margin-top:8px;">
+          <button id="refreshSearchAdBtn" class="secondary" type="button">↻ Search Ad 상품 새로고침</button>
+          <button id="refreshCandidatesBtn" class="secondary" type="button">↻ 검색어 후보 새로고침</button>
+          <button id="refreshMarketDiscoveryBtn" class="secondary" type="button">↻ 분석 후보 풀 새로고침</button>
+          <button id="latestDataCollectionBtn" class="secondary" type="button">↻ 최신 데이터 수집</button>
+          <button id="scheduleBtn" class="secondary" type="button">⏱ 수동 복구 일정 설정</button>
+        </div>
+        <div class="muted">정상 운영에서는 자동 수집되며, 이 기능은 관리자 복구·진단용입니다.</div>
+      </details>
     </div>
   </header>
 
@@ -1528,6 +1534,7 @@
     <div class="workspace">
       <section class="panel">
         <h2>모니터링 요약</h2>
+        <div id="dataStatusSummary" class="api-errors visible" style="margin-bottom:16px;">자동 수집 데이터 상태를 확인하는 중입니다.</div>
         <div id="searchAdCachePanel" class="api-errors visible" style="margin-bottom:16px;">
           <strong>Search Ad 상품 캐시</strong><br>
           <span id="searchAdCacheSummary">상품 캐시 상태를 확인하는 중입니다.</span><br>
@@ -1539,13 +1546,14 @@
           <span id="candidateCacheProgress" class="muted"></span>
         </div>
         <div id="marketDiscoveryPanel" class="api-errors visible" style="margin-bottom:16px;">
-          <strong>신규 시장 후보 (marketDiscovery)</strong><br>
-          <span id="marketDiscoverySummary">신규 시장 후보 상태를 확인하는 중입니다.</span><br>
+          <strong>분석 후보 풀</strong><br>
+          <span class="muted">YouTube, Search Ad, 상품 데이터 등에서 발견되어 Trend 검증 대상이 된 키워드입니다.</span><br>
+          <span id="marketDiscoverySummary">분석 후보 풀 상태를 확인하는 중입니다.</span><br>
           <span id="marketDiscoveryProgress" class="muted"></span>
           <div id="trendCacheSummary" class="muted" style="margin-top:6px;">Trend 캐시/호출 예산을 확인하는 중입니다.</div>
           <div id="marketDiscoveryNewList" style="display:none;margin-top:14px;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <strong>신규 발견 후보 TOP 100</strong>
+              <div><strong>최근 발견 키워드 TOP 100</strong><br><span class="muted">최근 새롭게 발견된 후보 중 우선 검증 가치가 높은 키워드이며, 급등 확정 결과는 아닙니다.</span></div>
               <select id="marketDiscoveryWindow" style="width:auto;min-width:130px;">
                 <option value="today">오늘 처음 발견</option><option value="24h" selected>최근 24시간</option>
                 <option value="3d">최근 3일</option><option value="7d">최근 7일</option><option value="all">전체</option>
@@ -1970,7 +1978,8 @@
       $("adminAccessCard").style.display = master ? "block" : "none";
       if ($("headerAccessBtn")) $("headerAccessBtn").style.display = master ? "inline-flex" : "none";
       if ($("marketDiscoveryDiagnostic")) $("marketDiscoveryDiagnostic").style.display = editable ? "block" : "none";
-      if ($("marketDiscoveryNewList")) $("marketDiscoveryNewList").style.display = editable ? "block" : "none";
+      if ($("marketDiscoveryNewList")) $("marketDiscoveryNewList").style.display = operable ? "block" : "none";
+      if ($("adminDataManagement")) $("adminDataManagement").style.display = editable ? "block" : "none";
       if ($("latestDataCollectionBtn")) $("latestDataCollectionBtn").style.display = editable ? "inline-flex" : "none";
 
       const editableIds = [
@@ -2652,7 +2661,6 @@
       } catch (error) { $("marketDiscoverySummary").textContent = `신규 시장 후보 상태 조회 실패: ${error.message}`; }
     }
     async function loadTrendCacheStatus() {
-      if (!canEdit()) return;
       try {
         const response = await fetch("/.netlify/functions/trend-cache-status", { cache: "no-store" });
         const payload = await response.json().catch(() => ({}));
@@ -2662,8 +2670,12 @@
         const tiers = payload.latestJob?.candidateTiers || {}; const pending = payload.latestJob?.tierPending || {};
         const budgetState = search.exhausted ? "NAVER API 429/공식 quota 제한"
           : Number(search.dailyRemaining || 0) <= 0 ? "내부 일일 budget 소진" : "내부 budget 사용 가능";
-        $("trendCacheSummary").textContent = `Trend 캐시 구축 ${cached.toLocaleString("ko-KR")} / ${target.toLocaleString("ko-KR")} · 미완료 ${Math.max(0, target - cached).toLocaleString("ko-KR")} · HOT/WARM/COLD ${Number(tiers.hot || 0).toLocaleString("ko-KR")}/${Number(tiers.warm || 0).toLocaleString("ko-KR")}/${Number(tiers.cold || 0).toLocaleString("ko-KR")} · 대기 ${Number(pending.hot || 0).toLocaleString("ko-KR")}/${Number(pending.warm || 0).toLocaleString("ko-KR")}/${Number(pending.cold || 0).toLocaleString("ko-KR")} · Search Trend 내부 할당 ${Number(search.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(search.dailyLimit || 0).toLocaleString("ko-KR")} (${budgetState}) · 내부 추정 월 사용 ${Number(search.monthlyUsed || 0).toLocaleString("ko-KR")} / 운영목표 ${Number(search.operatingMonthlyBudget || 0).toLocaleString("ko-KR")} · HTTP 200/429/기타 ${Number(search.http200 || 0).toLocaleString("ko-KR")}/${Number(search.http429 || 0).toLocaleString("ko-KR")}/${Number(search.httpOther || 0).toLocaleString("ko-KR")} · Shopping 내부 추정 월 사용 ${Number(shopping.monthlyUsed || 0).toLocaleString("ko-KR")} / 운영목표 ${Number(shopping.operatingMonthlyBudget || 0).toLocaleString("ko-KR")} · NAVER 실제 quota는 API HUB 콘솔 확인 필요`;
+        $("trendCacheSummary").textContent = `Trend 캐시 구축 ${cached.toLocaleString("ko-KR")} / ${target.toLocaleString("ko-KR")} · 미완료 ${Math.max(0, target - cached).toLocaleString("ko-KR")} · HOT/WARM/COLD ${Number(tiers.hot || 0).toLocaleString("ko-KR")}/${Number(tiers.warm || 0).toLocaleString("ko-KR")}/${Number(tiers.cold || 0).toLocaleString("ko-KR")} · 대기 ${Number(pending.hot || 0).toLocaleString("ko-KR")}/${Number(pending.warm || 0).toLocaleString("ko-KR")}/${Number(pending.cold || 0).toLocaleString("ko-KR")} · 예산 모드 ${payload.latestJob?.budgetMode === "bootstrap" ? "초기 구축" : "평상시"} · Search Trend 내부 할당 ${Number(search.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(search.dailyLimit || 0).toLocaleString("ko-KR")} (${budgetState}) · 내부 추정 월 사용 ${Number(search.monthlyUsed || 0).toLocaleString("ko-KR")} / 운영목표 ${Number(search.operatingMonthlyBudget || 0).toLocaleString("ko-KR")} · HTTP 200/429/기타 ${Number(search.http200 || 0).toLocaleString("ko-KR")}/${Number(search.http429 || 0).toLocaleString("ko-KR")}/${Number(search.httpOther || 0).toLocaleString("ko-KR")} · Shopping 내부 추정 월 사용 ${Number(shopping.monthlyUsed || 0).toLocaleString("ko-KR")} / 운영목표 ${Number(shopping.operatingMonthlyBudget || 0).toLocaleString("ko-KR")} · NAVER 실제 quota는 API HUB 콘솔 확인 필요`;
         const snapshot = payload.snapshot || {}; const collection = payload.latestCollection || {}; const analysis = payload.latestAnalysis || {};
+        const analyzed = Number(payload.latestJob?.trendAvailableCount || 0); const total = Number(payload.latestJob?.analyzedCandidateCount || target || 5000);
+        const coverage = total ? Math.round(analyzed / total * 1000) / 10 : Number(snapshot.trendCoveragePct || 0);
+        const statusLabel = search.exhausted ? "최신 데이터 갱신 실패 · 마지막 정상 결과 표시" : coverage >= 100 ? "100% 분석 완료" : `부분 분석 · ${coverage}%`;
+        $("dataStatusSummary").textContent = `데이터 기준일 ${collection.latestDataDate || snapshot.latestDataDate || "-"} · Trend 분석 범위 ${analyzed.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${coverage}%) · 마지막 자동 수집 ${collection.collectedAt ? formatHistoryDate(collection.collectedAt) : "-"} · 상태 ${statusLabel}`;
         $("dataFreshnessSummary").textContent = `마지막 실제 Trend 수집 ${collection.collectedAt ? formatHistoryDate(collection.collectedAt) : "-"} · 마지막 Fast/분석 ${analysis.analyzedAt ? formatHistoryDate(analysis.analyzedAt) : "-"} · Trend latestDataDate ${collection.latestDataDate || snapshot.latestDataDate || "-"} · 시장 후보 ${state.marketDiscoveryRefreshedAt ? formatHistoryDate(state.marketDiscoveryRefreshedAt) : "상태 패널 참조"} · 유효 snapshot 커버리지 ${Number(snapshot.trendCoveragePct || 0)}% · Shopping 캐시 ${Number(payload.cache?.shoppingInsightEntryCount || 0).toLocaleString("ko-KR")}건`;
       } catch (error) { $("trendCacheSummary").textContent = `Trend 캐시/호출 예산 조회 실패: ${error.message}`; }
     }
@@ -2684,7 +2696,7 @@
       cache_window_unavailable: "요청 기간 cache window 부족", fast_path_cache_wait: "Fast Path cache 대기",
       "not-selected": "보호 슬롯 대기", "not-fetched": "Trend 미조회" };
     async function loadMarketDiscoveryNewList() {
-      if (!canEdit()) return;
+      if (!canOperate()) return;
       const windowName = $("marketDiscoveryWindow")?.value || "24h";
       try {
         const response = await fetch(`/.netlify/functions/market-discovery-list?window=${encodeURIComponent(windowName)}&limit=100`, { cache: "no-store" });

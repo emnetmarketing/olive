@@ -3,6 +3,7 @@ const { readCache: readProductCache } = require("./search-ad-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { accounts, searchAdGet } = require("./search-ad-cache");
 const { YOUTUBE_SEEDS, productCandidates, youtubeCandidates, mergeCandidates, discoveryPriority, selectMarketCacheItems, normalizedKeyword } = require("./market-discovery-core");
+const { readHistory, writeHistory, mergeHistory, restoreHistory } = require("./market-discovery-history-cache");
 
 const PRODUCT_BATCH = 2500; const MAX_CACHE = 5000; const MAX_PRODUCT_CANDIDATES = 15000;
 const MAX_KEYWORDTOOL_BACKFILL = 750; const MAX_SEARCH_CALLS_PER_DAY = 90;
@@ -63,7 +64,7 @@ exports.handler = async (event) => {
   let status = await readStatus(); if (!status || status.jobId !== input.jobId) status = input.status; if (!status?.jobId) return;
   const started = Date.now(); const errors = []; const persist = async (patch) => { status = { ...status, ...patch, updatedAt: new Date().toISOString() }; await writeStatus(status); };
   try {
-    const [previous, productCache, candidateCache, trustedChannels] = await Promise.all([readCache(), readProductCache(), readCandidateCache(), readTrustedChannels()]);
+    const [previous, productCache, candidateCache, trustedChannels, history] = await Promise.all([readCache(), readProductCache(), readCandidateCache(), readTrustedChannels(), readHistory()]);
     if (!productCache?.items?.length) throw new Error("Search Ad 상품 캐시가 없습니다.");
     const previousItems = previous?.items || [];
     await persist({ message: `상품 기반 후보 생성 중 · ${productCache.items.length.toLocaleString("ko-KR")} / ${productCache.items.length.toLocaleString("ko-KR")}` });
@@ -88,7 +89,8 @@ exports.handler = async (event) => {
       } else errors.push("YOUTUBE_API_KEY 미설정 · 기존 소스로 계속 진행");
     } catch (error) { errors.push(error.message); }
     if (!youtube.reused && youtube.videoItems?.length) await writeYoutubeSnapshot({ version: 1, refreshedAt: new Date().toISOString(), items: youtube.videoItems });
-    let items = selectMarketCacheItems(mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]), MAX_CACHE);
+    const discoveredItems = restoreHistory(mergeCandidates(previousItems, [...productItems, ...youtube.items, ...searchAdItems]), history);
+    let items = selectMarketCacheItems(discoveredItems, MAX_CACHE);
     const metrics = { apiCalls: 0, retries: 0 }; const toolAccount = accounts().find((item) => item.apiKey && item.secretKey && item.customerId);
     const backfill = prioritizedKeywordtoolBackfill(items);
     const applyKeywordtoolRow = (item, row) => {
@@ -131,6 +133,7 @@ exports.handler = async (event) => {
         lastSuccessAt: youtube.reused ? previous?.youtube?.lastSuccessAt || null : refreshedAt, lastError: errors.find((item) => item.includes("YouTube")) || null },
       keywordtool: { checkedThisRun: backfill.length, apiCalls: metrics.apiCalls, retries: metrics.retries }, errors: errors.slice(0, 20) };
     await writeCache(cache);
+    await writeHistory(mergeHistory(history, discoveredItems, new Set(items.map((item) => item.normalizedKeyword)), refreshedAt));
     await persist({ state: "completed", message: "신규 시장 후보 수집 완료", completedAt: refreshedAt, durationMs: Date.now() - started,
       candidateCount: items.length, sourceCounts: cache.sourceCounts, youtubeQuotaDate: youtube.quotaDate,
       youtubeSearchCallsToday: youtube.counters.search, youtubeApiCallsToday: youtube.counters.api, youtubeVideos: youtube.videos,
