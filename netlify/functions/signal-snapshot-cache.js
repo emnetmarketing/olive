@@ -48,7 +48,8 @@ async function writeSnapshot(job) {
   // collection clock. Fast Path analysis must never masquerade as collection.
   if (shouldAdvanceCollection(job)) await store().setJSON(LATEST_COLLECTION_KEY, {
     ...pointer, collectedAt: job.trendCollectedAt || job.completedAt, latestDataDate: job.latestDataDate,
-    freshFetchCount: Number(job.freshFetchCount || 0), searchTrendApiCallCount: Number(job.searchTrendApiCallCount || 0)
+    freshFetchCount: Number(job.freshFetchCount || 0), searchTrendApiCallCount: Number(job.searchTrendApiCallCount || 0),
+    triggerSource: job.triggerSource || "admin-manual"
   });
   return { ...snapshot, publishedAsLatestValid };
 }

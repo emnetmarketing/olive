@@ -11,6 +11,7 @@ const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-c
 const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
 const earlySignals = require("./today-early-signal-cache");
 const { calculateMarketConfidence } = require("./market-confidence");
+const schedulerExecutions = require("./trend-scheduler-execution-cache");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -467,7 +468,7 @@ function selectWithMarketDiscovery(baseCandidates, marketItems, priorSignals, li
 }
 
 exports.handler = async (event) => {
-  connect(event); connectTrendCache(event); connectQuota(event); connectSnapshot(event);
+  connect(event); connectTrendCache(event); connectQuota(event); connectSnapshot(event); schedulerExecutions.connect(event);
   let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
   let job = await readJob(input.jobId) || input.job;
   if (!job?.jobId || job.state !== "running") return;
@@ -959,6 +960,9 @@ exports.handler = async (event) => {
         surgeHistory: job.mode === "instant" ? { stored: true, calculationVersion: CALCULATION_VERSION,
           shardCount: surgeHistoryManifest?.shardCount || 0, recordCount: surgeHistoryManifest?.recordCount || 0 } : { stored: false, reason: "period-mode" } } });
     await writeSnapshot(job);
+    if (job.schedulerExecutionId) await schedulerExecutions.updateById(job.schedulerExecutionId, { state: "completed", stage: "completed",
+      jobId: job.jobId, completedAt: job.completedAt, latestDataDate: job.latestDataDate,
+      trendCoveragePct: job.trendCoveragePct, searchTrendApiCallCount: job.searchTrendApiCallCount }).catch(() => null);
     const discoveryHistory = await readDiscoveryHistory().catch(() => null);
     const earlyCache = loadedEarlyCache;
     const confirmedEarlyCache = earlyCache ? earlySignals.confirmSignals(earlyCache, [...analysisTrace.values()], rows, latestDataDate) : null;
@@ -985,6 +989,8 @@ exports.handler = async (event) => {
       shoppingInsightHttp200Count: Number(apiMetrics.shoppingInsight.http200 || 0), shoppingInsightHttp429Count: Number(apiMetrics.shoppingInsight.http429 || 0),
       shoppingInsightHttpOtherCount: Number(apiMetrics.shoppingInsight.httpOther || 0),
       errors: [error.message] });
+    if (job?.schedulerExecutionId) await schedulerExecutions.updateById(job.schedulerExecutionId, { state: "failed", stage: job.currentStage || "background",
+      jobId: job.jobId, failedAt: new Date().toISOString(), errorCode: "BACKGROUND_FAILED", errorMessage: error.message, retryable: true }).catch(() => null);
   }
 };
 

@@ -32,9 +32,11 @@ test("fast analysis cannot schedule external APIs and slow Shopping is deferred 
 
 test("scheduled live collection is automatic unless explicitly disabled", () => {
   const scheduled = fs.readFileSync("netlify/functions/trend-data-collection-scheduled.js", "utf8");
-  assert.match(scheduled, /DISABLE_SCHEDULED_TREND_COLLECTION/);
-  assert.match(scheduled, /scheduled Trend collection is explicitly disabled/);
-  assert.match(scheduled, /\|\| "false"/);
+  const runner = fs.readFileSync("netlify/functions/trend-scheduled-runner.js", "utf8");
+  assert.match(scheduled, /trend-scheduled-runner/);
+  assert.match(runner, /DISABLE_SCHEDULED_TREND_COLLECTION/);
+  assert.match(runner, /scheduled Trend collection is explicitly disabled/);
+  assert.match(runner, /\|\| "false"/);
 });
 
 test("same historical window is a cache hit and requires no fetch plan", () => {

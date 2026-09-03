@@ -56,7 +56,10 @@ async function handle(event, { fastPath = true } = {}) {
     const [candidateCache, productCache] = await Promise.all([readCandidateCache(), readProductCache()]);
     if (!candidateCache?.candidates?.length) return json(409, { error: "검색어 후보 데이터가 없습니다. 먼저 '검색어 후보 새로고침'을 실행해주세요." });
     if (!productCache?.items?.length) return json(409, { error: "Search Ad 전체 상품 데이터가 없습니다. 먼저 'Search Ad 상품 새로고침'을 실행해주세요." });
+    const triggerSource = String(input.triggerSource || (fastPath ? "user-fast-path" : "admin-manual"));
+    const schedulerExecutionId = input.schedulerExecutionId ? String(input.schedulerExecutionId) : null;
     const acquired = await acquireJob({ mode, startDate, endDate, queryStartDate: isoDate(queryStart), surgeThreshold, matchThreshold, fastPath,
+      triggerSource, schedulerExecutionId,
       currentStage: "preparing", processedCount: 0, totalCount: 0 });
     const job = acquired.job;
     createdJob = job;
