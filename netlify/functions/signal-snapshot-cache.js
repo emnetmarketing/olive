@@ -21,7 +21,7 @@ function shouldPromoteInstant(snapshot, previous) {
   const previousCoverage = Number(previous?.trendCoveragePct || 0);
   return !isValidSnapshot(previous) || coverage >= previousCoverage * 0.5;
 }
-function shouldAdvanceCollection(job) { return !job?.fastPath && Number(job?.freshFetchCount || 0) > 0; }
+function shouldAdvanceCollection(job) { return job?.mode === "instant" && !job?.fastPath && Number(job?.freshFetchCount || 0) > 0; }
 async function writeSnapshot(job) {
   const snapshot = { version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
     queryStartDate: job.queryStartDate, generatedAt: job.completedAt, latestDataDate: job.latestDataDate,

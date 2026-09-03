@@ -15,7 +15,10 @@ const fixture = {
       { keyword: "브랜드키워드", resultType: "brand_or_category_signal", estimatedSurgeCount: 350, relatedSignal: { relatedBrand: "브랜드" } },
       { keyword: "기타키워드", resultType: "domain_related_signal", estimatedSurgeCount: 310, relatedSignal: { relatedProductType: "세럼" } }
     ] },
-  periodJob: { jobId: "period-1", mode: "period", results: [{ keyword: "기간키워드", resultType: "product_match", estimatedSurgeCount: 301 }] },
+  periodRequest: { startDate: "2026-08-30", endDate: "2026-09-01" },
+  periodJob: { jobId: "period-1", mode: "period", startDate: "2026-08-30", endDate: "2026-09-01", queryStartDate: "2026-08-02",
+    trendCoveragePct: 10, trendAvailableCount: 500, analyzedCandidateCount: 5000, partialAnalysis: true,
+    results: [{ keyword: "기간키워드", resultType: "product_match", estimatedSurgeCount: 301 }] },
   early: { signalDate: "2026-09-03", generatedAt: "2026-09-03T00:30:00Z", items: [{ keyword: "오늘키워드", strength: "rising", todayEarlySignalScore: 55,
     detectedAt: "2026-09-03T00:20:00Z", earlySignalDate: "2026-09-03", reasons: ["YouTube 증가"], sources: ["youtube"], comparisons: { youtube: { current: 3, previous: 1, delta: 2 } } }] },
   discoveries: [{ rank: 1, keyword: "발견키워드", discoverySource: ["youtube"], discoveredAt: "2026-09-03T00:00:00Z", sourceConfidence: 80 }]
@@ -29,7 +32,7 @@ test("unified download creates every required sheet including optional period", 
 });
 
 test("period sheet is omitted when no period result exists", async () => {
-  const book = new ExcelJS.Workbook(); await book.xlsx.load(await toBuffer({ ...fixture, periodJob: null }));
+  const book = new ExcelJS.Workbook(); await book.xlsx.load(await toBuffer({ ...fixture, periodJob: null, periodRequest: null }));
   assert.equal(book.getWorksheet("07_선택기간분석"), undefined);
 });
 
@@ -37,7 +40,7 @@ test("today instant and period rows remain in separate sheets", async () => {
   const book = await workbook();
   assert.equal(book.getWorksheet("01_오늘 급상승 신호").getCell("A2").value, "오늘키워드");
   assert.equal(book.getWorksheet("02_어제 급등 확인").getCell("A2").value, "상품키워드");
-  assert.equal(book.getWorksheet("07_선택기간분석").getCell("A2").value, "기간키워드");
+  assert.equal(book.getWorksheet("07_선택기간분석").getCell("A12").value, "기간키워드");
 });
 
 test("result type sheets use production enums", async () => {
@@ -49,7 +52,7 @@ test("result type sheets use production enums", async () => {
 
 test("all sheets freeze the header and enable AutoFilter", async () => {
   const book = await workbook();
-  for (const sheet of book.worksheets) { assert.equal(sheet.views[0].ySplit, 1); assert.ok(sheet.autoFilter); }
+  for (const sheet of book.worksheets) { assert.equal(sheet.views[0].ySplit, sheet.name === "07_선택기간분석" ? 12 : 1); assert.ok(sheet.autoFilter); }
 });
 
 test("numeric percentages and dates are typed Excel values", async () => {

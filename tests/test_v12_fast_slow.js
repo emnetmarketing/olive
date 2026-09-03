@@ -25,9 +25,9 @@ test("fast analysis cannot schedule external APIs and slow Shopping is deferred 
   const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
   assert.match(start, /exports\.handler = \(event\) => handle\(event, \{ fastPath: true \}\)/);
   assert.match(background, /job\.fastPath \? \{ selected: \[\], pending: searchFetchQueue/);
-  assert.match(background, /if \(!job\.fastPath && rows\.length\)/);
+  assert.match(background, /if \(!job\.fastPath && !job\.historicalCollection && rows\.length\)/);
   assert.match(background, /const shoppingCandidates = rows\.map/);
-  assert.match(background, /const newsResults = job\.fastPath \? \[\]/);
+  assert.match(background, /const newsResults = job\.fastPath \|\| job\.historicalCollection \? \[\]/);
 });
 
 test("scheduled live collection is automatic unless explicitly disabled", () => {
@@ -59,7 +59,7 @@ test("zero coverage partial snapshot is not valid and Fast Path cannot advance c
   assert.equal(isValidSnapshot({ trendCoveragePct: 0, latestDataDate: null }), false);
   assert.equal(isValidSnapshot({ trendCoveragePct: 25, latestDataDate: "2026-08-31" }), true);
   assert.equal(shouldAdvanceCollection({ fastPath: true, freshFetchCount: 100 }), false);
-  assert.equal(shouldAdvanceCollection({ fastPath: false, freshFetchCount: 100 }), true);
+  assert.equal(shouldAdvanceCollection({ mode: "instant", fastPath: false, freshFetchCount: 100 }), true);
   const source = fs.readFileSync("netlify/functions/signal-snapshot-cache.js", "utf8");
   assert.match(source, /if \(valid\)[\s\S]*LATEST_VALID_KEY/);
   assert.doesNotMatch(source, /setJSON\(LATEST_KEY[\s\S]*return snapshot/);

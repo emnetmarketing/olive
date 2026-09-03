@@ -1655,7 +1655,8 @@
       <section class="panel" id="periodAnalysisPanel">
         <h2>기간 분석 결과</h2>
         <div id="periodAnalysisMeta" class="muted">선택한 기간의 분석 결과가 아직 없습니다.</div>
-        <p class="muted">선택 기간 분석은 기존 Trend cache만 사용하며, 위의 자동 최신 결과에는 영향을 주지 않습니다.</p>
+        <p class="muted">선택 기간 분석은 먼저 기존 exact-window cache를 사용합니다. 데이터가 부족하면 아래 기간 데이터 수집을 명시적으로 실행할 수 있으며, 자동 최신 결과에는 영향을 주지 않습니다.</p>
+        <button id="collectPeriodDataBtn" class="secondary" type="button" hidden>선택 기간 데이터 수집 (NAVER API 사용)</button>
         <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
           <thead><tr><th>키워드</th><th>급등 유형</th><th>추정 급등수</th><th>상승률</th><th>종합 신뢰도</th><th>상품·브랜드</th><th>NAVER 기준일</th></tr></thead>
           <tbody id="periodAnalysisBody"><tr><td colspan="7" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
@@ -2487,7 +2488,10 @@
       state.currentPeriodAnalysisJob = job;
       const available = Number(job.trendAvailableCount || 0); const total = Number(job.analyzedCandidateCount || 0);
       const waitReason = Number(job.cacheWindowUnavailableCount || 0) > 0 ? " · 요청 기간 cache window 부족" : "";
-      $("periodAnalysisMeta").textContent = `분석 기간 ${job.startDate || "-"} ~ ${job.endDate || "-"} · 사용 가능 최신일 ${job.latestDataDate || "확인 불가"} · Trend coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 결과 ${rows.length.toLocaleString("ko-KR")}건${waitReason}`;
+      const needsCollection = available < total;
+      $("collectPeriodDataBtn").hidden = !needsCollection;
+      $("collectPeriodDataBtn").disabled = !canOperate();
+      $("periodAnalysisMeta").textContent = `${needsCollection ? "선택 기간 데이터 준비 필요" : "선택 기간 분석 완료"} · 분석 기간 ${job.startDate || "-"} ~ ${job.endDate || "-"} · 사용 가능 최신일 ${job.latestDataDate || "확인 불가"} · Trend coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 부족 ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 결과 ${rows.length.toLocaleString("ko-KR")}건${waitReason}`;
       $("periodAnalysisBody").innerHTML = rows.length ? rows.slice(0, 100).map((row) => `<tr>
         <td><strong>${escapeHtml(row.keyword)}</strong></td><td>${surgeSignalSummary(row)}</td>
         <td>${Number(row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</td><td>${Number(row.peakRelativeLiftPct || 0).toFixed(1)}%</td>
@@ -2497,6 +2501,23 @@
       $("analysisProgressPanel").classList.toggle("visible", !restored);
       $("analysisProgressText").textContent = `${restored ? "저장된 기간 결과 복원" : "기간 분석 완료"} · ${job.startDate || "-"} ~ ${job.endDate || "-"} · coverage ${Number(job.trendCoveragePct || 0)}% · 결과 ${rows.length.toLocaleString("ko-KR")}건`;
       return rows;
+    }
+
+    async function collectPeriodData() {
+      if (!requireOperate("선택 기간 데이터 수집")) return;
+      const startDate = $("collectionStart").value; const endDate = $("collectionEnd").value;
+      if (!confirm(`${startDate} ~ ${endDate} exact-window Trend 데이터가 부족한 후보를 수집합니다.\nNAVER Search Trend API와 기간 분석 전용 quota를 사용합니다. 계속할까요?`)) return;
+      $("collectPeriodDataBtn").disabled = true;
+      $("periodAnalysisMeta").textContent = `선택 기간 데이터 준비 중 · ${startDate} ~ ${endDate}`;
+      try {
+        const response = await fetch("/.netlify/functions/trend-period-data-collection-start", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "period", startDate, endDate, triggerSource: "user-historical-period" }) });
+        const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        await pollAnalysis(payload.jobId);
+      } catch (error) {
+        $("periodAnalysisMeta").textContent = `선택 기간 데이터 준비 실패: ${error.message}`;
+        showApiErrors({ "선택 기간 데이터 수집": error.message });
+      } finally { $("collectPeriodDataBtn").disabled = !canOperate(); }
     }
 
     function displayCompletedAnalysis(job, { restored = false } = {}) {
@@ -3010,8 +3031,12 @@
       if (!state.currentAnalysisJob?.jobId || state.currentAnalysisJob.state !== "completed") {
         alert("다운로드할 최신 자동 분석 결과가 없습니다."); return;
       }
+      const periodJob = state.currentPeriodAnalysisJob;
+      const selectedStartDate = $("collectionStart").value; const selectedEndDate = $("collectionEnd").value;
+      const matchingPeriodJobId = periodJob?.startDate === selectedStartDate && periodJob?.endDate === selectedEndDate ? periodJob.jobId : null;
       const response = await fetch("/.netlify/functions/download-history", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ downloadType: "unified_results", discoveries: state.marketDiscoveryRows.slice(0, 100) }) });
+        body: JSON.stringify({ downloadType: "unified_results", discoveries: state.marketDiscoveryRows.slice(0, 100),
+          periodStartDate: selectedStartDate, periodEndDate: selectedEndDate, periodJobId: matchingPeriodJobId }) });
       const saved = await response.json().catch(() => ({}));
       if (!response.ok) { alert(saved.error || `다운로드 이력 저장 HTTP ${response.status}`); return; }
       triggerXlsxDownload(saved.filename, saved.contentBase64);
@@ -3036,7 +3061,7 @@
       }
       if (!state.downloadHistory.length) { list.innerHTML = '<div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div>'; return; }
       list.innerHTML = state.downloadHistory.map((item) => {
-        const analysisPeriod = item.mode === "unified" ? `전체 결과 통합 · 기준일: ${item.dataDate || item.latestDataDate || "-"}`
+        const analysisPeriod = item.mode === "unified" ? `전체 결과 통합 · 기준일: ${item.dataDate || item.latestDataDate || "-"}${item.startDate && item.endDate ? ` · 선택기간: ${item.startDate} ~ ${item.endDate}` : ""}`
           : item.mode === "instant" ? `기준일: ${item.latestDataDate || "-"}`
           : item.mode === "period" ? `분석기간: ${item.startDate || "-"} ~ ${item.endDate || "-"}` : "기존 다운로드 이력";
         return `<div class="download-history-item"><div><span class="download-history-name">${escapeHtml(item.filename)}</span>
@@ -3482,6 +3507,7 @@
 
     bindEvent("alertState", "change", updateAlertStateFields);
     bindEvent("runBtn", "click", () => analyze("period"));
+    bindEvent("collectPeriodDataBtn", "click", collectPeriodData);
     bindEvent("instantRunBtn", "click", () => analyze("instant"));
     bindEvent("refreshSearchAdBtn", "click", refreshSearchAdProducts);
     bindEvent("refreshCandidatesBtn", "click", refreshKeywordCandidates);

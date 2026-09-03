@@ -5,7 +5,8 @@ const { discoveryPriority } = require("./market-discovery-core");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: lookupTrendSeries,
   upsert: upsertTrendSeries, writeDirty: writeDirtyTrendSeries } = require("./trend-series-cache");
-const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch } = require("./trend-api-quota");
+const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch,
+  historicalRemaining } = require("./trend-api-quota");
 const { candidateTier, isDueForCollection, priorityWeight } = require("./trend-collection-policy");
 const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-cache");
 const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
@@ -485,6 +486,7 @@ exports.handler = async (event) => {
   let quotaUsageRecorded = false;
   const recordObservedUsage = async () => {
     if (quotaUsageRecorded) return; quotaUsageRecorded = true;
+    if (job.historicalCollection) apiMetrics.searchTrend.historicalCalls = apiMetrics.searchTrend.calls;
     // Both API families are persisted in one Blob write. Netlify Blob reads are
     // eventually consistent, so separate read-modify-write calls could otherwise
     // overwrite the first family's counters with the second family's stale read.
@@ -582,8 +584,15 @@ exports.handler = async (event) => {
     }
     for (const values of shoppingFetchByCategory.values()) values.sort((a, b) => trendFetchPriority(b, priorSignals) - trendFetchPriority(a, priorSignals));
     const initialCoveragePct = trendCandidates.length ? cacheStats.searchTrend.hits / trendCandidates.length * 100 : 100;
-    budgetMode = !job.fastPath && initialCoveragePct < 90 ? "bootstrap" : "normal";
-    const searchQuota = quotaStatusFor(quotaUsage, "searchTrend", 0, new Date(), { bootstrap: budgetMode === "bootstrap" });
+    budgetMode = job.historicalCollection
+      ? "historical"
+      : (!job.fastPath && initialCoveragePct < 90 ? "bootstrap" : "normal");
+    let searchQuota = quotaStatusFor(quotaUsage, "searchTrend", 0, new Date(), { bootstrap: budgetMode === "bootstrap" && !job.historicalCollection });
+    if (job.historicalCollection) {
+      const historical = historicalRemaining(quotaUsage);
+      searchQuota = { ...searchQuota, budgetMode: "historical", historical,
+        remaining: Math.min(searchQuota.monthlyRemaining, historical.remaining), dailyRemaining: historical.remaining };
+    }
     const searchPlan = job.fastPath ? { selected: [], pending: searchFetchQueue, callBudget: 0, expectedCalls: 0 }
       : planTrendFetch(searchFetchQueue, searchQuota);
     const pendingTrendKeys = new Set(searchPlan.pending.map((candidate) => normalizeKeyword(candidate.keyword)));
@@ -628,7 +637,8 @@ exports.handler = async (event) => {
         for (const candidate of requestBatch[responseIndex]) {
           const series = returned.get(normalizeKeyword(candidate.keyword)) || [];
           trendMap.set(candidate.keyword, series); dirtyTrendKeys.add(upsertTrendSeries(seriesCache.entries, { keyword: candidate.keyword,
-            source: "search", startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt }));
+            source: "search", startDate: job.queryStartDate, endDate: job.endDate, series, fetchedAt,
+            cacheScope: job.historicalCollection ? "historical" : "latest" }));
           apiMetrics.searchTrend.keywords += 1;
           trendCollectedAt = fetchedAt;
           const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
@@ -839,7 +849,7 @@ exports.handler = async (event) => {
     // Slow Path only: enrich the already selected business signals. This keeps
     // Shopping Insight out of the 5,000-candidate fan-out while preserving the
     // existing shoppingRise UI for candidates where data is available.
-    if (!job.fastPath && rows.length) {
+    if (!job.fastPath && !job.historicalCollection && rows.length) {
       const candidateByKey = new Map(trendCandidates.map((candidate) => [normalizeKeyword(candidate.keyword), candidate]));
       const shoppingCandidates = rows.map((row) => candidateByKey.get(normalizeKeyword(row.keyword))).filter(Boolean)
         .filter((candidate) => !shoppingMap.has(candidate.keyword));
@@ -913,7 +923,7 @@ exports.handler = async (event) => {
       || Number(b.relativeRatioLift || 0) - Number(a.relativeRatioLift || 0) || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
     await persist({ message: "상위 급등 검색어 뉴스 확인 중", progress: 90 });
     job.currentStage = "news"; job.processedCount = 0; job.totalCount = Math.min(rows.length, 20);
-    const newsResults = job.fastPath ? [] : await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
+    const newsResults = job.fastPath || job.historicalCollection ? [] : await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
       const payload = await api("/search/v1/news", { params: { query: row.keyword, display: 3, start: 1, sort: "date" } });
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
     }));

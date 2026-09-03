@@ -10,10 +10,11 @@ function filenameFor(job) {
   if (job.mode === "instant") return `monitoring-result-instant-${compactDate(job.latestDataDate)}.xls`;
   return `monitoring-result-${compactDate(job.startDate)}-${compactDate(job.endDate)}.xls`;
 }
-function unifiedFilename(now = new Date()) {
+function unifiedFilename(now = new Date(), period = null) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
     .formatToParts(now).reduce((out, part) => ({ ...out, [part.type]: part.value }), {});
-  return `monitoring-all-results-${parts.year}${parts.month}${parts.day}-${parts.hour}${parts.minute}.xlsx`;
+  const suffix = period?.startDate && period?.endDate ? `-period-${period.startDate}-${period.endDate}` : "";
+  return `monitoring-all-results-${parts.year}${parts.month}${parts.day}-${parts.hour}${parts.minute}${suffix}.xlsx`;
 }
 async function newest(mode) {
   const jobs = await Promise.all([readLastSuccess(mode).catch(() => null), readLastPartial(mode).catch(() => null)]);
@@ -34,12 +35,17 @@ exports.handler = async (event) => {
       const snapshot = await readLatestSnapshot("instant").catch(() => null);
       const instantJob = snapshot?.jobId ? await readJob(snapshot.jobId).catch(() => null) : await newest("instant");
       if (!instantJob?.jobId) return json(409, { error: "다운로드할 최신 자동 분석 결과가 없습니다." });
-      const periodJob = await newest("period"); const early = await earlyCache.readCache(); const generatedAt = new Date().toISOString();
-      const buffer = await toBuffer({ generatedAt, instantJob, periodJob, early, discoveries: Array.isArray(input.discoveries) ? input.discoveries.slice(0, 100) : [] });
-      const id = crypto.randomUUID(); const filename = unifiedFilename(new Date(generatedAt));
+      const periodRequest = { startDate: String(input.periodStartDate || "") || null, endDate: String(input.periodEndDate || "") || null };
+      let periodJob = input.periodJobId ? await readJob(String(input.periodJobId)).catch(() => null) : null;
+      if (periodJob?.mode !== "period" || periodJob?.state !== "completed" || periodJob.startDate !== periodRequest.startDate || periodJob.endDate !== periodRequest.endDate) periodJob = null;
+      const early = await earlyCache.readCache(); const generatedAt = new Date().toISOString();
+      const buffer = await toBuffer({ generatedAt, instantJob, periodJob, periodRequest, early,
+        discoveries: Array.isArray(input.discoveries) ? input.discoveries.slice(0, 100) : [] });
+      const id = crypto.randomUUID(); const filename = unifiedFilename(new Date(generatedAt), periodRequest);
       await writeFile(id, buffer);
       const item = await appendHistory({ id, mode: "unified", downloadType: "전체 결과 통합 Excel", dataDate: instantJob.latestDataDate || null,
         latestDataDate: instantJob.latestDataDate || null, sourceJobId: instantJob.jobId, periodJobId: periodJob?.jobId || null,
+        startDate: periodRequest.startDate, endDate: periodRequest.endDate, periodStatus: periodJob ? (periodJob.partialAnalysis ? "partial" : "completed") : "not_analyzed",
         createdAt: generatedAt, downloadedAt: generatedAt, filename, resultCount: Number(instantJob.results?.length || 0), status: "completed", downloadAvailable: true });
       return json(201, { ...item, contentBase64: buffer.toString("base64") });
     }

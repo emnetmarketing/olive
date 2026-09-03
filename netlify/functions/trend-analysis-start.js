@@ -58,8 +58,9 @@ async function handle(event, { fastPath = true } = {}) {
     if (!productCache?.items?.length) return json(409, { error: "Search Ad 전체 상품 데이터가 없습니다. 먼저 'Search Ad 상품 새로고침'을 실행해주세요." });
     const triggerSource = String(input.triggerSource || (fastPath ? "user-fast-path" : "admin-manual"));
     const schedulerExecutionId = input.schedulerExecutionId ? String(input.schedulerExecutionId) : null;
+    const historicalCollection = mode === "period" && !fastPath;
     const acquired = await acquireJob({ mode, startDate, endDate, queryStartDate: isoDate(queryStart), surgeThreshold, matchThreshold, fastPath,
-      triggerSource, schedulerExecutionId,
+      triggerSource, schedulerExecutionId, historicalCollection,
       currentStage: "preparing", processedCount: 0, totalCount: 0 });
     const job = acquired.job;
     createdJob = job;

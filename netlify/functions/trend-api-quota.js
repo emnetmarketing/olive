@@ -13,13 +13,22 @@ function limits() {
     shoppingInsight: { dailyCap: Number(process.env.NAVER_SHOPPING_INSIGHT_DAILY_BUDGET || 500),
       monthly: Number(process.env.NAVER_SHOPPING_INSIGHT_MONTHLY_BUDGET || 50000), operatingMonthly: Number(process.env.NAVER_SHOPPING_INSIGHT_OPERATING_BUDGET || 5000) } };
 }
+function historicalRemaining(usage) {
+  const dailyCap = Math.max(0, Number(process.env.NAVER_HISTORICAL_TREND_DAILY_BUDGET || 200));
+  const monthlyCap = Math.max(0, Number(process.env.NAVER_HISTORICAL_TREND_MONTHLY_BUDGET || 2000));
+  const dailyUsed = Number(usage.daily.searchTrendHistorical || 0); const monthlyUsed = Number(usage.monthly.searchTrendHistorical || 0);
+  return { dailyCap, monthlyCap, dailyUsed, monthlyUsed,
+    remaining: Math.max(0, Math.min(dailyCap - dailyUsed, monthlyCap - monthlyUsed)) };
+}
 function daysRemainingInMonth(now = new Date()) { const period = seoulParts(now); const last = new Date(Date.UTC(Number(period.month.slice(0, 4)), Number(period.month.slice(5, 7)), 0)).getUTCDate(); return Math.max(1, last - Number(period.date.slice(8, 10)) + 1); }
 function dynamicDailyLimit(usage, type, now = new Date(), options = {}) {
   const limit = limits()[type]; const monthlyUsed = Number(usage.monthly[type] || 0); const dailyUsed = Number(usage.daily[type] || 0);
+  const operatingMonthlyUsed = type === "searchTrend" ? Math.max(0, monthlyUsed - Number(usage.monthly.searchTrendHistorical || 0)) : monthlyUsed;
   // Fix the day's allocation at the amount that was available at the start of
   // the Seoul date. Recomputing it from the post-use monthly balance made the
   // displayed limit shrink below dailyUsed (for example 666 used / 644 limit).
-  const operatingRemaining = Math.max(0, limit.operatingMonthly - Math.max(0, monthlyUsed - dailyUsed));
+  const operatingDailyUsed = type === "searchTrend" ? Math.max(0, dailyUsed - Number(usage.daily.searchTrendHistorical || 0)) : dailyUsed;
+  const operatingRemaining = Math.max(0, limit.operatingMonthly - Math.max(0, operatingMonthlyUsed - operatingDailyUsed));
   const allocation = options.bootstrap && type === "searchTrend"
     ? operatingRemaining
     : Math.floor(operatingRemaining / daysRemainingInMonth(now));
@@ -48,6 +57,10 @@ function applyUsage(usage, metricsByType) {
   for (const [type, metrics] of Object.entries(metricsByType || {})) {
     usage.daily[type] = Number(usage.daily[type] || 0) + Number(metrics.calls || 0);
     usage.monthly[type] = Number(usage.monthly[type] || 0) + Number(metrics.calls || 0);
+    if (type === "searchTrend" && Number(metrics.historicalCalls || 0) > 0) {
+      usage.daily.searchTrendHistorical = Number(usage.daily.searchTrendHistorical || 0) + Number(metrics.historicalCalls);
+      usage.monthly.searchTrendHistorical = Number(usage.monthly.searchTrendHistorical || 0) + Number(metrics.historicalCalls);
+    }
     usage.exhausted[type] = Boolean(usage.exhausted[type] || metrics.exhausted);
     usage.daily[`${type}Retries`] = Number(usage.daily[`${type}Retries`] || 0) + Number(metrics.retries || 0);
     usage.daily[`${type}Keywords`] = Number(usage.daily[`${type}Keywords`] || 0) + Number(metrics.keywords || 0);
@@ -65,4 +78,4 @@ async function recordUsageBatch(metricsByType) {
 }
 async function recordUsage(type, calls, options = {}) { return recordUsageBatch({ [type]: { calls, ...options } }); }
 module.exports = { connect, readUsage, statusFor, recordUsage, recordUsageBatch, applyUsage, limits, seoulParts,
-  dynamicDailyLimit, daysRemainingInMonth, USAGE_KEY };
+  dynamicDailyLimit, daysRemainingInMonth, historicalRemaining, USAGE_KEY };

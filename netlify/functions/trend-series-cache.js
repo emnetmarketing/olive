@@ -12,6 +12,7 @@ function store() { return getStore(STORE_NAME); }
 function normalizedKeyword(value) { return String(value || "").normalize("NFKC").toLocaleLowerCase("ko-KR").replace(/[^0-9a-z가-힣]/g, ""); }
 function shardFor(key) { return Number.parseInt(crypto.createHash("sha1").update(key).digest("hex").slice(0, 8), 16) % SHARD_COUNT; }
 function shardKey(index) { return `shards/v1/${index}`; }
+function windowKey(startDate, endDate) { return `${startDate}_${endDate}`; }
 function seoulDate(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
     .formatToParts(now).reduce((out, part) => ({ ...out, [part.type]: part.value }), {});
@@ -38,7 +39,11 @@ function validSeriesRecord(record, startDate, endDate, now = new Date()) {
 
 function lookup(entries, keyword, source, category, startDate, endDate, now = new Date()) {
   const entry = entries.get(normalizedKeyword(keyword));
-  const record = source === "search" ? entry?.search : entry?.shopping?.[category];
+  const searchRecords = source === "search" ? [entry?.search, ...Object.values(entry?.searchWindows || {})].filter(Boolean) : [];
+  const record = source === "search"
+    ? searchRecords.filter((item) => item.requestStartDate <= startDate && item.requestEndDate >= endDate)
+      .sort((a, b) => (Date.parse(b.fetchedAt || 0) - Date.parse(a.fetchedAt || 0)))[0] || entry?.search || searchRecords[0]
+    : entry?.shopping?.[category];
   if (!record) return { state: "miss", record: null, series: null };
   if (record.requestStartDate > startDate || record.requestEndDate < endDate) {
     return { state: "window-unavailable", reason: "cache_window_unavailable", record, series: null };
@@ -47,12 +52,14 @@ function lookup(entries, keyword, source, category, startDate, endDate, now = ne
   return { state: "hit", record, series: record.rawRatioSeries.filter((point) => point.period >= startDate && point.period <= endDate) };
 }
 
-function upsert(entries, { keyword, source, category, startDate, endDate, series, fetchedAt = new Date().toISOString() }) {
+function upsert(entries, { keyword, source, category, startDate, endDate, series, fetchedAt = new Date().toISOString(), cacheScope = "latest" }) {
   const key = normalizedKeyword(keyword); const previous = entries.get(key) || { keyword, normalizedKeyword: key, shopping: {} };
   const record = { version: CACHE_VERSION, normalizationVersion: NORMALIZATION_VERSION, source, timeUnit: "date",
     requestStartDate: startDate, requestEndDate: endDate, latestDataDate: (series || []).map((point) => point.period).sort().at(-1) || null,
     rawRatioSeries: series || [], fetchedAt };
-  const next = source === "search" ? { ...previous, keyword, normalizedKeyword: key, search: record }
+  const next = source === "search" && cacheScope === "historical"
+    ? { ...previous, keyword, normalizedKeyword: key, searchWindows: { ...(previous.searchWindows || {}), [windowKey(startDate, endDate)]: record } }
+    : source === "search" ? { ...previous, keyword, normalizedKeyword: key, search: record }
     : { ...previous, keyword, normalizedKeyword: key, shopping: { ...(previous.shopping || {}), [category]: record } };
   entries.set(key, next); return key;
 }
@@ -70,4 +77,4 @@ async function writeDirty(cache, dirtyKeys) {
 }
 
 module.exports = { connect, readCache, lookup, upsert, writeDirty, normalizedKeyword, validSeriesRecord, shardFor,
-  CACHE_VERSION, NORMALIZATION_VERSION, SHARD_COUNT, MANIFEST_KEY };
+  windowKey, CACHE_VERSION, NORMALIZATION_VERSION, SHARD_COUNT, MANIFEST_KEY };

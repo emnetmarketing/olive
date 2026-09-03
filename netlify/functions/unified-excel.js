@@ -63,6 +63,33 @@ function addSheet(workbook, name, columns, rows) {
   return sheet;
 }
 
+function periodStatus(job, request) {
+  if (!job) return request?.startDate && request?.endDate ? "분석 이력 없음" : "선택 기간 없음";
+  if (Number(job.cacheWindowUnavailableCount || 0) > 0 && Number(job.trendCoveragePct || 0) < 100) return "cache window 부족 / 부분 분석";
+  return job.partialAnalysis ? "부분 분석" : "완료";
+}
+
+function addPeriodSheet(workbook, job, request) {
+  const meta = [
+    ["선택 시작일", request?.startDate || job?.startDate || ""], ["선택 종료일", request?.endDate || job?.endDate || ""],
+    ["required cache window", job?.queryStartDate && job?.endDate ? `${job.queryStartDate} ~ ${job.endDate}` : ""],
+    ["NAVER 사용 가능 기준일", job?.latestDataDate || "확인 불가"], ["coverage", Number(job?.trendCoveragePct || 0) / 100],
+    ["분석 완료 후보", Number(job?.trendAvailableCount || 0)], ["전체 후보", Number(job?.analyzedCandidateCount || job?.totalCandidates || 0)],
+    ["결과 건수", Number(job?.results?.length || 0)], ["분석 상태", periodStatus(job, request)]
+  ];
+  const sheet = workbook.addWorksheet("07_선택기간분석", { views: [{ state: "frozen", ySplit: 12 }] });
+  meta.forEach((row) => sheet.addRow(row)); sheet.getCell(5, 2).numFmt = "0.0%";
+  sheet.addRow([]); const headerRow = sheet.addRow(resultColumns.map(([, header]) => header));
+  headerRow.eachCell((cell) => { cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } }; });
+  sheet.autoFilter = { from: { row: 11, column: 1 }, to: { row: 11, column: resultColumns.length } };
+  sheet.columns = resultColumns.map(([, , width]) => ({ width }));
+  const rows = (job?.results || []).map(resultRow);
+  if (rows.length) for (const row of rows) sheet.addRow(resultColumns.map(([key]) => row[key]));
+  else sheet.addRow(["분석 결과 없음"]);
+  resultColumns.forEach(([, , , numFmt], index) => { if (numFmt) for (let row = 12; row <= sheet.rowCount; row += 1) sheet.getCell(row, index + 1).numFmt = numFmt; });
+  return sheet;
+}
+
 async function buildWorkbook(data) {
   const workbook = new ExcelJS.Workbook(); workbook.creator = "네쇼검 트렌드 모니터"; workbook.created = new Date();
   const instant = data.instantJob || {}; const results = instant.results || []; const early = data.early?.items || []; const discoveries = data.discoveries || [];
@@ -74,13 +101,18 @@ async function buildWorkbook(data) {
     { item: "상품 일치율 기준", value: Number(instant.matchThreshold || 0) / 100 }, { item: "오늘 급상승 신호 건수", value: early.length },
     { item: "어제 급등 전체 결과 건수", value: results.length }, { item: "상품 직접 매칭 건수", value: results.filter((r) => r.resultType === "product_match").length },
     { item: "브랜드/카테고리 건수", value: results.filter((r) => r.resultType === "brand_or_category_signal").length },
-    { item: "기타 관련 급등 건수", value: results.filter((r) => r.resultType === "domain_related_signal").length }, { item: "최근 발견 키워드 건수", value: discoveries.length }
+    { item: "기타 관련 급등 건수", value: results.filter((r) => r.resultType === "domain_related_signal").length }, { item: "최근 발견 키워드 건수", value: discoveries.length },
+    { item: "선택 분석 시작일", value: data.periodRequest?.startDate || data.periodJob?.startDate || "" },
+    { item: "선택 분석 종료일", value: data.periodRequest?.endDate || data.periodJob?.endDate || "" },
+    { item: "선택 기간 coverage", value: Number(data.periodJob?.trendCoveragePct || 0) / 100 },
+    { item: "선택 기간 결과 건수", value: Number(data.periodJob?.results?.length || 0) },
+    { item: "선택 기간 분석 상태", value: periodStatus(data.periodJob, data.periodRequest) }
   ];
   const summary = addSheet(workbook, "00_요약", [["item", "항목", 30], ["value", "값", 28]], summaryRows);
   summaryRows.forEach((row, index) => {
     const cell = summary.getCell(index + 2, 2);
     if (row.value instanceof Date) cell.numFmt = "yyyy-mm-dd hh:mm";
-    else if (["어제 분석 coverage", "상품 일치율 기준"].includes(row.item)) cell.numFmt = "0.0%";
+    else if (["어제 분석 coverage", "상품 일치율 기준", "선택 기간 coverage"].includes(row.item)) cell.numFmt = "0.0%";
     else if (typeof row.value === "number") cell.numFmt = "#,##0";
   });
   addSheet(workbook, "01_오늘 급상승 신호", [["keyword", "키워드", 24], ["strength", "신호 강도", 14], ["score", "Early Signal Score", 18, "0"],
@@ -94,9 +126,9 @@ async function buildWorkbook(data) {
     ["discoveredAt", "최초 발견", 20, "yyyy-mm-dd hh:mm"], ["lastSeenAt", "마지막 발견", 20, "yyyy-mm-dd hh:mm"], ["confidence", "sourceConfidence", 17, "0"],
     ["brand", "관련 브랜드", 18], ["productContext", "제품군/제품라인", 24], ["monthlySearchStatus", "월간검색량 상태", 18],
     ["monthlyTotalSearches", "월간검색량", 14, "#,##0"], ["marketDiscoveryRank", "후보 순위", 12, "0"], ["protectedSlot", "500 보호 슬롯", 14], ["trendStatus", "Trend 상태", 20]], discoveries.map(discoveryRow));
-  if (data.periodJob?.jobId) addSheet(workbook, "07_선택기간분석", resultColumns, (data.periodJob.results || []).map(resultRow));
+  if (data.periodJob?.jobId || (data.periodRequest?.startDate && data.periodRequest?.endDate)) addPeriodSheet(workbook, data.periodJob, data.periodRequest);
   return workbook;
 }
 
 async function toBuffer(data) { const workbook = await buildWorkbook(data); return Buffer.from(await workbook.xlsx.writeBuffer()); }
-module.exports = { buildWorkbook, toBuffer, resultRow, earlyRow, discoveryRow, resultColumns };
+module.exports = { buildWorkbook, toBuffer, resultRow, earlyRow, discoveryRow, resultColumns, periodStatus, addPeriodSheet };

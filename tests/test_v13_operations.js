@@ -63,7 +63,7 @@ test("dashboard exposes freshness and discovery while folding administrator reco
 test("Fast Path and Shopping deferral protections remain intact", () => {
   const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
   assert.match(background, /job\.fastPath \? \{ selected: \[\], pending: searchFetchQueue/);
-  assert.match(background, /if \(!job\.fastPath && rows\.length\)/);
+  assert.match(background, /if \(!job\.fastPath && !job\.historicalCollection && rows\.length\)/);
   assert.match(background, /const shoppingCandidates = rows\.map/);
-  assert.match(background, /budgetMode = !job\.fastPath && initialCoveragePct < 90/);
+  assert.match(background, /budgetMode = job\.historicalCollection/);
 });
