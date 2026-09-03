@@ -11,4 +11,6 @@ async function appendHistory(item) {
   await store().setJSON(HISTORY_KEY, { version: 1, updatedAt: new Date().toISOString(), items });
   return items[0];
 }
-module.exports = { connect, store, readHistory, appendHistory, STORE, HISTORY_KEY };
+async function writeFile(id, buffer) { await store().set(`files/${id}.xlsx`, buffer); }
+async function readFile(id) { return store().get(`files/${id}.xlsx`, { type: "arrayBuffer" }).then((value) => value ? Buffer.from(value) : null).catch(() => null); }
+module.exports = { connect, store, readHistory, appendHistory, writeFile, readFile, STORE, HISTORY_KEY };

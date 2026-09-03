@@ -1595,7 +1595,17 @@
       </section>
 
       <section class="panel" id="todayEarlySignalPanel">
-        <h2>오늘 급상승 신호</h2>
+        <div class="section-head">
+          <h2>오늘 급상승 신호</h2>
+          <div class="section-actions">
+            <button id="excelDownloadBtn" class="secondary" type="button">전체 결과 엑셀 다운로드</button>
+            <button id="downloadHistoryBtn" class="secondary" type="button">다운로드 신청 이력</button>
+            <div id="downloadHistoryPanel" class="download-history" hidden>
+              <div class="download-history-head"><span>다운로드 신청 이력</span><button id="clearDownloadHistoryBtn" class="secondary" type="button">이력 비우기</button></div>
+              <div id="downloadHistoryList" class="download-history-list"><div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div></div>
+            </div>
+          </div>
+        </div>
         <div id="todayEarlySignalMeta" class="muted" style="margin-bottom:8px;">오늘 신호를 불러오는 중입니다.</div>
         <p class="muted">오늘 수집되는 YouTube·Search Ad 최신 시장 신호를 기반으로 빠르게 포착한 키워드입니다. NAVER 당일 검색 급등 확정 결과는 아닙니다.</p>
         <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
@@ -1617,19 +1627,6 @@
       <section class="panel">
         <div class="section-head">
           <h2>상품 직접 매칭 급등</h2>
-          <div class="section-actions">
-            <button id="excelDownloadBtn" class="secondary" type="button">엑셀 다운로드</button>
-            <button id="downloadHistoryBtn" class="secondary" type="button">다운로드 신청 이력</button>
-            <div id="downloadHistoryPanel" class="download-history" hidden>
-              <div class="download-history-head">
-                <span>다운로드 신청 이력</span>
-                <button id="clearDownloadHistoryBtn" class="secondary" type="button">이력 비우기</button>
-              </div>
-              <div id="downloadHistoryList" class="download-history-list">
-                <div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div>
-              </div>
-            </div>
-          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -1754,7 +1751,7 @@
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
       operatingSettings: null, operatingSettingsLoaded: false, accessUsers: [], accessUsersLoaded: false,
-      currentAnalysisJob: null, currentPeriodAnalysisJob: null, downloadHistory: [] };
+      currentAnalysisJob: null, currentPeriodAnalysisJob: null, marketDiscoveryRows: [], downloadHistory: [] };
     const DEFAULT_MASTER_EMAIL = "huni@emnet.co.kr";
     const MASTER_EMAIL_STORAGE_KEY = "monitoringMasterEmail";
     const SETTINGS_STORAGE_KEY = "keywordMonitorConfig";
@@ -2755,6 +2752,7 @@
         const response = await fetch(`/.netlify/functions/market-discovery-list?window=${encodeURIComponent(windowName)}&limit=100`, { cache: "no-store" });
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         const rows = payload.items || [];
+        state.marketDiscoveryRows = rows;
         $("marketDiscoveryNewBody").innerHTML = rows.length ? rows.map((item) => `<tr>
           <td>${Number(item.rank)}</td><td><strong>${escapeHtml(item.keyword)}</strong></td>
           <td>${escapeHtml((item.discoverySource || []).join(" + ") || "-")}</td>
@@ -2992,18 +2990,25 @@
         downloadedAt: new Date().toISOString(), resultCount: Number(job.resultCount || job.results?.length || 0) };
     }
 
+    function triggerXlsxDownload(filename, contentBase64) {
+      const binary = atob(contentBase64); const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob); const link = document.createElement("a");
+      link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    }
+
     async function downloadExcelShared() {
-      const job = state.currentAnalysisJob;
-      if (!job?.jobId || job.state !== "completed" || !state.results.length) {
-        alert("다운로드할 완료 분석 결과가 없습니다."); return;
+      if (!state.currentAnalysisJob?.jobId || state.currentAnalysisJob.state !== "completed") {
+        alert("다운로드할 최신 자동 분석 결과가 없습니다."); return;
       }
-      const exportData = buildSharedExcelExport(job);
-      const response = await fetch("/.netlify/functions/download-history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceJobId: job.jobId }) });
+      const response = await fetch("/.netlify/functions/download-history", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ downloadType: "unified_results", discoveries: state.marketDiscoveryRows.slice(0, 100) }) });
       const saved = await response.json().catch(() => ({}));
       if (!response.ok) { alert(saved.error || `다운로드 이력 저장 HTTP ${response.status}`); return; }
-      triggerExcelDownload(saved.filename || exportData.filename, exportData.csv);
+      triggerXlsxDownload(saved.filename, saved.contentBase64);
       await renderDownloadHistoryShared();
-      log(`공통 다운로드 이력 저장: ${saved.filename || exportData.filename}`);
+      log(`전체 결과 통합 Excel 및 공통 다운로드 이력 저장: ${saved.filename}`);
     }
 
     function legacyDownloadHistory() {
@@ -3023,16 +3028,23 @@
       }
       if (!state.downloadHistory.length) { list.innerHTML = '<div class="download-history-empty">아직 저장된 다운로드 이력이 없습니다.</div>'; return; }
       list.innerHTML = state.downloadHistory.map((item) => {
-        const analysisPeriod = item.mode === "instant" ? `기준일: ${item.latestDataDate || "-"}`
+        const analysisPeriod = item.mode === "unified" ? `전체 결과 통합 · 기준일: ${item.dataDate || item.latestDataDate || "-"}`
+          : item.mode === "instant" ? `기준일: ${item.latestDataDate || "-"}`
           : item.mode === "period" ? `분석기간: ${item.startDate || "-"} ~ ${item.endDate || "-"}` : "기존 다운로드 이력";
         return `<div class="download-history-item"><div><span class="download-history-name">${escapeHtml(item.filename)}</span>
-          <span class="download-history-meta">${escapeHtml(analysisPeriod)}<br>다운로드: ${formatHistoryDate(item.downloadedAt || item.createdAt)} · ${Number(item.resultCount ?? item.count ?? 0).toLocaleString("ko-KR")}건</span></div>
-          <button class="secondary shared-history-download-btn" type="button" data-download-id="${escapeHtml(item.id)}">다시 다운로드</button></div>`;
+          <span class="download-history-meta">${escapeHtml(analysisPeriod)}<br>생성: ${formatHistoryDate(item.downloadedAt || item.createdAt)} · ${escapeHtml(item.downloadType || "분석 결과")} · 상태 ${escapeHtml(item.status || "completed")}</span></div>
+          <button class="secondary shared-history-download-btn" type="button" data-download-id="${escapeHtml(item.id)}" ${item.downloadAvailable === false ? "disabled" : ""}>${item.downloadAvailable === false ? "다운로드 불가" : "다시 다운로드"}</button></div>`;
       }).join("");
       Array.from(document.querySelectorAll(".shared-history-download-btn")).forEach((button) => button.addEventListener("click", async () => {
         const item = state.downloadHistory.find((entry) => entry.id === button.dataset.downloadId);
         if (!item) return;
         if (item.legacy && item.csv) { triggerExcelDownload(item.filename, item.csv); return; }
+        if (item.mode === "unified") {
+          const response = await fetch(`/.netlify/functions/download-history?downloadId=${encodeURIComponent(item.id)}`, { cache: "no-store" });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) { alert(payload.error || "통합 Excel을 다시 다운로드할 수 없습니다."); return; }
+          triggerXlsxDownload(payload.filename || item.filename, payload.contentBase64); return;
+        }
         const response = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(item.sourceJobId)}`, { cache: "no-store" });
         const job = await response.json().catch(() => ({}));
         if (!response.ok || job.state !== "completed") { alert(job.error || "완료 Job을 불러올 수 없습니다."); return; }
