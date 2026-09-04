@@ -40,6 +40,14 @@ test("period confidence uses period evidence while NAVER surge values remain unt
   assert.deepEqual({ estimatedSurgeCount: row.estimatedSurgeCount, peakRelativeLiftPct: row.peakRelativeLiftPct }, before);
 });
 
+test("a stored click-only increase is the lowest Search Ad confidence evidence without double counting", () => {
+  const evidence = buildPeriodMarketEvidence("라카트윈립", "2026-08-30", "2026-09-01", history);
+  evidence.searchAd.newQuery = false; evidence.searchAd.delta = 0; evidence.searchAd.clickDelta = 7;
+  const confidence = calculatePeriodMarketConfidence(result(evidence), evidence, 500);
+  assert.equal(confidence.periodMarketConfidenceComponents.searchAd, 4);
+  assert.match(confidence.periodMarketConfidenceReasons.join(" "), /클릭 증가 \+7/);
+});
+
 test("instant confidence calculator remains independent", () => {
   const instant = calculateMarketConfidence({ ...result(null), earlyMarketEvidence: null, searchAdNewQuery: false, searchAdImpressionDelta: 0,
     searchAdClicks30d: 0, discoverySource: [], marketSourceConfidence: 0, shoppingRise: null, news: null }, 500);

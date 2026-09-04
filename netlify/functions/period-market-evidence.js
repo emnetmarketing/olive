@@ -50,8 +50,12 @@ function buildPeriodMarketEvidence(keyword, startDate, endDate, history = []) {
 function calculatePeriodMarketConfidence(row, evidence, surgeThreshold) {
   const periodRow = { ...row, earlyMarketEvidence: evidence?.youtube?.availability !== "no_data" ? { comparisons: { youtube: evidence.youtube } } : null,
     searchAdNewQuery: Boolean(evidence?.searchAd?.newQuery), searchAdImpressionDelta: evidence?.searchAd?.delta,
-    searchAdClicks30d: 0, discoverySource: evidence?.sources || [], marketSourceConfidence: 0, shoppingRise: null, news: null };
+    searchAdClicks30d: Math.max(0, Number(evidence?.searchAd?.clickDelta || 0)), discoverySource: evidence?.sources || [], marketSourceConfidence: 0, shoppingRise: null, news: null };
   const confidence = calculateMarketConfidence(periodRow, surgeThreshold);
+  if (!periodRow.searchAdNewQuery && !(Number(periodRow.searchAdImpressionDelta || 0) > 0) && periodRow.searchAdClicks30d > 0) {
+    confidence.marketConfidenceReasons = confidence.marketConfidenceReasons.map((reason) => reason === "Search Ad 클릭 유입 확인"
+      ? `Search Ad 클릭 증가 +${periodRow.searchAdClicks30d}` : reason);
+  }
   return { periodMarketConfidenceScore: confidence.marketConfidenceScore, periodMarketConfidenceGrade: confidence.marketConfidenceGrade,
     periodMarketConfidenceReasons: confidence.marketConfidenceReasons, periodMarketConfidenceComponents: confidence.marketConfidenceComponents };
 }
