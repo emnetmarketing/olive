@@ -52,6 +52,32 @@ const resultColumns = [
   ["searchAdEvidence", "Search Ad 근거", 24], ["shoppingRise", "Shopping Rise", 15, "0.00"], ["newsEvidence", "News 근거", 16], ["discoverySource", "discovery source", 28]
 ];
 
+const periodResultColumns = [
+  ["startDate", "선택 시작일", 14, "yyyy-mm-dd"], ["endDate", "선택 종료일", 14, "yyyy-mm-dd"], ["keyword", "키워드", 24],
+  ["estimatedSurgeCount", "NAVER 추정 급등", 18, "#,##0"], ["relativeLift", "상승률", 13, "0.00%"],
+  ["confidenceScore", "period confidence score", 20, "0"], ["confidenceGrade", "period confidence 등급", 20], ["confidenceReasons", "기간 신뢰 근거", 42],
+  ["youtubeCurrent", "YouTube 기간 current", 20, "0"], ["youtubePrevious", "YouTube 이전 비교값", 20, "0"], ["youtubeDelta", "YouTube delta", 16, "0"],
+  ["searchAdNew", "Search Ad 기간 신규 여부", 23], ["searchAdImpressionDelta", "Search Ad 노출 delta", 22, "0"], ["searchAdClickDelta", "Search Ad 클릭 delta", 20, "0"],
+  ["matchScore", "상품 매칭", 14, "0%"], ["productBrand", "상품/브랜드", 36], ["productContext", "브랜드/제품 문맥", 30], ["dataStatus", "데이터 부족 상태", 42],
+  ["latestDataDate", "NAVER 데이터 기준일", 18, "yyyy-mm-dd"], ["resultType", "resultType", 24]
+];
+
+function periodResultRow(row, request) {
+  const evidence = row.periodMarketEvidence || {}; const youtube = evidence.youtube || {}; const search = evidence.searchAd || {};
+  const match = row.match || {}; const signal = row.relatedSignal || {};
+  return { startDate: asDate(request?.startDate), endDate: asDate(request?.endDate), keyword: row.keyword,
+    estimatedSurgeCount: row.estimatedSurgeCount == null ? null : Number(row.estimatedSurgeCount), relativeLift: percent(row.peakRelativeLiftPct),
+    confidenceScore: row.periodMarketConfidenceScore == null ? null : Number(row.periodMarketConfidenceScore),
+    confidenceGrade: gradeLabels[row.periodMarketConfidenceGrade] || "", confidenceReasons: text(row.periodMarketConfidenceReasons),
+    youtubeCurrent: youtube.current ?? null, youtubePrevious: youtube.previous ?? null, youtubeDelta: youtube.delta ?? null,
+    searchAdNew: search.newQuery == null ? "" : search.newQuery ? "Y" : "N", searchAdImpressionDelta: search.delta ?? null,
+    searchAdClickDelta: search.clickDelta ?? null, matchScore: Number(match.score || 0) / 100,
+    productBrand: text([match.item?.product, match.item?.brand || signal.relatedBrand].filter(Boolean)),
+    productContext: signal.relatedProductContext || signal.relatedProductLine || signal.relatedProductType || "",
+    dataStatus: evidence.dataGaps?.length ? text(evidence.dataGaps) : evidence.dataAvailability === "available" ? "기간 보조 데이터 확인" : "기간 보조 데이터 없음",
+    latestDataDate: asDate(row.latestDataDate), resultType: row.resultType || "" };
+}
+
 function addSheet(workbook, name, columns, rows) {
   const sheet = workbook.addWorksheet(name, { views: [{ state: "frozen", ySplit: 1 }] });
   sheet.columns = columns.map(([key, header, width, numFmt]) => ({ key, header, width, style: numFmt ? { numFmt } : {} }));
@@ -81,12 +107,13 @@ function addPeriodSheet(workbook, job, request) {
   meta.forEach((row) => sheet.addRow(row)); sheet.getCell(5, 2).numFmt = "0.0%";
   sheet.addRow([]); const headerRow = sheet.addRow(resultColumns.map(([, header]) => header));
   headerRow.eachCell((cell) => { cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } }; });
-  sheet.autoFilter = { from: { row: 11, column: 1 }, to: { row: 11, column: resultColumns.length } };
-  sheet.columns = resultColumns.map(([, , width]) => ({ width }));
-  const rows = (job?.results || []).map(resultRow);
-  if (rows.length) for (const row of rows) sheet.addRow(resultColumns.map(([key]) => row[key]));
+  sheet.autoFilter = { from: { row: 11, column: 1 }, to: { row: 11, column: periodResultColumns.length } };
+  sheet.columns = periodResultColumns.map(([, , width]) => ({ width }));
+  headerRow.values = periodResultColumns.map(([, header]) => header);
+  const rows = (job?.results || []).map((row) => periodResultRow(row, request || job));
+  if (rows.length) for (const row of rows) sheet.addRow(periodResultColumns.map(([key]) => row[key]));
   else sheet.addRow(["분석 결과 없음"]);
-  resultColumns.forEach(([, , , numFmt], index) => { if (numFmt) for (let row = 12; row <= sheet.rowCount; row += 1) sheet.getCell(row, index + 1).numFmt = numFmt; });
+  periodResultColumns.forEach(([, , , numFmt], index) => { if (numFmt) for (let row = 12; row <= sheet.rowCount; row += 1) sheet.getCell(row, index + 1).numFmt = numFmt; });
   return sheet;
 }
 
@@ -131,4 +158,4 @@ async function buildWorkbook(data) {
 }
 
 async function toBuffer(data) { const workbook = await buildWorkbook(data); return Buffer.from(await workbook.xlsx.writeBuffer()); }
-module.exports = { buildWorkbook, toBuffer, resultRow, earlyRow, discoveryRow, resultColumns, periodStatus, addPeriodSheet };
+module.exports = { buildWorkbook, toBuffer, resultRow, earlyRow, discoveryRow, resultColumns, periodResultColumns, periodResultRow, periodStatus, addPeriodSheet };

@@ -40,7 +40,7 @@ test("today instant and period rows remain in separate sheets", async () => {
   const book = await workbook();
   assert.equal(book.getWorksheet("01_오늘 급상승 신호").getCell("A2").value, "오늘키워드");
   assert.equal(book.getWorksheet("02_어제 급등 확인").getCell("A2").value, "상품키워드");
-  assert.equal(book.getWorksheet("07_선택기간분석").getCell("A12").value, "기간키워드");
+  assert.equal(book.getWorksheet("07_선택기간분석").getCell("C12").value, "기간키워드");
 });
 
 test("result type sheets use production enums", async () => {

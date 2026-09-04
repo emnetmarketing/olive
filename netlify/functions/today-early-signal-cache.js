@@ -22,6 +22,9 @@ function buildEarlySignals(items, history, now = new Date().toISOString()) {
     const search = item.searchAdEvidence || {}; const searchCurrent = Number(search.recentImpressions || 0);
     const hasSearchPrevious = Number.isFinite(Number(search.previousImpressions)); const searchPrevious = hasSearchPrevious ? Number(search.previousImpressions) : null;
     const searchDelta = hasSearchPrevious ? searchCurrent - searchPrevious : null;
+    const hasClickPrevious = Number.isFinite(Number(search.previousClicks)); const searchCurrentClicks = Number.isFinite(Number(search.recentClicks)) ? Number(search.recentClicks) : null;
+    const searchPreviousClicks = hasClickPrevious ? Number(search.previousClicks) : null;
+    const searchClickDelta = searchCurrentClicks !== null && searchPreviousClicks !== null ? searchCurrentClicks - searchPreviousClicks : null;
     const firstSeenAt = item.discoveredAt || previousRecord.firstSeenAt || item.lastSeenAt || null;
     const firstSeenToday = firstSeenAt && kstDate(firstSeenAt) === kstDate(now);
     const youtubeTemporal = youtubeCurrent > 0; const searchTemporal = sources.includes("searchad-new-query") && (firstSeenToday || searchDelta > 0);
@@ -45,7 +48,8 @@ function buildEarlySignals(items, history, now = new Date().toISOString()) {
       productMatchScore: Number(item.productMatchScore || 0), relatedProduct: item.relatedProduct || "",
       comparisons: { youtube: videos.length ? { method: "recent_6h_vs_previous_6h", current: youtubeCurrent, previous: youtubePrevious, delta: youtubeDelta, deltaRate: ratio(youtubeDelta, youtubePrevious) } : null,
         searchAd: sources.includes("searchad-new-query") ? { method: "latest_refresh_vs_previous_refresh", current: searchCurrent, previous: searchPrevious,
-          delta: searchDelta, deltaRate: hasSearchPrevious ? ratio(searchDelta, searchPrevious) : null } : null },
+          delta: searchDelta, deltaRate: hasSearchPrevious ? ratio(searchDelta, searchPrevious) : null, currentClicks: searchCurrentClicks,
+          previousClicks: searchPreviousClicks, clickDelta: searchClickDelta } : null },
       previousNaverState: { everSurged: Boolean(previousRecord.everSurged), resultType: previousRecord.lastResultType || null,
         estimatedSurgeCount: previousRecord.lastEstimatedSurgeCount ?? null }, confirmation: null };
     const old = output.get(key); if (!old || signal.todayEarlySignalScore > old.todayEarlySignalScore) output.set(key, signal);

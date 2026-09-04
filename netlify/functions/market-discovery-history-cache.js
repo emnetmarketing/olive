@@ -65,7 +65,7 @@ function mergeEarlySignalHistory(previous, signals, updatedAt = new Date().toISO
     const old = records.get(signal.normalizedKeyword) || { keyword: signal.keyword, normalizedKeyword: signal.normalizedKeyword, firstSeenAt: signal.firstSeenAt || updatedAt, discoverySource: [] };
     const earlySignalHistory = [...(old.earlySignalHistory || []).filter((item) => item.earlySignalDate !== signal.earlySignalDate), {
       earlySignalDate: signal.earlySignalDate, score: signal.todayEarlySignalScore, strength: signal.strength, sources: signal.sources, detectedAt: signal.detectedAt,
-      confirmation: signal.confirmation || null }].slice(-31);
+      comparisons: signal.comparisons || null, reasons: signal.reasons || [], confirmation: signal.confirmation || null }].slice(-31);
     records.set(signal.normalizedKeyword, { ...old, lastEarlySignalAt: signal.detectedAt, todayEarlySignalScore: signal.todayEarlySignalScore,
       earlySignalHistory, discoverySource: [...new Set([...(old.discoverySource || []), ...(signal.sources || [])])] });
   }

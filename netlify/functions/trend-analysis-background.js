@@ -12,6 +12,7 @@ const { connect: connectSnapshot, writeSnapshot } = require("./signal-snapshot-c
 const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
 const earlySignals = require("./today-early-signal-cache");
 const { calculateMarketConfidence } = require("./market-confidence");
+const { buildPeriodMarketEvidence, calculatePeriodMarketConfidence } = require("./period-market-evidence");
 const schedulerExecutions = require("./trend-scheduler-execution-cache");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
@@ -928,7 +929,16 @@ exports.handler = async (event) => {
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
     }));
     newsResults.forEach((result) => { if (result.status === "fulfilled") { const row = rows.find((item) => item.keyword === result.value.keyword); if (row) row.news = result.value; } });
-    for (const row of rows) Object.assign(row, calculateMarketConfidence(row, job.surgeThreshold));
+    for (const row of rows) {
+      if (job.mode === "period") {
+        row.periodMarketEvidence = buildPeriodMarketEvidence(row.keyword, job.startDate, job.endDate, loadedEarlyCache?.history || []);
+        Object.assign(row, calculatePeriodMarketConfidence(row, row.periodMarketEvidence, job.surgeThreshold));
+        row.marketConfidenceScore = row.periodMarketConfidenceScore;
+        row.marketConfidenceGrade = row.periodMarketConfidenceGrade;
+        row.marketConfidenceReasons = row.periodMarketConfidenceReasons;
+        row.marketConfidenceComponents = row.periodMarketConfidenceComponents;
+      } else Object.assign(row, calculateMarketConfidence(row, job.surgeThreshold));
+    }
     const latestDataDate = [...trendMap.values()].flatMap((data) => (data || []).map((point) => point.period)).filter(Boolean).sort().at(-1) || null;
     const resultByKeyword = new Map(rows.map((row) => [normalizeKeyword(row.keyword), row]));
     for (const trace of analysisTrace.values()) {

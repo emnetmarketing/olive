@@ -1658,8 +1658,8 @@
         <p class="muted">선택 기간 분석은 먼저 기존 exact-window cache를 사용합니다. 데이터가 부족하면 아래 기간 데이터 수집을 명시적으로 실행할 수 있으며, 자동 최신 결과에는 영향을 주지 않습니다.</p>
         <button id="collectPeriodDataBtn" class="secondary" type="button" hidden>선택 기간 데이터 수집 (NAVER API 사용)</button>
         <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
-          <thead><tr><th>키워드</th><th>급등 유형</th><th>추정 급등수</th><th>상승률</th><th>종합 신뢰도</th><th>상품·브랜드</th><th>NAVER 기준일</th></tr></thead>
-          <tbody id="periodAnalysisBody"><tr><td colspan="7" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
+          <thead><tr><th>키워드</th><th>급등 유형</th><th>추정 급등수</th><th>상승률</th><th>기간 종합 신뢰도</th><th>기간 YouTube</th><th>기간 Search Ad</th><th>상품·브랜드</th><th>데이터 상태</th><th>NAVER 기준일</th></tr></thead>
+          <tbody id="periodAnalysisBody"><tr><td colspan="10" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
         </table></div>
       </section>
 
@@ -2495,9 +2495,12 @@
       $("periodAnalysisBody").innerHTML = rows.length ? rows.slice(0, 100).map((row) => `<tr>
         <td><strong>${escapeHtml(row.keyword)}</strong></td><td>${surgeSignalSummary(row)}</td>
         <td>${Number(row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</td><td>${Number(row.peakRelativeLiftPct || 0).toFixed(1)}%</td>
-        <td>${marketConfidenceSummary(row)}</td><td>${escapeHtml(row.match?.item?.product || row.relatedSignal?.relatedBrand || row.relatedSignal?.relatedProductType || "-")}</td>
+        <td>${marketConfidenceSummary(row)}</td><td>${periodSourceEvidence(row.periodMarketEvidence?.youtube, "YouTube")}</td>
+        <td>${periodSourceEvidence(row.periodMarketEvidence?.searchAd, "Search Ad")}</td>
+        <td>${escapeHtml(row.match?.item?.product || row.relatedSignal?.relatedBrand || row.relatedSignal?.relatedProductType || "-")}</td>
+        <td>${escapeHtml(periodDataStatus(row.periodMarketEvidence))}</td>
         <td>${escapeHtml(row.latestDataDate || job.latestDataDate || "-")}</td></tr>`).join("")
-        : '<tr><td colspan="7" class="muted">이 기간과 호환되는 cache에서 통과한 결과가 없습니다.</td></tr>';
+        : '<tr><td colspan="10" class="muted">이 기간과 호환되는 cache에서 통과한 결과가 없습니다.</td></tr>';
       $("analysisProgressPanel").classList.toggle("visible", !restored);
       $("analysisProgressText").textContent = `${restored ? "저장된 기간 결과 복원" : "기간 분석 완료"} · ${job.startDate || "-"} ~ ${job.endDate || "-"} · coverage ${Number(job.trendCoveragePct || 0)}% · 결과 ${rows.length.toLocaleString("ko-KR")}건`;
       return rows;
@@ -2957,6 +2960,19 @@
       const grades = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
       const reasons = (row.marketConfidenceReasons || []).slice(0, 5).join(" · ");
       return `<span class="pill">종합 신뢰도 ${Number(row.marketConfidenceScore)}/100 · ${escapeHtml(grades[row.marketConfidenceGrade] || "참고")}</span>${reasons ? `<br><small class="muted">${escapeHtml(reasons)}</small>` : ""}`;
+    }
+
+    function periodSourceEvidence(source, label) {
+      if (!source || source.availability === "no_data") return '<span class="muted">데이터 없음</span>';
+      const availability = source.availability === "partial" ? "일부 기간" : "저장 관측치";
+      const delta = source.delta == null ? "비교 불가" : `Δ ${Number(source.delta) >= 0 ? "+" : ""}${Number(source.delta).toLocaleString("ko-KR")}`;
+      const fresh = label === "Search Ad" && source.newQuery ? " · 기간 내 신규 유입" : "";
+      return `${escapeHtml(availability)} · ${escapeHtml(delta + fresh)}`;
+    }
+
+    function periodDataStatus(evidence) {
+      if (!evidence || evidence.dataAvailability === "no_data") return "기간 보조 데이터 없음";
+      return evidence.dataGaps?.length ? evidence.dataGaps.join(" · ") : "기간 보조 데이터 확인";
     }
 
     function formatSurgeHistory(history) {
