@@ -2497,9 +2497,10 @@
       const available = Number(job.trendAvailableCount || 0); const total = Number(job.analyzedCandidateCount || 0);
       const waitReason = Number(job.cacheWindowUnavailableCount || 0) > 0 ? " · 요청 기간 cache window 부족" : "";
       const needsCollection = available < total;
-      const budgetWait = job.trendWaitReason === "internal_budget_wait" || job.budgetStopReason === "internal_budget_wait";
-      const completionLabel = needsCollection ? (budgetWait ? "기간 분석 부분 완료 · 기간분석 API 안전예산 소진" : "기간 분석 부분 완료") : "선택 기간 분석 완료";
-      $("periodAnalysisMeta").textContent = `${completionLabel} · 분석 기간 ${job.startDate || "-"} ~ ${job.endDate || "-"} · 사용 가능 최신일 ${job.latestDataDate || "확인 불가"} · Trend coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 부족 ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 결과 ${rows.length.toLocaleString("ko-KR")}건${waitReason}`;
+      const safetyLimited = Boolean(job.historicalSafetyLimited);
+      const completionLabel = needsCollection ? (safetyLimited ? "기간 분석 부분 완료 · NAVER 월간 안전 사용량 보호" : "기간 분석 부분 완료") : "선택 기간 분석 완료";
+      const quotaDetail = job.historicalCollection ? ` · 필요/안전 사용 가능 calls ${Number(job.historicalRequiredCalls || 0).toLocaleString("ko-KR")}/${Number(job.historicalSafeAvailableCalls || 0).toLocaleString("ko-KR")}` : "";
+      $("periodAnalysisMeta").textContent = `${completionLabel} · 분석 기간 ${job.startDate || "-"} ~ ${job.endDate || "-"} · 사용 가능 최신일 ${job.latestDataDate || "확인 불가"} · Trend coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 부족 ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 결과 ${rows.length.toLocaleString("ko-KR")}건${quotaDetail}${waitReason}`;
       $("periodAnalysisBody").innerHTML = rows.length ? rows.slice(0, 100).map((row) => `<tr>
         <td><strong>${escapeHtml(row.keyword)}</strong></td><td>${surgeSignalSummary(row)}</td>
         <td>${Number(row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</td><td>${Number(row.peakRelativeLiftPct || 0).toFixed(1)}%</td>

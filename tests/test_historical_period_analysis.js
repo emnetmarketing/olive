@@ -7,6 +7,13 @@ const quota = require("../netlify/functions/trend-api-quota");
 const snapshots = require("../netlify/functions/signal-snapshot-cache");
 const { toBuffer } = require("../netlify/functions/unified-excel");
 const startHelpers = require("../netlify/functions/trend-analysis-start")._test;
+const backgroundHelpers = require("../netlify/functions/trend-analysis-background")._test;
+
+function historicalFetchPlan(candidateCount, usage = { daily: {}, monthly: {} }) {
+  const historical = quota.historicalRemaining(usage, new Date("2026-09-04T00:00:00Z"));
+  return { historical, plan: backgroundHelpers.planTrendFetch(Array.from({ length: candidateCount }, (_, index) => ({ keyword: `기간후보${index}` })),
+    { remaining: historical.remaining, dailyRemaining: historical.remaining, exhausted: false }) };
+}
 
 test("period exact-window cache hits and misses remain distinguishable", () => {
   const entries = new Map();
@@ -26,8 +33,8 @@ test("historical cache does not replace the rolling latest cache and is reusable
 });
 
 test("historical quota is bounded separately while remaining inside global usage", () => {
-  const usage = { daily: { searchTrend: 10, searchTrendHistorical: 40 }, monthly: { searchTrend: 100, searchTrendHistorical: 400 }, exhausted: {} };
-  const status = quota.historicalRemaining(usage); assert.equal(status.remaining, 160);
+  const usage = { daily: { searchTrend: 10, searchTrendHistorical: 40 }, monthly: { searchTrend: 500, searchTrendHistorical: 400 }, exhausted: {} };
+  const status = quota.historicalRemaining(usage); assert.equal(status.remaining, 1600);
   quota.applyUsage(usage, { searchTrend: { calls: 5, historicalCalls: 5 } });
   assert.equal(usage.daily.searchTrend, 15); assert.equal(usage.daily.searchTrendHistorical, 45);
 });
@@ -98,10 +105,67 @@ test("partial historical collection keeps the existing miss-only server planner"
   assert.match(background, /planTrendFetch\(searchFetchQueue/);
 });
 
-test("one-click historical collection retains dedicated daily and monthly safety budgets", () => {
+test("one-click historical collection uses the dynamic monthly safety envelope", () => {
   const status = quota.historicalRemaining({ daily: {}, monthly: {} });
-  assert.equal(status.dailyCap, 200);
-  assert.equal(status.monthlyCap, 2000);
+  assert.equal(status.budgetMode, "dynamic-monthly");
+  assert.equal(status.remaining, 2000);
+  assert.equal(status.safetyReserve, 28000);
+});
+
+test("zero historical coverage can collect all 5,000 candidates in one safe request", () => {
+  const { historical, plan } = historicalFetchPlan(5000);
+  assert.equal(historical.remaining, 2000);
+  assert.equal(plan.selected.length, 5000);
+  assert.equal(plan.expectedCalls, 1000);
+  assert.equal(plan.pending.length, 0);
+});
+
+test("partial historical cache fetches only the 1,500 missing candidates", () => {
+  const { plan } = historicalFetchPlan(1500);
+  assert.equal(plan.selected.length, 1500);
+  assert.equal(plan.expectedCalls, 300);
+  assert.equal(plan.pending.length, 0);
+});
+
+test("complete exact-window historical cache requires zero NAVER calls", () => {
+  const { plan } = historicalFetchPlan(0);
+  assert.equal(plan.expectedCalls, 0);
+  assert.equal(plan.selected.length, 0);
+});
+
+test("historical availability is not reduced by the former daily 200-call ceiling", () => {
+  const usage = { daily: { searchTrend: 1000, searchTrendHistorical: 1000 }, monthly: {}, exhausted: {} };
+  const { historical, plan } = historicalFetchPlan(5000, usage);
+  assert.equal(historical.remaining, 2000);
+  assert.equal(plan.expectedCalls, 1000);
+});
+
+test("projected automatic collection and the 28,000-call reserve are protected first", () => {
+  const usage = { daily: {}, monthly: { searchTrend: 3332, searchTrendHistorical: 0 }, exhausted: {} };
+  const status = quota.historicalRemaining(usage, new Date("2026-09-04T00:00:00Z"));
+  assert.equal(status.officialRemaining, 46668);
+  assert.equal(status.projectedAutomaticUsage, 16668);
+  assert.equal(status.safetyReserve, 28000);
+  assert.equal(status.remaining, 2000);
+});
+
+test("genuine monthly safety shortage yields a bounded partial historical plan", () => {
+  const usage = { daily: {}, monthly: { searchTrend: 1900, searchTrendHistorical: 1900 }, exhausted: {} };
+  const { historical, plan } = historicalFetchPlan(5000, usage);
+  assert.equal(historical.remaining, 100);
+  assert.equal(plan.selected.length, 500);
+  assert.equal(plan.expectedCalls, 100);
+  assert.equal(plan.pending.length, 4500);
+});
+
+test("historical safety limit diagnostics distinguish required and available calls", () => {
+  const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(background, /historicalRequiredCalls/);
+  assert.match(background, /historicalSafeAvailableCalls/);
+  assert.match(background, /historicalSafetyLimited/);
+  assert.match(html, /NAVER 월간 안전 사용량 보호/);
+  assert.match(html, /필요\/안전 사용 가능 calls/);
 });
 
 test("duplicate period clicks are blocked in the browser and the server lock is retained", () => {

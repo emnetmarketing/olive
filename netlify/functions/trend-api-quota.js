@@ -13,12 +13,24 @@ function limits() {
     shoppingInsight: { dailyCap: Number(process.env.NAVER_SHOPPING_INSIGHT_DAILY_BUDGET || 500),
       monthly: Number(process.env.NAVER_SHOPPING_INSIGHT_MONTHLY_BUDGET || 50000), operatingMonthly: Number(process.env.NAVER_SHOPPING_INSIGHT_OPERATING_BUDGET || 5000) } };
 }
-function historicalRemaining(usage) {
-  const dailyCap = Math.max(0, Number(process.env.NAVER_HISTORICAL_TREND_DAILY_BUDGET || 200));
-  const monthlyCap = Math.max(0, Number(process.env.NAVER_HISTORICAL_TREND_MONTHLY_BUDGET || 2000));
-  const dailyUsed = Number(usage.daily.searchTrendHistorical || 0); const monthlyUsed = Number(usage.monthly.searchTrendHistorical || 0);
-  return { dailyCap, monthlyCap, dailyUsed, monthlyUsed,
-    remaining: Math.max(0, Math.min(dailyCap - dailyUsed, monthlyCap - monthlyUsed)) };
+function historicalRemaining(usage, now = new Date()) {
+  const limit = limits().searchTrend;
+  const monthlyUsed = Number(usage.monthly.searchTrend || 0);
+  const historicalUsed = Number(usage.monthly.searchTrendHistorical || 0);
+  const automaticUsed = Math.max(0, monthlyUsed - historicalUsed);
+  const projectedAutomaticUsage = Math.max(0, limit.operatingMonthly - automaticUsed);
+  // Preserve the pre-existing effective reserve: the official monthly limit,
+  // less the automatic operating target and the former 2,000-call historical
+  // envelope. Historical work may use only the remainder after that reserve
+  // and all projected automatic collection have been protected.
+  const formerHistoricalEnvelope = Math.max(0, Number(process.env.NAVER_HISTORICAL_TREND_MONTHLY_BUDGET || 2000));
+  const defaultSafetyReserve = Math.max(0, limit.monthly - limit.operatingMonthly - formerHistoricalEnvelope);
+  const safetyReserve = Math.max(0, Number(process.env.NAVER_SEARCH_TREND_SAFETY_RESERVE || defaultSafetyReserve));
+  const officialRemaining = Math.max(0, limit.monthly - monthlyUsed);
+  const remaining = Math.max(0, officialRemaining - projectedAutomaticUsage - safetyReserve);
+  return { budgetMode: "dynamic-monthly", officialMonthlyLimit: limit.monthly, officialRemaining,
+    automaticOperatingTarget: limit.operatingMonthly, automaticUsed, projectedAutomaticUsage,
+    safetyReserve, historicalUsed, remaining, daysRemaining: daysRemainingInMonth(now) };
 }
 function daysRemainingInMonth(now = new Date()) { const period = seoulParts(now); const last = new Date(Date.UTC(Number(period.month.slice(0, 4)), Number(period.month.slice(5, 7)), 0)).getUTCDate(); return Math.max(1, last - Number(period.date.slice(8, 10)) + 1); }
 function dynamicDailyLimit(usage, type, now = new Date(), options = {}) {

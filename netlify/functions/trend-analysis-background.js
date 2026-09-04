@@ -484,6 +484,9 @@ exports.handler = async (event) => {
   };
   let trendCollectedAt = null;
   let budgetMode = "normal";
+  let historicalRequiredCalls = 0;
+  let historicalSafeAvailableCalls = 0;
+  let historicalSafetyLimited = false;
   let quotaUsageRecorded = false;
   const recordObservedUsage = async () => {
     if (quotaUsageRecorded) return; quotaUsageRecorded = true;
@@ -596,6 +599,9 @@ exports.handler = async (event) => {
     }
     const searchPlan = job.fastPath ? { selected: [], pending: searchFetchQueue, callBudget: 0, expectedCalls: 0 }
       : planTrendFetch(searchFetchQueue, searchQuota);
+    historicalRequiredCalls = job.historicalCollection ? Math.ceil(searchFetchQueue.length / 5) : 0;
+    historicalSafeAvailableCalls = job.historicalCollection ? Number(searchQuota.historical?.remaining || 0) : 0;
+    historicalSafetyLimited = job.historicalCollection && historicalRequiredCalls > historicalSafeAvailableCalls;
     const pendingTrendKeys = new Set(searchPlan.pending.map((candidate) => normalizeKeyword(candidate.keyword)));
     let quotaStopped = searchQuota.exhausted;
     let eligibleShoppingFetch = new Map([["beauty", []], ["health", []]]);
@@ -963,6 +969,7 @@ exports.handler = async (event) => {
       cacheMissCount: Number(cacheStats?.searchTrend?.misses || 0) + Number(cacheStats?.searchTrend?.stale || 0) + Number(cacheStats?.searchTrend?.windowUnavailable || 0),
       staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
       cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt, budgetMode,
+      historicalRequiredCalls, historicalSafeAvailableCalls, historicalSafetyLimited,
       searchTrendHttp200Count: Number(apiMetrics.searchTrend.http200 || 0), searchTrendHttp429Count: Number(apiMetrics.searchTrend.http429 || 0),
       searchTrendHttpOtherCount: Number(apiMetrics.searchTrend.httpOther || 0),
       shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
@@ -1003,6 +1010,7 @@ exports.handler = async (event) => {
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
       staleRefreshCount: Number(cacheStats?.searchTrend?.stale || 0), searchTrendApiCallCount: Number(apiMetrics.searchTrend.calls || 0),
       cacheWindowUnavailableCount: Number(cacheStats?.searchTrend?.windowUnavailable || 0), trendCollectedAt, budgetMode,
+      historicalRequiredCalls, historicalSafeAvailableCalls, historicalSafetyLimited,
       searchTrendHttp200Count: Number(apiMetrics.searchTrend.http200 || 0), searchTrendHttp429Count: Number(apiMetrics.searchTrend.http429 || 0),
       searchTrendHttpOtherCount: Number(apiMetrics.searchTrend.httpOther || 0),
       shoppingInsightApiCallCount: Number(apiMetrics.shoppingInsight.calls || 0), naverApiRetryCount: Number(apiMetrics.searchTrend.retries || 0) + Number(apiMetrics.shoppingInsight.retries || 0),
