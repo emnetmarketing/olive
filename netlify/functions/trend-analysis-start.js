@@ -45,7 +45,7 @@ async function handle(event, { fastPath = true } = {}) {
     if (!Number.isFinite(days) || days < 1 || days > 31) return json(400, { error: "분석 기간은 1~31일이어야 합니다." });
     const queryStart = analysisQueryStart(mode, start, end);
     if (fastPath) {
-      const snapshot = await readLatestSnapshot().catch(() => null);
+      const snapshot = await readLatestSnapshot(mode).catch(() => null);
       if (snapshot?.jobId && snapshot.mode === mode && snapshot.startDate === startDate && snapshot.endDate === endDate
         && Number(snapshot.surgeThreshold) === Number(surgeThreshold) && Number(snapshot.matchThreshold) === Number(matchThreshold)) {
         const snapshotJob = await readJob(snapshot.jobId).catch(() => null);

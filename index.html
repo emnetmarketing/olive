@@ -1334,7 +1334,7 @@
             <input id="collectionEnd" type="date">
           </div>
         </div>
-        <button id="runBtn" title="선택한 날짜 구간을 기존 cache로 분석합니다. 메인 최신 결과에는 영향을 주지 않습니다.">▶ 선택 기간 분석</button>
+        <button id="runBtn" title="저장된 기간 데이터가 있으면 즉시 분석합니다. 데이터가 부족한 경우 필요한 NAVER Trend 데이터만 자동 수집합니다. 메인 최신 결과에는 영향을 주지 않습니다.">▶ 선택 기간 분석</button>
         <button id="instantRunBtn" type="button" title="현재 저장된 최신 데이터를 기준으로 자동 결과를 다시 계산합니다. 외부 API를 호출하지 않습니다.">⚡ 최신 결과 다시 계산</button>
       </div>
       <div class="toolbar header-toolbar header-management-controls">
@@ -1350,6 +1350,7 @@
           <button id="refreshCandidatesBtn" class="secondary" type="button">↻ 검색어 후보 새로고침</button>
           <button id="refreshMarketDiscoveryBtn" class="secondary" type="button">↻ 분석 후보 풀 새로고침</button>
           <button id="latestDataCollectionBtn" class="secondary" type="button">↻ 최신 데이터 수집</button>
+          <button id="collectPeriodDataBtn" class="secondary" type="button">선택 기간 데이터 수집 복구 (NAVER API 사용)</button>
           <button id="scheduleBtn" class="secondary" type="button">⏱ 수동 복구 일정 설정</button>
         </div>
         <div class="muted">정상 운영에서는 자동 수집되며, 이 기능은 관리자 복구·진단용입니다.</div>
@@ -1655,8 +1656,7 @@
       <section class="panel" id="periodAnalysisPanel">
         <h2>기간 분석 결과</h2>
         <div id="periodAnalysisMeta" class="muted">선택한 기간의 분석 결과가 아직 없습니다.</div>
-        <p class="muted">선택 기간 분석은 먼저 기존 exact-window cache를 사용합니다. 데이터가 부족하면 아래 기간 데이터 수집을 명시적으로 실행할 수 있으며, 자동 최신 결과에는 영향을 주지 않습니다.</p>
-        <button id="collectPeriodDataBtn" class="secondary" type="button" hidden>선택 기간 데이터 수집 (NAVER API 사용)</button>
+        <p class="muted">저장된 기간 데이터가 있으면 즉시 분석합니다. 데이터가 부족한 경우 필요한 NAVER Trend 데이터만 자동 수집한 뒤 결과를 표시합니다. 자동 최신 결과에는 영향을 주지 않습니다.</p>
         <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
           <thead><tr><th>키워드</th><th>급등 유형</th><th>추정 급등수</th><th>상승률</th><th>기간 종합 신뢰도</th><th>기간 YouTube</th><th>기간 Search Ad</th><th>상품·브랜드</th><th>데이터 상태</th><th>NAVER 기준일</th></tr></thead>
           <tbody id="periodAnalysisBody"><tr><td colspan="10" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
@@ -2021,7 +2021,7 @@
       Array.from(document.querySelectorAll(".schedule-time-input, .remove-schedule-time-btn")).forEach((el) => {
         el.disabled = !editable;
       });
-      ["saveBtn", "operatingSettingsSaveBtn", "addScheduleTimeBtn", "refreshSearchAdBtn", "refreshCandidatesBtn", "refreshMarketDiscoveryBtn", "latestDataCollectionBtn", "scheduleBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
+      ["saveBtn", "operatingSettingsSaveBtn", "addScheduleTimeBtn", "refreshSearchAdBtn", "refreshCandidatesBtn", "refreshMarketDiscoveryBtn", "latestDataCollectionBtn", "collectPeriodDataBtn", "scheduleBtn", "startScheduleBtn", "stopScheduleBtn"].forEach((id) => {
         if ($(id)) $(id).disabled = !editable;
       });
       if ($("operatingSettingsSaveBtn")) $("operatingSettingsSaveBtn").style.display = editable ? "inline-flex" : "none";
@@ -2404,6 +2404,7 @@
     let analysisPollTimer = null;
     let currentJobWatchTimer = null;
     let activeAnalysisJobId = null;
+    let activePeriodOneClick = null;
     let lastMarketTrendStatusLoad = 0;
     const CURRENT_JOB_WATCH_INTERVAL_MS = 8000;
 
@@ -2438,14 +2439,18 @@
       }
       if (mode === "instant") clearAnalysisUI("저장된 최신 데이터로 최신 결과를 다시 계산하는 중입니다.");
       else {
-        $("periodAnalysisMeta").textContent = "선택 기간을 기존 cache로 분석하는 중입니다.";
-        $("periodAnalysisBody").innerHTML = '<tr><td colspan="7" class="muted">분석 중입니다.</td></tr>';
+        if (activePeriodOneClick?.active) return;
+        activePeriodOneClick = { active: true, phase: "initial-fast", startDate: $("collectionStart").value,
+          endDate: $("collectionEnd").value, collectionAttempted: false };
+        $("periodAnalysisMeta").textContent = "선택 기간 분석 준비 중 · exact-window cache를 확인하고 있습니다.";
+        $("periodAnalysisBody").innerHTML = '<tr><td colspan="10" class="muted">분석 중입니다.</td></tr>';
       }
       showApiErrors();
       if (mode === "period") {
         const days = inclusiveAnalysisDays($("collectionStart").value, $("collectionEnd").value);
         if (!Number.isFinite(days) || days < 1 || days > 31) {
           showApiErrors({ "분석 기간": "분석 기간은 시작일과 종료일을 포함하여 1~31일이어야 합니다." });
+          activePeriodOneClick = null;
           finishAnalysisControls();
           return;
         }
@@ -2465,12 +2470,13 @@
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `분석 시작 HTTP ${response.status}`);
         if (payload.existing) { alert(payload.message || "현재 Background 작업이 실행 중입니다."); await loadLastSuccessfulAnalysis(mode); }
-        await pollAnalysis(payload.jobId);
+        await pollAnalysis(payload.jobId, mode === "period" ? activePeriodOneClick : null);
       } catch (error) {
         if (mode === "instant") clearAnalysisUI("최신 결과 재계산에 실패했습니다. 마지막 정상 자동 결과를 복원하는 중입니다.");
         else $("periodAnalysisMeta").textContent = `기간 분석 실패: ${error.message}`;
         await loadLastSuccessfulAnalysis(mode);
         showApiErrors({ "분석 실행": error.message });
+        if (mode === "period") activePeriodOneClick = null;
         finishAnalysisControls();
       }
     }
@@ -2489,9 +2495,9 @@
       const available = Number(job.trendAvailableCount || 0); const total = Number(job.analyzedCandidateCount || 0);
       const waitReason = Number(job.cacheWindowUnavailableCount || 0) > 0 ? " · 요청 기간 cache window 부족" : "";
       const needsCollection = available < total;
-      $("collectPeriodDataBtn").hidden = !needsCollection;
-      $("collectPeriodDataBtn").disabled = !canOperate();
-      $("periodAnalysisMeta").textContent = `${needsCollection ? "선택 기간 데이터 준비 필요" : "선택 기간 분석 완료"} · 분석 기간 ${job.startDate || "-"} ~ ${job.endDate || "-"} · 사용 가능 최신일 ${job.latestDataDate || "확인 불가"} · Trend coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 부족 ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 결과 ${rows.length.toLocaleString("ko-KR")}건${waitReason}`;
+      const budgetWait = job.trendWaitReason === "internal_budget_wait" || job.budgetStopReason === "internal_budget_wait";
+      const completionLabel = needsCollection ? (budgetWait ? "기간 분석 부분 완료 · 기간분석 API 안전예산 소진" : "기간 분석 부분 완료") : "선택 기간 분석 완료";
+      $("periodAnalysisMeta").textContent = `${completionLabel} · 분석 기간 ${job.startDate || "-"} ~ ${job.endDate || "-"} · 사용 가능 최신일 ${job.latestDataDate || "확인 불가"} · Trend coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 부족 ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 결과 ${rows.length.toLocaleString("ko-KR")}건${waitReason}`;
       $("periodAnalysisBody").innerHTML = rows.length ? rows.slice(0, 100).map((row) => `<tr>
         <td><strong>${escapeHtml(row.keyword)}</strong></td><td>${surgeSignalSummary(row)}</td>
         <td>${Number(row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</td><td>${Number(row.peakRelativeLiftPct || 0).toFixed(1)}%</td>
@@ -2521,6 +2527,37 @@
         $("periodAnalysisMeta").textContent = `선택 기간 데이터 준비 실패: ${error.message}`;
         showApiErrors({ "선택 기간 데이터 수집": error.message });
       } finally { $("collectPeriodDataBtn").disabled = !canOperate(); }
+    }
+
+    async function startPeriodOneClickStep(flow, endpoint, phase, triggerSource) {
+      flow.phase = phase;
+      const collecting = phase === "historical-collection";
+      $("periodAnalysisMeta").textContent = collecting
+        ? `NAVER 기간 데이터 수집 준비 중 · ${flow.startDate} ~ ${flow.endDate}`
+        : `기간 분석 중 · ${flow.startDate} ~ ${flow.endDate}`;
+      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "period", startDate: flow.startDate, endDate: flow.endDate, triggerSource }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      await pollAnalysis(payload.jobId, flow);
+    }
+
+    async function continuePeriodOneClick(job, flow) {
+      const available = Number(job.trendAvailableCount || 0); const total = Number(job.analyzedCandidateCount || 0);
+      if (flow.phase === "initial-fast" && available < total && !flow.collectionAttempted) {
+        flow.collectionAttempted = true;
+        await startPeriodOneClickStep(flow, "/.netlify/functions/trend-period-data-collection-start",
+          "historical-collection", "user-period-one-click");
+        return true;
+      }
+      if (flow.phase === "historical-collection") {
+        await startPeriodOneClickStep(flow, "/.netlify/functions/trend-analysis-start",
+          "final-fast", "user-period-one-click-final-fast");
+        return true;
+      }
+      flow.active = false;
+      activePeriodOneClick = null;
+      return false;
     }
 
     function displayCompletedAnalysis(job, { restored = false } = {}) {
@@ -2560,7 +2597,7 @@
       }
     }
 
-    async function pollAnalysis(jobId) {
+    async function pollAnalysis(jobId, periodFlow = null) {
       activeAnalysisJobId = jobId;
       let polledJob = null;
       try {
@@ -2571,25 +2608,37 @@
         if (job.mode === "period") state.currentPeriodAnalysisJob = job;
         else state.currentAnalysisJob = job;
         const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-matching": "급등 계산 및 상품 매칭", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
-        const periodText = job.mode === "instant" ? "즉시 분석" : `기간 분석 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`;
+        const periodText = job.mode === "instant" ? "즉시 분석" : periodFlow?.phase === "historical-collection"
+          ? `NAVER 기간 데이터 수집 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`
+          : `기간 분석 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`;
         const counts = Number(job.totalCount || 0) ? ` · ${Number(job.processedCount || 0).toLocaleString("ko-KR")} / ${Number(job.totalCount).toLocaleString("ko-KR")}` : "";
         const started = job.createdAt ? ` · 시작 ${formatHistoryDate(job.createdAt)}` : "";
         $("analysisProgressText").textContent = `${periodText}${started} · ${stageLabels[job.currentStage] || job.message || "분석 중"}${counts} · ${Number(job.progress || 0)}%`;
         if (job.state === "running") {
-          analysisPollTimer = setTimeout(() => pollAnalysis(jobId), 3000);
+          analysisPollTimer = setTimeout(() => pollAnalysis(jobId, periodFlow), 3000);
           return;
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
         const results = displayCompletedAnalysis(job);
+        if (periodFlow?.active && job.mode === "period" && await continuePeriodOneClick(job, periodFlow)) return;
         await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList(), loadTodayEarlySignals()]);
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
         finishAnalysisControls();
       } catch (error) {
+        if (periodFlow?.active && periodFlow.phase === "historical-collection") {
+          showApiErrors({ "기간 데이터 일부 수집 실패": `${error.message} · 기존 cache로 부분 결과를 계산합니다.` });
+          try {
+            await startPeriodOneClickStep(periodFlow, "/.netlify/functions/trend-analysis-start",
+              "final-fast", "user-period-one-click-recovery-fast");
+            return;
+          } catch (recoveryError) { error = recoveryError; }
+        }
         if (polledJob?.mode === "instant") clearAnalysisUI("최신 결과 재계산에 실패했습니다. 마지막 정상 자동 결과를 복원하는 중입니다.");
         else $("periodAnalysisMeta").textContent = `기간 분석 실패: ${error.message}`;
         await loadLastSuccessfulAnalysis(polledJob?.mode || "instant");
         showApiErrors({ "분석 실행": error.message });
         $("analysisProgressText").textContent = `분석 실패: ${error.message}`;
+        if (periodFlow) { periodFlow.active = false; activePeriodOneClick = null; }
         finishAnalysisControls();
       }
     }

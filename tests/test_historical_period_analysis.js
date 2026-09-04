@@ -35,12 +35,103 @@ test("period collection can never advance the instant latest collection pointer"
   assert.equal(snapshots.shouldAdvanceCollection({ mode: "period", fastPath: false, freshFetchCount: 500 }), false);
 });
 
-test("period UI exposes an explicit API collection state without changing instant analysis", () => {
+test("period UI exposes one-click collection while keeping manual recovery under admin controls", () => {
   const html = fs.readFileSync("index.html", "utf8");
-  assert.match(html, /선택 기간 데이터 준비 필요|선택 기간 데이터 준비 중/);
+  assert.match(html, /선택 기간 분석 준비 중|NAVER 기간 데이터 수집 준비 중/);
   assert.match(html, /trend-period-data-collection-start/);
   assert.match(html, /NAVER Search Trend API와 기간 분석 전용 quota를 사용합니다/);
+  assert.match(html, /선택 기간 데이터 수집 복구/);
   assert.match(html, /matchingPeriodJobId/);
+});
+
+test("period analysis chains cache check collection and final fast analysis without a second click", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const flow = html.slice(html.indexOf("async function startPeriodOneClickStep"), html.indexOf("function displayCompletedAnalysis"));
+  assert.match(flow, /phase === "initial-fast"/);
+  assert.match(flow, /available < total/);
+  assert.match(flow, /trend-period-data-collection-start/);
+  assert.match(flow, /phase === "historical-collection"/);
+  assert.match(flow, /trend-analysis-start/);
+  assert.match(flow, /"final-fast"/);
+});
+
+test("period one-click collects at most once per user run and recovers with cached partial data", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /!flow\.collectionAttempted/);
+  assert.match(html, /flow\.collectionAttempted = true/);
+  assert.match(html, /user-period-one-click-recovery-fast/);
+  assert.match(html, /기존 cache로 부분 결과를 계산합니다/);
+});
+
+test("period cached snapshots are looked up on the period pointer", () => {
+  const source = fs.readFileSync("netlify/functions/trend-analysis-start.js", "utf8");
+  assert.match(source, /readLatestSnapshot\(mode\)/);
+});
+
+test("normal period UI no longer asks users to press the historical collection button", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const panel = html.slice(html.indexOf('<section class="panel" id="periodAnalysisPanel"'), html.indexOf('<section class="panel" id="brandSignalPanel"'));
+  assert.doesNotMatch(panel, /collectPeriodDataBtn/);
+  const admin = html.slice(html.indexOf('<details id="adminDataManagement"'), html.indexOf('</details>', html.indexOf('<details id="adminDataManagement"')));
+  assert.match(admin, /collectPeriodDataBtn/);
+});
+
+test("period one-click progress distinguishes collection from local analysis", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /NAVER 기간 데이터 수집 중/);
+  assert.match(html, /기간 분석 중/);
+  assert.match(html, /기간 분석 부분 완료/);
+});
+
+test("a complete period cache finishes without starting historical collection", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const flow = html.slice(html.indexOf("async function continuePeriodOneClick"), html.indexOf("function displayCompletedAnalysis"));
+  assert.match(flow, /available < total/);
+  assert.match(flow, /flow\.active = false/);
+});
+
+test("partial historical collection keeps the existing miss-only server planner", () => {
+  const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  assert.match(background, /cached\.state === "hit"/);
+  assert.match(background, /searchFetchQueue\.push/);
+  assert.match(background, /planTrendFetch\(searchFetchQueue/);
+});
+
+test("one-click historical collection retains dedicated daily and monthly safety budgets", () => {
+  const status = quota.historicalRemaining({ daily: {}, monthly: {} });
+  assert.equal(status.dailyCap, 200);
+  assert.equal(status.monthlyCap, 2000);
+});
+
+test("duplicate period clicks are blocked in the browser and the server lock is retained", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const cacheSource = fs.readFileSync("netlify/functions/trend-analysis-cache.js", "utf8");
+  assert.match(html, /activePeriodOneClick\?\.active/);
+  assert.match(cacheSource, /acquireJob/);
+  assert.match(cacheSource, /Duplicate analysis start was prevented/);
+});
+
+test("historical failure persists successful dirty cache batches before partial recovery", () => {
+  const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  assert.match(background, /if \(seriesCache && dirtyTrendKeys\.size\) await writeDirtyTrendSeries/);
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /user-period-one-click-recovery-fast/);
+});
+
+test("one-click historical work stays separate from instant collection and Early Signal", () => {
+  const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
+  assert.match(background, /await writeSnapshot\(job\)/);
+  assert.match(background, /job\.historicalCollection/);
+  const snapshotSource = fs.readFileSync("netlify/functions/signal-snapshot-cache.js", "utf8");
+  assert.match(snapshotSource, /job\?\.mode === "instant" && !job\?\.fastPath/);
+});
+
+test("one-click period result remains the workbook period source automatically", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /state\.currentPeriodAnalysisJob = job/);
+  assert.match(html, /periodJobId: matchingPeriodJobId/);
+  const workbook = fs.readFileSync("netlify/functions/unified-excel.js", "utf8");
+  assert.match(workbook, /07_선택기간분석/);
 });
 
 test("historical endpoint shares the slow core and atomic analysis lock", () => {
