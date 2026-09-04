@@ -23,6 +23,17 @@ function analysisQueryStart(mode, start, end) {
   }
   return queryStart;
 }
+function jobMetadata(job) {
+  return { jobId: job?.jobId || null, mode: job?.mode || null, fastPath: Boolean(job?.fastPath),
+    historicalCollection: Boolean(job?.historicalCollection), startDate: job?.startDate || null,
+    endDate: job?.endDate || null, queryStartDate: job?.queryStartDate || null, state: job?.state || null };
+}
+function matchesRequestedJob(job, request) {
+  return Boolean(job && job.mode === request.mode && Boolean(job.fastPath) === Boolean(request.fastPath)
+    && Boolean(job.historicalCollection) === Boolean(request.historicalCollection)
+    && job.startDate === request.startDate && job.endDate === request.endDate
+    && job.queryStartDate === request.queryStartDate);
+}
 
 async function handle(event, { fastPath = true } = {}) {
   connect(event); connectSnapshot(event);
@@ -59,19 +70,25 @@ async function handle(event, { fastPath = true } = {}) {
     const triggerSource = String(input.triggerSource || (fastPath ? "user-fast-path" : "admin-manual"));
     const schedulerExecutionId = input.schedulerExecutionId ? String(input.schedulerExecutionId) : null;
     const historicalCollection = mode === "period" && !fastPath;
-    const acquired = await acquireJob({ mode, startDate, endDate, queryStartDate: isoDate(queryStart), surgeThreshold, matchThreshold, fastPath,
-      triggerSource, schedulerExecutionId, historicalCollection,
+    const requestedJob = { mode, startDate, endDate, queryStartDate: isoDate(queryStart), fastPath, historicalCollection };
+    const acquired = await acquireJob({ ...requestedJob, surgeThreshold, matchThreshold,
+      triggerSource, schedulerExecutionId,
       currentStage: "preparing", processedCount: 0, totalCount: 0 });
     const job = acquired.job;
     createdJob = job;
-    if (acquired.existing) return json(200, { jobId: job.jobId, existing: true, fastPath: Boolean(job.fastPath),
-      message: "현재 Background 작업이 실행 중입니다. 최신 저장 결과를 표시하고 기존 진행 상태에 연결합니다." });
+    if (acquired.existing) {
+      const metadata = jobMetadata(job);
+      if (historicalCollection && !matchesRequestedJob(job, requestedJob)) return json(409, { error: "요청과 다른 분석 Job이 아직 실행 상태로 보입니다.",
+        errorCode: "INCOMPATIBLE_ACTIVE_JOB", retryable: true, existing: true, ...metadata });
+      return json(200, { existing: true, ...metadata,
+        message: "동일한 Background 작업이 실행 중입니다. 기존 진행 상태에 연결합니다." });
+    }
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
     const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId, job })
     });
     if (!response.ok && response.status !== 202) throw new Error(`분석 Background Function 시작 실패: HTTP ${response.status}`);
-    return json(202, { jobId: job.jobId, existing: false, fastPath,
+    return json(202, { existing: false, ...jobMetadata(job),
       message: fastPath ? "저장된 최신 데이터로 분석을 시작했습니다." : "최신 데이터 Background 수집을 시작했습니다." });
   } catch (error) {
     if (createdJob) await writeJob(createdJob.jobId, { ...createdJob, state: "failed", message: "분석 시작 실패", errors: [error.message], updatedAt: new Date().toISOString() }).catch(() => {});
@@ -80,4 +97,4 @@ async function handle(event, { fastPath = true } = {}) {
 }
 exports.handler = (event) => handle(event, { fastPath: true });
 exports.handle = handle;
-exports._test = { inclusiveDays, analysisQueryStart, isoDate };
+exports._test = { inclusiveDays, analysisQueryStart, isoDate, jobMetadata, matchesRequestedJob };

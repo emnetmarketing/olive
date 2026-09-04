@@ -2405,6 +2405,8 @@
     let currentJobWatchTimer = null;
     let activeAnalysisJobId = null;
     let activePeriodOneClick = null;
+    const HISTORICAL_START_MAX_ATTEMPTS = 3;
+    const HISTORICAL_START_RETRY_MS = 1500;
     let lastMarketTrendStatusLoad = 0;
     const CURRENT_JOB_WATCH_INTERVAL_MS = 8000;
 
@@ -2535,15 +2537,34 @@
       $("periodAnalysisMeta").textContent = collecting
         ? `NAVER 기간 데이터 수집 준비 중 · ${flow.startDate} ~ ${flow.endDate}`
         : `기간 분석 중 · ${flow.startDate} ~ ${flow.endDate}`;
-      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "period", startDate: flow.startDate, endDate: flow.endDate, triggerSource }) });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-      await pollAnalysis(payload.jobId, flow);
+      const attempts = collecting ? HISTORICAL_START_MAX_ATTEMPTS : 1;
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "period", startDate: flow.startDate, endDate: flow.endDate, triggerSource }) });
+        const payload = await response.json().catch(() => ({}));
+        const matchingHistorical = payload.mode === "period" && payload.historicalCollection === true && payload.fastPath === false
+          && payload.startDate === flow.startDate && payload.endDate === flow.endDate
+          && payload.queryStartDate === flow.requiredWindowStart;
+        if (response.ok && (!collecting || matchingHistorical)) {
+          await pollAnalysis(payload.jobId, flow);
+          return;
+        }
+        const retryableMismatch = collecting && (payload.errorCode === "INCOMPATIBLE_ACTIVE_JOB"
+          || response.ok && payload.existing && !matchingHistorical);
+        if (!retryableMismatch || attempt === attempts) {
+          const error = new Error(payload.error || (collecting ? "실제 Historical Collection Job을 생성하지 못했습니다." : `HTTP ${response.status}`));
+          error.periodCollectionStartFailed = collecting;
+          throw error;
+        }
+        $("periodAnalysisMeta").textContent = `기간 데이터 수집 Job 확인 재시도 ${attempt}/${attempts - 1} · 현재 coverage ${Number(flow.initialCoveragePct || 0)}%`;
+        await new Promise((resolve) => setTimeout(resolve, HISTORICAL_START_RETRY_MS));
+      }
     }
 
     async function continuePeriodOneClick(job, flow) {
       const available = Number(job.trendAvailableCount || 0); const total = Number(job.analyzedCandidateCount || 0);
+      flow.lastAvailable = available; flow.lastTotal = total; flow.initialCoveragePct ??= Number(job.trendCoveragePct || 0);
+      flow.requiredWindowStart ||= job.queryStartDate;
       if (flow.phase === "initial-fast" && available < total && !flow.collectionAttempted) {
         flow.collectionAttempted = true;
         await startPeriodOneClickStep(flow, "/.netlify/functions/trend-period-data-collection-start",
@@ -2619,12 +2640,20 @@
           return;
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
-        const results = displayCompletedAnalysis(job);
         if (periodFlow?.active && job.mode === "period" && await continuePeriodOneClick(job, periodFlow)) return;
+        const results = displayCompletedAnalysis(job);
         await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList(), loadTodayEarlySignals()]);
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
         finishAnalysisControls();
       } catch (error) {
+        if (periodFlow?.active && error.periodCollectionStartFailed) {
+          const available = Number(periodFlow.lastAvailable || 0); const total = Number(periodFlow.lastTotal || 0);
+          $("periodAnalysisMeta").textContent = `기간 데이터 수집 시작 실패 · 현재 coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(periodFlow.initialCoveragePct || 0)}%) · pending ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 잠시 후 재시도 가능`;
+          showApiErrors({ "기간 데이터 수집 시작 실패": error.message });
+          $("analysisProgressText").textContent = "기간 데이터 수집 시작 실패 · 기존 기간 snapshot과 cache는 유지됩니다.";
+          periodFlow.active = false; activePeriodOneClick = null; finishAnalysisControls();
+          return;
+        }
         if (periodFlow?.active && periodFlow.phase === "historical-collection") {
           showApiErrors({ "기간 데이터 일부 수집 실패": `${error.message} · 기존 cache로 부분 결과를 계산합니다.` });
           try {

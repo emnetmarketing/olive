@@ -6,6 +6,7 @@ const cache = require("../netlify/functions/trend-series-cache");
 const quota = require("../netlify/functions/trend-api-quota");
 const snapshots = require("../netlify/functions/signal-snapshot-cache");
 const { toBuffer } = require("../netlify/functions/unified-excel");
+const startHelpers = require("../netlify/functions/trend-analysis-start")._test;
 
 test("period exact-window cache hits and misses remain distinguishable", () => {
   const entries = new Map();
@@ -132,6 +133,55 @@ test("one-click period result remains the workbook period source automatically",
   assert.match(html, /periodJobId: matchingPeriodJobId/);
   const workbook = fs.readFileSync("netlify/functions/unified-excel.js", "utf8");
   assert.match(workbook, /07_선택기간분석/);
+});
+
+test("a completed zero-coverage fast job cannot match a historical collection request", () => {
+  const request = { mode: "period", fastPath: false, historicalCollection: true, startDate: "2026-08-30", endDate: "2026-09-01", queryStartDate: "2026-08-02" };
+  const staleFast = { ...request, jobId: "fast-zero", state: "completed", fastPath: true, historicalCollection: false };
+  assert.equal(startHelpers.matchesRequestedJob(staleFast, request), false);
+});
+
+test("only the same historical job type and exact required window can dedupe", () => {
+  const request = { mode: "period", fastPath: false, historicalCollection: true, startDate: "2026-08-30", endDate: "2026-09-01", queryStartDate: "2026-08-02" };
+  assert.equal(startHelpers.matchesRequestedJob({ ...request, jobId: "historical-running", state: "running" }, request), true);
+  assert.equal(startHelpers.matchesRequestedJob({ ...request, queryStartDate: "2026-08-03" }, request), false);
+  assert.equal(startHelpers.matchesRequestedJob({ ...request, endDate: "2026-09-02" }, request), false);
+});
+
+test("server rejects an incompatible existing job as a retryable conflict", () => {
+  const source = fs.readFileSync("netlify/functions/trend-analysis-start.js", "utf8");
+  assert.match(source, /if \(historicalCollection && !matchesRequestedJob/);
+  assert.match(source, /INCOMPATIBLE_ACTIVE_JOB/);
+  assert.match(source, /retryable: true/);
+  assert.match(source, /return json\(409/);
+});
+
+test("historical start validates returned type dates and required window", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /payload\.historicalCollection === true/);
+  assert.match(html, /payload\.fastPath === false/);
+  assert.match(html, /payload\.startDate === flow\.startDate/);
+  assert.match(html, /payload\.queryStartDate === flow\.requiredWindowStart/);
+});
+
+test("historical stale-lock retry is short and bounded", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /HISTORICAL_START_MAX_ATTEMPTS = 3/);
+  assert.match(html, /HISTORICAL_START_RETRY_MS = 1500/);
+  assert.match(html, /attempt <= attempts/);
+});
+
+test("retry exhaustion reports collection start failure rather than period completion", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  assert.match(html, /error\.periodCollectionStartFailed = collecting/);
+  assert.match(html, /기간 데이터 수집 시작 실패 · 현재 coverage/);
+  assert.match(html, /잠시 후 재시도 가능/);
+});
+
+test("initial zero-coverage result is not rendered as final before collection chaining", () => {
+  const html = fs.readFileSync("index.html", "utf8");
+  const poll = html.slice(html.indexOf("async function pollAnalysis"), html.indexOf("async function loadCurrentAnalysis"));
+  assert.ok(poll.indexOf("continuePeriodOneClick(job, periodFlow)") < poll.indexOf("displayCompletedAnalysis(job)"));
 });
 
 test("historical endpoint shares the slow core and atomic analysis lock", () => {
