@@ -1,4 +1,5 @@
-const { connect, acquireJob, writeJob, readJob } = require("./trend-analysis-cache");
+const { connect, acquireJob, writeJob, readJob, readCurrentJob } = require("./trend-analysis-cache");
+const { connect: connectQuota, reserveUncertainHistoricalUsage } = require("./trend-api-quota");
 const { connect: connectSnapshot, readLatest: readLatestSnapshot } = require("./signal-snapshot-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
@@ -36,7 +37,7 @@ function matchesRequestedJob(job, request) {
 }
 
 async function handle(event, { fastPath = true } = {}) {
-  connect(event); connectSnapshot(event);
+  connect(event); connectSnapshot(event); connectQuota(event);
   if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
   let createdJob;
   try {
@@ -70,6 +71,16 @@ async function handle(event, { fastPath = true } = {}) {
     const triggerSource = String(input.triggerSource || (fastPath ? "user-fast-path" : "admin-manual"));
     const schedulerExecutionId = input.schedulerExecutionId ? String(input.schedulerExecutionId) : null;
     const historicalCollection = mode === "period" && !fastPath;
+    const staleJob = historicalCollection ? await readCurrentJob({ includeStale: true }).catch(() => null) : null;
+    if (staleJob?.stale && staleJob.historicalCollection && !staleJob.uncertainUsageReserved
+      && ["calculation-matching", "calculation-checkpoint", "interrupted"].includes(staleJob.currentStage)) {
+      const riskCalls = Math.min(1000, Math.max(0, Number(staleJob.historicalRequiredCalls || 1000)));
+      if (riskCalls) {
+        await reserveUncertainHistoricalUsage(riskCalls);
+        await writeJob(staleJob.jobId, { ...staleJob, uncertainUsageReserved: true,
+          uncertainUsageReserveCalls: riskCalls, uncertainUsageReservedAt: new Date().toISOString() });
+      }
+    }
     const requestedJob = { mode, startDate, endDate, queryStartDate: isoDate(queryStart), fastPath, historicalCollection };
     const acquired = await acquireJob({ ...requestedJob, surgeThreshold, matchThreshold,
       triggerSource, schedulerExecutionId,

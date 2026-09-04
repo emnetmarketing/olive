@@ -27,10 +27,11 @@ function historicalRemaining(usage, now = new Date()) {
   const defaultSafetyReserve = Math.max(0, limit.monthly - limit.operatingMonthly - formerHistoricalEnvelope);
   const safetyReserve = Math.max(0, Number(process.env.NAVER_SEARCH_TREND_SAFETY_RESERVE || defaultSafetyReserve));
   const officialRemaining = Math.max(0, limit.monthly - monthlyUsed);
-  const remaining = Math.max(0, officialRemaining - projectedAutomaticUsage - safetyReserve);
+  const uncertainUsageReserve = Math.max(0, Number(usage.monthly.searchTrendHistoricalUncertainReserve || 0));
+  const remaining = Math.max(0, officialRemaining - projectedAutomaticUsage - safetyReserve - uncertainUsageReserve);
   return { budgetMode: "dynamic-monthly", officialMonthlyLimit: limit.monthly, officialRemaining,
     automaticOperatingTarget: limit.operatingMonthly, automaticUsed, projectedAutomaticUsage,
-    safetyReserve, historicalUsed, remaining, daysRemaining: daysRemainingInMonth(now) };
+    safetyReserve, uncertainUsageReserve, historicalUsed, remaining, daysRemaining: daysRemainingInMonth(now) };
 }
 function daysRemainingInMonth(now = new Date()) { const period = seoulParts(now); const last = new Date(Date.UTC(Number(period.month.slice(0, 4)), Number(period.month.slice(5, 7)), 0)).getUTCDate(); return Math.max(1, last - Number(period.date.slice(8, 10)) + 1); }
 function dynamicDailyLimit(usage, type, now = new Date(), options = {}) {
@@ -89,5 +90,11 @@ async function recordUsageBatch(metricsByType) {
   await store().setJSON(USAGE_KEY, usage); return usage;
 }
 async function recordUsage(type, calls, options = {}) { return recordUsageBatch({ [type]: { calls, ...options } }); }
+async function reserveUncertainHistoricalUsage(calls) {
+  const usage = await readUsage();
+  usage.monthly.searchTrendHistoricalUncertainReserve = Number(usage.monthly.searchTrendHistoricalUncertainReserve || 0)
+    + Math.max(0, Number(calls || 0));
+  usage.updatedAt = new Date().toISOString(); await store().setJSON(USAGE_KEY, usage); return usage;
+}
 module.exports = { connect, readUsage, statusFor, recordUsage, recordUsageBatch, applyUsage, limits, seoulParts,
-  dynamicDailyLimit, daysRemainingInMonth, historicalRemaining, USAGE_KEY };
+  dynamicDailyLimit, daysRemainingInMonth, historicalRemaining, reserveUncertainHistoricalUsage, USAGE_KEY };

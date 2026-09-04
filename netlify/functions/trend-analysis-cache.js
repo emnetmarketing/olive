@@ -46,14 +46,22 @@ async function createJob(input) {
   await writeJob(job.jobId, job);
   return job;
 }
-async function readCurrentJob({ markStale = false } = {}) {
+async function readCurrentJob({ markStale = false, includeStale = false } = {}) {
   const pointer = await store().get(CURRENT_JOB_KEY, { type: "json" });
   if (!pointer?.jobId) return null;
   const job = await readJob(pointer.jobId);
   if (!job || job.state !== "running") return null;
   const age = Date.now() - Date.parse(job.updatedAt || job.createdAt || 0);
   if (Number.isFinite(age) && age <= STALE_JOB_MS) return job;
-  if (markStale) await writeJob(job.jobId, { ...job, state: "failed", message: "Stale analysis job expired.", failedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), errors: ["Analysis job stopped updating and was released."] });
+  if (includeStale && !markStale) return { ...job, stale: true, resumable: Boolean(job.historicalCollection),
+    currentStage: "interrupted", message: "분석 실행이 중단됨 · 저장된 checkpoint/cache에서 재개 가능",
+    lastCursor: Number(job.calculationCursor || job.processedCount || 0),
+    remainingCount: Math.max(0, Number(job.totalCount || 0) - Number(job.calculationCursor || job.processedCount || 0)) };
+  if (markStale) await writeJob(job.jobId, { ...job, state: job.historicalCollection ? "interrupted" : "failed",
+    resumable: Boolean(job.historicalCollection), currentStage: job.historicalCollection ? "interrupted" : job.currentStage,
+    message: job.historicalCollection ? "기간 분석 중단 · 저장된 checkpoint/cache에서 재개 가능" : "Stale analysis job expired.",
+    lastCursor: Number(job.calculationCursor || job.processedCount || 0), failedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    errors: ["Analysis job stopped updating and was released."] });
   return null;
 }
 async function acquireJob(input) {

@@ -14,6 +14,7 @@ const earlySignals = require("./today-early-signal-cache");
 const { calculateMarketConfidence } = require("./market-confidence");
 const { buildPeriodMarketEvidence, calculatePeriodMarketConfidence } = require("./period-market-evidence");
 const schedulerExecutions = require("./trend-scheduler-execution-cache");
+const historicalContinuation = require("./historical-continuation");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -488,13 +489,36 @@ exports.handler = async (event) => {
   let historicalSafeAvailableCalls = 0;
   let historicalSafetyLimited = false;
   let quotaUsageRecorded = false;
+  const recordedMetrics = {
+    searchTrend: { calls: 0, retries: 0, keywords: 0, http200: 0, http429: 0, httpOther: 0 },
+    shoppingInsight: { calls: 0, retries: 0, keywords: 0, http200: 0, http429: 0, httpOther: 0 }
+  };
+  const recordMetricDelta = async (type) => {
+    const current = apiMetrics[type]; const recorded = recordedMetrics[type];
+    const delta = {};
+    for (const key of ["calls", "retries", "keywords", "http200", "http429", "httpOther"])
+      delta[key] = Math.max(0, Number(current[key] || 0) - Number(recorded[key] || 0));
+    if (!delta.calls && !delta.retries && !delta.keywords && !delta.http200 && !delta.http429 && !delta.httpOther) return;
+    if (type === "searchTrend" && job.historicalCollection) delta.historicalCalls = delta.calls;
+    delta.exhausted = Boolean(current.exhausted);
+    await recordQuotaUsageBatch({ [type]: delta });
+    for (const key of ["calls", "retries", "keywords", "http200", "http429", "httpOther"])
+      recorded[key] = Number(current[key] || 0);
+  };
   const recordObservedUsage = async () => {
     if (quotaUsageRecorded) return; quotaUsageRecorded = true;
-    if (job.historicalCollection) apiMetrics.searchTrend.historicalCalls = apiMetrics.searchTrend.calls;
-    // Both API families are persisted in one Blob write. Netlify Blob reads are
-    // eventually consistent, so separate read-modify-write calls could otherwise
-    // overwrite the first family's counters with the second family's stale read.
-    await recordQuotaUsageBatch(apiMetrics).catch(() => null);
+    await recordMetricDelta("searchTrend").catch(() => null);
+    await recordMetricDelta("shoppingInsight").catch(() => null);
+  };
+  const invokeContinuation = async (patch = {}) => {
+    const continuationCount = Number(job.continuationCount || 0) + 1;
+    if (continuationCount > historicalContinuation.MAX_CONTINUATIONS) throw new Error("Historical continuation 최대 횟수를 초과했습니다.");
+    await persist({ ...patch, continuationCount, continuationRequestedAt: new Date().toISOString(), resumable: true });
+    const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
+    const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId })
+    });
+    if (!response.ok && response.status !== 202) throw new Error(`Historical continuation 시작 실패: HTTP ${response.status}`);
   };
   try {
     const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage, loadedEarlyCache] = await Promise.all([
@@ -632,6 +656,7 @@ exports.handler = async (event) => {
           startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date",
           keywordGroups: batch.map((item) => ({ groupName: item.keyword, keywords: [item.keyword] }))
         }, metrics: apiMetrics.searchTrend })));
+      if (job.historicalCollection) await recordMetricDelta("searchTrend").catch(() => null);
       const fetchedAt = new Date().toISOString();
       for (let responseIndex = 0; responseIndex < settled.length; responseIndex += 1) {
         if (settled[responseIndex].status === "rejected") {
@@ -654,6 +679,7 @@ exports.handler = async (event) => {
       }
       processed = trendMap.size;
       if (dirtyTrendKeys.size) { await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys); dirtyTrendKeys.clear(); }
+      if (job.historicalCollection) await recordMetricDelta("searchTrend").catch(() => null);
       job.currentStage = "search-trend"; job.processedCount = processed; job.totalCount = trendCandidates.length;
       await persist({ message: `검색어트렌드 조회 중 · ${processed.toLocaleString("ko-KR")} / ${trendCandidates.length.toLocaleString("ko-KR")}`, progress: 5 + Math.round(processed / trendCandidates.length * 35) });
       if (quotaStopped) {
@@ -692,20 +718,64 @@ exports.handler = async (event) => {
         : trace.trendWaitReason === "provider_quota_wait" ? "NAVER API 429/공식 quota 제한 대기"
           : trace.trendWaitReason === "internal_budget_wait" ? "내부 일일 Trend budget 소진 대기" : "Fast Path Trend 캐시 대기";
     }
+    if (job.historicalCollection && job.continuationPhase !== "calculation") {
+      await recordObservedUsage();
+      try {
+        await invokeContinuation({ continuationPhase: "calculation", currentStage: "calculation-checkpoint",
+          calculationCursor: 0, processedCount: 0, totalCount: eligible.length,
+          selectedStartDate: job.startDate, selectedEndDate: job.endDate,
+          requiredWindow: `${job.queryStartDate}:${job.endDate}`, historicalRequiredCalls,
+          historicalSafeAvailableCalls, historicalSafetyLimited,
+          message: "기간 데이터 수집 완료 · 계산 continuation 준비", progress: 74 });
+      } catch (error) {
+        await persist(historicalContinuation.resumablePatch(job, error));
+      }
+      return;
+    }
     await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
     job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
     const productIndex = buildProductIndex(productCache.items);
-    const rows = []; const calculated = []; const matchedDiagnostics = []; const boundaryRelated = [];
-    let calculationProcessed = 0;
-    for (const candidate of eligible) {
+    const checkpointKey = historicalContinuation.checkpointKey(job);
+    const loadedCheckpoint = job.historicalCollection
+      ? await analysisStore().get(checkpointKey, { type: "json" }).catch(() => null) : null;
+    const checkpoint = historicalContinuation.isCompatible(loadedCheckpoint, job, eligible) ? loadedCheckpoint : null;
+    if (checkpoint?.funnel) for (const [key, value] of Object.entries(checkpoint.funnel)) funnel[key] = value;
+    if (checkpoint?.analysisTrace) for (const trace of checkpoint.analysisTrace) analysisTrace.set(trace.normalizedKeyword, trace);
+    const rows = checkpoint?.rows || []; const calculated = checkpoint?.calculated || [];
+    const matchedDiagnostics = checkpoint?.matchedDiagnostics || []; const boundaryRelated = checkpoint?.boundaryRelated || [];
+    let calculationProcessed = Number(checkpoint?.calculationCursor || 0);
+    const invocationStartCursor = calculationProcessed;
+    const persistCalculationCheckpoint = async () => {
+      const value = { version: historicalContinuation.CHECKPOINT_VERSION, jobId: job.jobId,
+        selectedStartDate: job.startDate, selectedEndDate: job.endDate, queryStartDate: job.queryStartDate,
+        requiredWindow: `${job.queryStartDate}:${job.endDate}`, calculationCursor: calculationProcessed,
+        eligibleKeywords: eligible.map((item) => item.keyword),
+        processedCount: calculationProcessed, totalCount: eligible.length, rows, calculated, matchedDiagnostics,
+        boundaryRelated, funnel, analysisTrace: [...analysisTrace.values()], updatedAt: new Date().toISOString() };
+      await analysisStore().setJSON(checkpointKey, value);
+      await persist({ currentStage: "calculation-matching", calculationCursor: calculationProcessed,
+        processedCount: calculationProcessed, totalCount: eligible.length, checkpointKey,
+        progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14) });
+    };
+    for (const candidate of eligible.slice(calculationProcessed)) {
+      if (job.historicalCollection && calculationProcessed > invocationStartCursor
+        && (calculationProcessed % 500 === 0 || historicalContinuation.shouldContinue({ startedAt: started,
+          cursor: calculationProcessed, invocationStartCursor, totalCount: eligible.length }))) {
+        await persistCalculationCheckpoint();
+        if (historicalContinuation.shouldContinue({ startedAt: started, cursor: calculationProcessed,
+          invocationStartCursor, totalCount: eligible.length })) {
+          try {
+            await invokeContinuation({ continuationPhase: "calculation", message: "기간 계산 checkpoint 저장 · 다음 구간 자동 계속" });
+          } catch (error) {
+            await persist(historicalContinuation.resumablePatch({ ...job, calculationCursor: calculationProcessed }, error));
+          }
+          return;
+        }
+      }
       calculationProcessed += 1;
       if (calculationProcessed % 500 === 0) {
-        await persist({
-          currentStage: "calculation-matching",
-          processedCount: calculationProcessed,
-          totalCount: eligible.length,
-          progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14),
-        });
+        if (!job.historicalCollection) await persist({ currentStage: "calculation-matching", processedCount: calculationProcessed,
+          totalCount: eligible.length, progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14) });
       }
       const trendData = trendMap.get(candidate.keyword);
       const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));
@@ -817,6 +887,7 @@ exports.handler = async (event) => {
           : relativeSurgePassed ? "relative" : "absolute",
         resultType: classification.resultType, relatedSignal: classification.relatedSignal || null });
     }
+    if (job.historicalCollection) await persistCalculationCheckpoint();
     for (const candidate of ratioOnlyCandidates) {
       const trendData = trendMap.get(candidate.keyword);
       const trace = analysisTrace.get(normalizeKeyword(candidate.keyword));

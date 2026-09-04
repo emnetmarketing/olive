@@ -8,8 +8,10 @@ exports.handler = async (event) => {
     // A status read must never mutate or release a job owned by another client.
     // Stale cleanup is intentionally limited to acquireJob(), immediately before
     // a caller attempts to start a new analysis.
-    const job = await readCurrentJob();
-    return json(200, job ? { running: true, job } : { running: false, job: null });
+    const activeJob = await readCurrentJob();
+    const job = activeJob || await readCurrentJob({ includeStale: true });
+    return json(200, job ? { running: !job.stale, stale: Boolean(job.stale), resumable: Boolean(job.resumable), job }
+      : { running: false, stale: false, job: null });
   } catch (error) {
     return json(500, { error: error.message || "Failed to read the current analysis job." });
   }

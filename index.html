@@ -2629,7 +2629,7 @@
         if (!response.ok) throw new Error(job.error || `분석 상태 HTTP ${response.status}`);
         if (job.mode === "period") state.currentPeriodAnalysisJob = job;
         else state.currentAnalysisJob = job;
-        const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-matching": "급등 계산 및 상품 매칭", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
+        const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-checkpoint": "기간 계산 continuation 준비", "calculation-matching": "급등 계산 및 상품 매칭", "continuation_failed": "기간 분석 continuation 실패 · 재개 가능", "interrupted": "기간 분석 중단 · 재개 가능", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
         const periodText = job.mode === "instant" ? "즉시 분석" : periodFlow?.phase === "historical-collection"
           ? `NAVER 기간 데이터 수집 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`
           : `기간 분석 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`;
@@ -2639,6 +2639,12 @@
         if (job.state === "running") {
           analysisPollTimer = setTimeout(() => pollAnalysis(jobId, periodFlow), 3000);
           return;
+        }
+        if (["continuation_failed", "interrupted"].includes(job.state)) {
+          $("periodAnalysisMeta").textContent = `기간 분석 continuation 실패 · ${Number(job.lastCursor || job.processedCount || 0).toLocaleString("ko-KR")} / ${Number(job.totalCount || 0).toLocaleString("ko-KR")} 처리 · 저장된 checkpoint/cache에서 재개 가능`;
+          $("analysisProgressText").textContent = "기간 분석이 중단되었습니다. 이미 수집·계산한 데이터는 보존되었습니다.";
+          if (periodFlow) { periodFlow.active = false; activePeriodOneClick = null; }
+          finishAnalysisControls(); return;
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
         if (periodFlow?.active && job.mode === "period" && await continuePeriodOneClick(job, periodFlow)) return;
@@ -2677,7 +2683,13 @@
       try {
         const response = await fetch("/.netlify/functions/trend-analysis-current", { cache: "no-store" });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.running || !payload.job?.jobId) return null;
+        if (!response.ok || !payload.job?.jobId) return null;
+        if (payload.stale) {
+          $("analysisProgressPanel").classList.add("visible");
+          $("analysisProgressText").textContent = `기간 분석 중단 · ${Number(payload.job.lastCursor || 0).toLocaleString("ko-KR")} / ${Number(payload.job.totalCount || 0).toLocaleString("ko-KR")} 처리 · 저장된 checkpoint/cache에서 재개 가능`;
+          return payload.job;
+        }
+        if (!payload.running) return null;
         $("analysisProgressPanel").classList.add("visible");
         $("runBtn").disabled = true; $("instantRunBtn").disabled = true;
         if (activeAnalysisJobId !== payload.job.jobId) pollAnalysis(payload.job.jobId);
