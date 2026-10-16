@@ -28,6 +28,30 @@ test("every existing endpoint has one native entry and implementation helpers ar
   }
 });
 
+test("native entry package tracing explicitly includes the Blob SDK required by bundled CommonJS helpers", () => {
+  // This is a source-level regression guard, not a substitute for executing
+  // the final ZIP in isolation: NFT cannot infer esbuild's __require helper.
+  for (const name of handlers) {
+    const source = fs.readFileSync(path.join(entriesDirectory, `${name}.mjs`), "utf8");
+    assert.match(source, /^import "@netlify\/blobs";/m, `${name} must expose the SDK to the native ESM tracer`);
+    assert.equal((source.match(/^import "@netlify\/blobs";/gm) || []).length, 1);
+    assert.match(source, new RegExp(`import legacy from "\\.\\./functions/${name}\\.js";`));
+  }
+});
+
+test("only the three native entries that need Excel explicitly retain its transitive package graph", () => {
+  const expected = ["download-history", "runtime-storage-verification", "runtime-storage-verification-background"];
+  const actual = handlers.filter(name => /^import "exceljs";/m.test(
+    fs.readFileSync(path.join(entriesDirectory, `${name}.mjs`), "utf8")));
+  assert.deepEqual(actual, expected);
+  for (const name of actual) {
+    const source = fs.readFileSync(path.join(entriesDirectory, `${name}.mjs`), "utf8");
+    assert.equal((source.match(/^import "exceljs";/gm) || []).length, 1);
+    assert.doesNotMatch(source, /new Excel|\.xlsx\.|fetch\s*\(/,
+      "The native entry must declare packaging dependencies, not add business logic or network calls.");
+  }
+});
+
 test("all official native adapters preserve each legacy route's JSON, query, auth headers and response without invoking business logic", async () => {
   const savedFetch = global.fetch;
   global.fetch = async () => { throw new Error("A native adapter test must not make network calls."); };

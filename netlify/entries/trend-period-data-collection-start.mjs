@@ -1,3 +1,5 @@
+// Keep CommonJS SDK dependencies visible to Netlify's native ESM package tracer.
+import "@netlify/blobs";
 import { withLambda } from "@netlify/aws-lambda-compat";
 import legacy from "../functions/trend-period-data-collection-start.js";
 
