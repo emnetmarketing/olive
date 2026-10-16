@@ -4,7 +4,8 @@ exports.handler = async (event) => {
   connect(event);
   try {
     const [cache, status] = await Promise.all([readCache(), readStatus()]);
-    return json(200, { cacheExists: Boolean(cache?.refreshedAt), cache: cache ? { refreshedAt: cache.refreshedAt, candidateCount: cache.items?.length || 0,
+    return json(200, { cacheExists: Boolean(cache?.refreshedAt), cache: cache ? { jobId: cache.jobId || null, refreshedAt: cache.refreshedAt, candidateCount: cache.items?.length || 0,
+      sourceSuccessTimes: cache.sourceSuccessTimes || null, sourceObservationPolicy: cache.sourceObservationPolicy || null,
       sourceCounts: cache.sourceCounts, monthlyVolumeCounts: cache.monthlyVolumeCounts, ratioOnlyCandidateCount: cache.ratioOnlyCandidateCount,
       productBackfill: cache.productBackfill, youtube: cache.youtube } : null, status: status || { state: "idle", message: "신규 시장 후보 캐시가 없습니다." } });
   } catch (error) { return json(500, { error: `신규 시장 후보 상태 조회 실패: ${error.message}` }); }

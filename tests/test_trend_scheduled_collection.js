@@ -25,8 +25,10 @@ test("scheduled entry dispatches the same slow collection core and records state
 });
 
 test("recovery skips without external collection when today already completed", async () => {
-  const now = new Date(); const mock = mocks({ collection: { collectedAt: now.toISOString(), latestDataDate: "2026-09-02" } });
-  assert.equal(collectedToday({ collectedAt: now.toISOString() }, now), true);
+  const now = new Date(); const latestDataDate = require("../netlify/functions/trend-series-cache").targetDataDate("9999-12-31", now);
+  const mock = mocks({ collection: { collectedAt: now.toISOString(), latestDataDate } });
+  assert.equal(collectedToday({ collectedAt: now.toISOString(), latestDataDate }, now), true);
+  assert.equal(collectedToday({ collectedAt: now.toISOString() }, now), false);
   const result = await run({ body: "{}" }, "scheduled-recovery", mock.deps);
   assert.equal(result.statusCode, 200); assert.equal(mock.calls, 0); assert.equal(mock.updates.at(-1).stage, "already-collected");
 });

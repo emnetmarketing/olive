@@ -29,6 +29,7 @@ function buildSnapshot(job) {
   return { version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
     createdAt: job.createdAt,
     queryStartDate: job.queryStartDate, generatedAt: job.completedAt, latestDataDate: job.latestDataDate,
+    sourceFreshness: job.sourceFreshness || null, publishedAt: job.publishedAt || null,
     trendCoveragePct: job.trendCoveragePct, partialAnalysis: Boolean(job.partialAnalysis), surgeThreshold: job.surgeThreshold,
     matchThreshold: job.matchThreshold, executionPath: job.fastPath ? "fast" : "slow", items: (job.results || []).map(compactItem) };
 }
@@ -60,6 +61,7 @@ async function writeSnapshot(job, options = {}) {
   // collection clock. Fast Path analysis must never masquerade as collection.
   if (shouldAdvanceCollection(job)) await writePointer(LATEST_COLLECTION_KEY, {
     ...pointer, collectedAt: job.trendCollectedAt || job.completedAt, latestDataDate: job.latestDataDate,
+    sourceFreshness: job.sourceFreshness || null,
     freshFetchCount: Number(job.freshFetchCount || 0), searchTrendApiCallCount: Number(job.searchTrendApiCallCount || 0),
     triggerSource: job.triggerSource || "admin-manual"
   });

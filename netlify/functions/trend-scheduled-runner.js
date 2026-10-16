@@ -9,7 +9,10 @@ function seoulDate(value = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 function collectedToday(collection, now = new Date()) {
-  return Boolean(collection?.collectedAt) && seoulDate(new Date(collection.collectedAt)) === seoulDate(now);
+  const target = new Date(`${seoulDate(now)}T00:00:00Z`); target.setUTCDate(target.getUTCDate() - 1);
+  return Boolean(collection?.collectedAt) && seoulDate(new Date(collection.collectedAt)) === seoulDate(now)
+    && Boolean(collection.latestDataDate) && collection.latestDataDate >= target.toISOString().slice(0, 10)
+    && Number(collection.sourceFreshness?.refreshPendingCount || 0) === 0;
 }
 async function run(event, source, overrides = {}) {
   const deps = { handle, readLatestCollection, readCurrentJob, begin: executions.begin, update: executions.update, ...overrides };

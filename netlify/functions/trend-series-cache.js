@@ -19,6 +19,54 @@ function seoulDate(now = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function shiftDate(value, days) {
+  const date = new Date(`${value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+function targetDataDate(endDate, now = new Date()) { return [endDate, shiftDate(seoulDate(now), -1)].sort()[0]; }
+
+// Window compatibility and source freshness are different claims. In particular,
+// a response fetched this morning can still end two days ago. Keep exact-window
+// reads unchanged (including Fast Path/period); only the slow collector uses this
+// bounded recheck decision. Missing days are not invented or zero-filled.
+function assessSearchFreshness(record, startDate, endDate, now = new Date()) {
+  const target = targetDataDate(endDate, now);
+  if (!record || !Array.isArray(record.rawRatioSeries)) return { state: "missing", targetDataDate: target, needsRefresh: true };
+  if (record.requestStartDate > startDate || record.requestEndDate < endDate) return { state: "window-unavailable", targetDataDate: target, needsRefresh: true };
+  const dates = record.rawRatioSeries.map(p => p.period).filter(Boolean).sort();
+  const actual = dates.at(-1) || null;
+  const fetched = Date.parse(record.fetchedAt || "");
+  const age = Number.isFinite(fetched) ? Math.max(0, now.getTime() - fetched) : Infinity;
+  const empty = dates.length === 0;
+  const fetchedDate = Number.isFinite(fetched) ? seoulDate(new Date(fetched)) : null;
+  const historical = endDate <= shiftDate(seoulDate(now), -3);
+  const settledHistorical = historical && fetchedDate && fetchedDate >= shiftDate(endDate, 2);
+  if (actual && actual >= target) return { state: historical ? "historical" : "target-current", targetDataDate: target, actualDataDate: actual, needsRefresh: false, empty: false };
+  if (settledHistorical) return { state: empty ? "empty-response" : "sparse-historical", targetDataDate: target, actualDataDate: actual, needsRefresh: false, empty };
+  // Sparse/empty series remain legitimate responses. Do not repeatedly query
+  // them in one run or pretend absence means zero demand. A recent incomplete
+  // window is rechecked after a bounded delay, not cached as complete forever.
+  const recheckMs = (empty ? 24 : 2) * 60 * 60 * 1000;
+  return { state: empty ? "empty-response" : "recent-provider-delay", targetDataDate: target, actualDataDate: actual,
+    needsRefresh: age >= recheckMs, empty, nextCheckAt: Number.isFinite(fetched) ? new Date(fetched + recheckMs).toISOString() : null };
+}
+
+function summarizeDateCoverage(seriesByKeyword, endDate, totalCount = seriesByKeyword.size, now = new Date()) {
+  const target = targetDataDate(endDate, now);
+  let targetCount = 0, validCount = 0, emptyCount = 0; const dates = [];
+  for (const series of seriesByKeyword.values()) {
+    const periods = (series || []).map(p => p.period).filter(Boolean).sort();
+    if (!periods.length) { emptyCount += 1; continue; }
+    validCount += 1; dates.push(periods[0], periods.at(-1));
+    if (periods.some(date => date === target)) targetCount += 1;
+  }
+  dates.sort();
+  return { targetDataDate: target, actualStartDate: dates[0] || null, actualDataDate: dates.at(-1) || null,
+    cacheAvailableCount: seriesByKeyword.size, totalCount, validSeriesCount: validCount, emptySeriesCount: emptyCount,
+    targetDataCandidateCount: targetCount, targetDataCoveragePct: totalCount ? Math.round(targetCount / totalCount * 10000) / 100 : 0,
+    note: "목표일 관측값이 있는 후보 비율입니다. 희소·빈 응답은 미관측이며 수집 실패와 동일하지 않습니다." };
+}
+
 async function readCache() {
   const shards = await Promise.all(Array.from({ length: SHARD_COUNT }, (_, index) => store().get(shardKey(index), { type: "json" }).catch(() => null)));
   const entries = new Map();
@@ -77,4 +125,4 @@ async function writeDirty(cache, dirtyKeys) {
 }
 
 module.exports = { connect, readCache, lookup, upsert, writeDirty, normalizedKeyword, validSeriesRecord, shardFor,
-  windowKey, CACHE_VERSION, NORMALIZATION_VERSION, SHARD_COUNT, MANIFEST_KEY };
+  windowKey, CACHE_VERSION, NORMALIZATION_VERSION, SHARD_COUNT, MANIFEST_KEY, assessSearchFreshness, targetDataDate, summarizeDateCoverage };

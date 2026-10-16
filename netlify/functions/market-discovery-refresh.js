@@ -4,7 +4,9 @@ exports.handler = async (event) => {
   connect(event); if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
   let status;
   try {
-    const acquired = await acquireJob(); status = acquired.status;
+    let input; try { input = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "올바른 JSON 요청이 필요합니다." }); }
+    if (input.sourceMode && !["collect", "cache-only"].includes(input.sourceMode)) return json(400, { error: "지원하지 않는 sourceMode입니다." });
+    const acquired = await acquireJob(input); status = acquired.status;
     if (!acquired.acquired) return json(409, { error: "신규 시장 후보 수집이 진행 중입니다.", status });
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
     const response = await fetch(`${baseUrl}/.netlify/functions/market-discovery-refresh-background`, {

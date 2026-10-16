@@ -1,5 +1,6 @@
 const { getCompatibleStore } = require("./blob-store-compat");
 const { digest } = require("./period-publication");
+const { assertInstantWorker, owns: ownsInstantWorker, active: activeInstantWorker } = require("./instant-worker");
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
 const withoutPrevious = pointer => { const { previous, ...value } = pointer; return value; };
@@ -55,6 +56,8 @@ async function patchInstantPublication(jobId, patch, options = {}) {
     const entry = await store.getWithMetadata(key, { type: "json" }); const current = entry?.data;
     if (!current || current.mode !== "instant") throw failure("INVALID_INSTANT_PUBLICATION", "Saved instant calculation is unavailable.");
     if (current.state === "completed") return { job: current, modified: false };
+    if (activeInstantWorker(current.instantWorker, Date.now()) && !ownsInstantWorker(current, options.lease, Date.now()))
+      throw failure("INSTANT_WORKER_LOST", "An active Instant worker owns this publication.");
     if (!["publishing", "publication_failed"].includes(current.state) || !Array.isArray(current.results))
       throw failure("INSTANT_WRITE_PROTECTED", "Only a saved publication may be retried.");
     const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
@@ -72,6 +75,9 @@ async function writeInstantJobGuarded(jobId, value, options = {}) {
     const entry = await store.getWithMetadata(key, { type: "json" }); const current = entry?.data;
     if (current && (current.mode !== "instant" || current.createdAt !== value.createdAt))
       throw failure("INSTANT_WRITE_PROTECTED", "Instant Job generation changed.");
+    if (current?.instantWorker && (activeInstantWorker(current.instantWorker, Date.now())
+      || !["failed", "interrupted"].includes(value.state)))
+      throw failure("INSTANT_WORKER_LOST", "Instant worker writes require their current ownership fence.");
     if (current && ["publishing", "publication_failed", "completed"].includes(current.state)) {
       if (digest(current) === digest(value)) return current;
       throw failure("INSTANT_WRITE_PROTECTED", "Saved instant calculation/publication cannot be overwritten by an earlier worker.");
@@ -93,6 +99,10 @@ async function publishInstant(job, options = {}) {
   let entry = await analysis.getWithMetadata(key, { type: "json" });
   if (!sameCalculation(entry?.data, job)) throw failure("INSTANT_CALCULATION_CHANGED", "Saved instant calculation differs from the publication input.");
   if (entry.data.state === "completed" && entry.data.publicationState === "published") return entry.data;
+  const checkWorker = async () => {
+    if (entry.data.instantWorker) await assertInstantWorker(options.lease, { store: analysis });
+  };
+  await checkWorker();
   const calculatedAt = job.calculatedAt || job.completedAt || new Date().toISOString();
   const prepared = { ...entry.data, state: "publishing", currentStage: "publishing", publicationState: "pending",
     calculatedAt, completedAt: calculatedAt, progress: 99, resumable: true, message: "계산 완료 · 결과 게시 중" };
@@ -100,16 +110,21 @@ async function publishInstant(job, options = {}) {
     throw failure("INSTANT_PUBLICATION_CONFLICT", "Instant calculation changed before publication.");
   try {
     const publicationOptions = { requiresCompleted: true, readJob, store: snapshots };
+    await checkWorker();
     await (options.writeSnapshot || snapshotCache.writeSnapshot)(prepared, publicationOptions);
     const completed = { ...prepared, state: "completed", currentStage: "completed", publicationState: "published",
       publishedAt: new Date().toISOString(), progress: 100, resumable: false, message: "분석 완료", errors: [] };
+    if (prepared.instantWorker) completed.instantWorker = { ...prepared.instantWorker, token: null, expiresAt: 0,
+      releasedAt: completed.publishedAt };
     const publishLast = completed.partialAnalysis ? options.writeLastPartial || analysisCache.writeLastPartial
       : options.writeLastSuccess || analysisCache.writeLastSuccess;
+    await checkWorker();
     await publishLast(completed, { requiresCompleted: true, store: analysis, readJob });
     const storedSnapshot = await snapshots.get(`snapshots/${job.jobId}`, { type: "json" });
     if (digest(storedSnapshot) !== digest(snapshotCache.buildSnapshot(prepared)))
       throw failure("INSTANT_SNAPSHOT_VERIFY_FAILED", "Instant snapshot does not match its saved calculation.");
     entry = await analysis.getWithMetadata(key, { type: "json" });
+    await checkWorker();
     if (!sameCalculation(entry?.data, prepared) || !["publishing", "publication_failed"].includes(entry.data.state))
       throw failure("INSTANT_PUBLICATION_CONFLICT", "Instant calculation changed during publication.");
     if (!(await analysis.setJSON(key, completed, { onlyIfMatch: entry.etag }))?.modified)
@@ -120,7 +135,8 @@ async function publishInstant(job, options = {}) {
     return confirmed;
   } catch (error) {
     const current = await analysis.getWithMetadata(key, { type: "json" }).catch(() => null);
-    if (sameCalculation(current?.data, prepared) && current.data.state !== "completed")
+    if (sameCalculation(current?.data, prepared) && current.data.state !== "completed"
+      && (!current.data.instantWorker || ownsInstantWorker(current.data, options.lease, Date.now())))
       await analysis.setJSON(key, { ...current.data, state: "publication_failed", currentStage: "publishing",
         publicationState: "pending", resumable: true, message: "자동 계산 보존 · 결과 게시 재시도 필요",
         publicationErrorCode: error.code || "INSTANT_PUBLICATION_FAILED", updatedAt: new Date().toISOString() }, { onlyIfMatch: current.etag }).catch(() => null);

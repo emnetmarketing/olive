@@ -190,6 +190,7 @@ test("publication-only retry after canonical receipt failure can claim a new lea
 function backgroundFixture({ chunkSize = 1, historical = false } = {}) {
   const sourceReads = { candidates: 0, products: 0, series: 0, early: 0 };
   const quotaWrites = [];
+  const quotaInvocations = new Map();
   const candidates = ["라카트윈립", "메디힐비타민씨세럼", "제로이드포밍클렌저"].map(keyword => ({
     keyword, category: "beauty", monthlyTotalSearches: 120000, sources: ["keywordstool"],
     firstSeenAt: "2026-09-01T00:00:00Z", priorityScore: 50, monthlyVolumeStatus: "available" }));
@@ -208,13 +209,20 @@ function backgroundFixture({ chunkSize = 1, historical = false } = {}) {
     "keyword-candidate-cache.js": { readCandidateCache: async () => { sourceReads.candidates++; return { candidates: clone(candidates) }; } },
     "market-discovery-cache.js": { readCache: async () => ({ items: [] }) },
     "search-ad-cache.js": { readCache: async () => { sourceReads.products++; return { items: clone(products) }; } },
-    "trend-series-cache.js": { connect() {}, normalizedKeyword: normalize, readCache: async () => { sourceReads.series++; return { entries: new Map(entries) }; },
+    "trend-series-cache.js": { connect() {}, normalizedKeyword: normalize,
+      assessSearchFreshness: require("../netlify/functions/trend-series-cache").assessSearchFreshness,
+      summarizeDateCoverage: require("../netlify/functions/trend-series-cache").summarizeDateCoverage,
+      readCache: async () => { sourceReads.series++; return { entries: new Map(entries) }; },
       lookup(map, keyword, source) { const record = map.get(normalize(keyword)); return source === "search" && record
         ? { state: "hit", record, series: record.rawRatioSeries } : { state: "miss", record: null }; },
       upsert: historical ? (map, input) => { const key = normalize(input.keyword); map.set(key, {
         requestStartDate: input.startDate, requestEndDate: input.endDate, rawRatioSeries: input.series, fetchedAt: input.fetchedAt }); return key; } : deniedWrite,
       writeDirty: historical ? async () => {} : deniedWrite },
-    "trend-api-quota.js": { connect() {}, readUsage: async () => ({}), recordUsageBatch: historical ? async delta => quotaWrites.push(clone(delta)) : deniedWrite,
+    "trend-api-quota.js": { connect() {}, readUsage: async () => ({}), recordUsageBatch: historical ? async (metrics, options) => {
+      const previous = quotaInvocations.get(options.invocationId) || {};
+      quotaWrites.push(require("../netlify/functions/trend-api-quota").cumulativeDelta(metrics, previous));
+      quotaInvocations.set(options.invocationId, { ...previous, ...clone(metrics) });
+    } : deniedWrite,
       statusFor: () => ({ exhausted: false, remaining: 1000, monthlyRemaining: 20000 }), historicalRemaining: () => ({ remaining: 1000 }) },
     "today-early-signal-cache.js": { readCache: async () => { sourceReads.early++; return { history: [], items: [] }; },
       writeCache: deniedWrite, confirmSignals: deniedWrite },

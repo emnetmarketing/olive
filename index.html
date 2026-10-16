@@ -1635,7 +1635,7 @@
           </div>
         </div>
         <div id="todayEarlySignalMeta" class="muted" style="margin-bottom:8px;">오늘 신호를 불러오는 중입니다.</div>
-        <p class="muted">오늘 수집되는 YouTube·Search Ad 최신 시장 신호를 기반으로 빠르게 포착한 키워드입니다. NAVER 당일 검색 급등 확정 결과는 아닙니다.</p>
+        <p class="muted">YouTube·Search Ad의 저장된 시장 신호로 포착한 키워드입니다. 신호 기준일과 소스 수집 성공 시각을 확인해주세요. 근거의 ‘오늘·최근’은 표시된 신호 기준일 기준이며, NAVER 당일 검색 급등 확정 결과는 아닙니다.</p>
         <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
           <thead><tr><th>키워드</th><th>신호 강도</th><th>점수</th><th>발견 시각</th><th>주요 탐지 근거</th><th>상품·브랜드</th><th>Source</th><th>전일 NAVER 상태</th></tr></thead>
           <tbody id="todayEarlySignalBody"><tr><td colspan="8" class="muted">오늘 신호를 불러오는 중입니다.</td></tr></tbody>
@@ -1645,7 +1645,7 @@
       <section class="panel" id="yesterdaySurgePanel">
         <h2>어제 급등 확인</h2>
         <div id="yesterdaySurgeMeta" class="muted">NAVER Trend 최신 확정 결과를 불러오는 중입니다.</div>
-        <p class="muted">NAVER Trend 최신 확정 데이터를 기준으로 이전 기간 대비 상승을 확인한 결과입니다.</p>
+        <p class="muted">NAVER Trend의 실제 확보 데이터로 이전 기간 대비 상승을 확인한 결과입니다. 캐시 확보율 100%라도 어제 데이터까지 확보되었다는 뜻은 아닙니다.</p>
         <h3 style="margin:18px 0 10px;">TOP 10 결과</h3>
         <div id="trendChart" class="trend-chart">
           <div class="trend-empty">분석 후 급등 키워드 증감 그래프가 표시됩니다.</div>
@@ -2704,7 +2704,16 @@
       diagnosticPanel.style.display = job.diagnostic ? "block" : "none";
       $("analysisDiagnosticText").textContent = job.diagnostic ? JSON.stringify(job.diagnostic, null, 2) : "";
       $("latestDataDate").textContent = `자동 최신 NAVER 기준일: ${job.latestDataDate || "확인 불가"}`;
-      $("yesterdaySurgeMeta").textContent = `NAVER 데이터 기준 ${job.latestDataDate || "확인 불가"} · 분석 범위 ${Number(job.trendAvailableCount || 0).toLocaleString("ko-KR")} / ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%)`;
+      $("yesterdaySurgeMeta").textContent = `NAVER 데이터 기준 ${job.latestDataDate || "확인 불가"} · 분석 범위 ${Number(job.trendAvailableCount || 0).toLocaleString("ko-KR")} / ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%)`
+        + ` · 계산 ${job.calculatedAt || job.completedAt ? formatHistoryDate(job.calculatedAt || job.completedAt) : "확인 불가"} · 게시 ${job.publishedAt ? formatHistoryDate(job.publishedAt) : "기록 없음"}`;
+      if (job.sourceFreshness) {
+        const freshness = job.sourceFreshness;
+        const countText = value => value == null ? "확인 불가" : Number(value).toLocaleString("ko-KR");
+        $("yesterdaySurgeMeta").textContent += ` · 목표일 ${freshness.targetDataDate || "확인 불가"} 관측 후보 ${countText(freshness.targetDataCandidateCount)} / ${countText(job.analyzedCandidateCount)}`
+          + ` (${freshness.targetDataCoveragePct == null ? "확인 불가" : `${Number(freshness.targetDataCoveragePct)}%`})`
+          + ` · 유효 시계열 ${countText(freshness.validSeriesCount)} · 빈 시계열 ${countText(freshness.emptySeriesCount)}`
+          + " · 캐시 확보와 목표일 관측은 다릅니다. 희소·빈 시계열의 미관측은 수집 오류를 뜻하지 않습니다.";
+      }
       render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount,
         news: results.filter((row) => row.news).length }, results, results.slice(0, 10), job.completedAt);
       $("analysisProgressPanel").classList.toggle("visible", !restored);
@@ -2952,6 +2961,71 @@
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`); renderMarketDiscoveryStatus(payload);
       } catch (error) { $("marketDiscoverySummary").textContent = `신규 시장 후보 상태 조회 실패: ${error.message}`; }
     }
+    function sourceFreshnessLabel(status) {
+      return { normal: "정상", current: "정상", partial: "부분", delayed: "갱신 지연", stale: "갱신 지연",
+        failed: "갱신 실패", no_data: "데이터 없음", missing: "데이터 없음", unknown: "확인 불가" }[status] || "확인 불가";
+    }
+
+    function trendFreshnessDisplay(payload, now = new Date()) {
+      const snapshot = payload.snapshot || {}; const job = payload.latestJob || {};
+      const freshness = payload.freshness || job.sourceFreshness || {};
+      const collection = payload.latestCollection || {}; const analysis = payload.latestAnalysis || {}; const scheduled = payload.schedulerExecution || {};
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(now);
+      const targetDate = freshness.targetDataDate || new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+      const actualDate = freshness.actualDataDate || snapshot.latestDataDate || job.latestDataDate || null;
+      const total = Number(job.analyzedCandidateCount || 0); const available = Number(job.trendAvailableCount || 0);
+      const coverage = total ? Math.round(available / total * 1000) / 10 : Number(snapshot.trendCoveragePct || 0);
+      const delayed = actualDate && actualDate < targetDate;
+      const status = freshness.status === "failed" ? "failed" : !actualDate ? "no_data" : delayed ? "delayed"
+        : coverage < 100 ? "partial" : freshness.status || "normal";
+      const calculatedAt = freshness.lastCalculatedAt || analysis.analyzedAt || job.calculatedAt || job.completedAt;
+      const publishedAt = freshness.lastPublishedAt || analysis.publishedAt || snapshot.publishedAt || job.publishedAt;
+      const collectionAt = freshness.lastSuccessfulCollectionAt || collection.collectedAt;
+      const showTime = value => value ? formatHistoryDate(value) : "기록 없음";
+      const scheduledDay = scheduled.triggeredAt ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date(scheduled.triggeredAt)) : null;
+      const automation = scheduledDay !== today ? "오늘 자동 수집 기록 없음"
+        : scheduled.state === "failed" ? `자동 작업 실패 · ${showTime(scheduled.failedAt || scheduled.updatedAt || scheduled.triggeredAt)}`
+          : scheduled.state === "completed" ? `자동 작업 완료 · ${showTime(scheduled.completedAt || scheduled.updatedAt || scheduled.triggeredAt)}`
+            : scheduled.stage === "already-collected" ? `자동 수집 확인 완료 · ${showTime(scheduled.triggeredAt)}`
+              : `자동 작업 요청 접수 · ${showTime(scheduled.triggeredAt)} · 완료 확인 필요`;
+      const dates = `확인 대상일 ${targetDate} · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"}`;
+      const scope = `Trend 분석 범위 ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${coverage}%, 캐시 확보)`;
+      const countText = value => value == null ? "확인 불가" : Number(value).toLocaleString("ko-KR");
+      const observedScope = `목표일 관측 후보 ${countText(freshness.targetDataCandidateCount)} / ${countText(total || null)}`
+        + ` (${freshness.targetDataCoveragePct == null ? "확인 불가" : `${Number(freshness.targetDataCoveragePct)}%`})`
+        + ` · 유효 시계열 ${countText(freshness.validSeriesCount)} · 빈 시계열 ${countText(freshness.emptySeriesCount)}`;
+      const observationNote = "희소·빈 시계열의 목표일 미관측은 수집 오류를 뜻하지 않습니다.";
+      return { status, actualDate, targetDate, coverage,
+        summary: `${dates} · ${scope} · ${observedScope} · 상태 ${sourceFreshnessLabel(status)} · ${automation}`,
+        detail: `마지막 실제 Trend 수집 ${showTime(collectionAt)} · 마지막 계산 ${showTime(calculatedAt)} · 마지막 게시 ${showTime(publishedAt)}`
+          + ` · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"} · 유효 snapshot 캐시 확보율 ${Number(snapshot.trendCoveragePct || 0)}% · ${observationNote}`,
+        resultMeta: `${dates} · ${scope} · ${observedScope} · ${sourceFreshnessLabel(status)} · 계산 ${showTime(calculatedAt)} · 게시 ${showTime(publishedAt)} · ${observationNote}` };
+    }
+
+    function earlySignalFreshnessDisplay(payload, now = new Date()) {
+      const freshness = payload.freshness || {}; const signalDate = freshness.signalDate || payload.signalDate || null;
+      const validTime = value => value && Number.isFinite(Date.parse(value)) ? value : null;
+      const generatedAt = validTime(freshness.generatedAt || payload.generatedAt);
+      const sourceTimes = freshness.sourceSuccessTimes || payload.sourceSuccessTimes || {};
+      const sourceTime = name => validTime(typeof sourceTimes[name] === "string" ? sourceTimes[name] : sourceTimes[name]?.lastSuccessfulAt);
+      const youtubeAt = sourceTime("youtube"), searchAdAt = sourceTime("searchAd");
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(now);
+      const refreshMs = Number(payload.refreshIntervalHours || 6) * 3600000;
+      const staleGenerated = generatedAt && Date.parse(now) - Date.parse(generatedAt) > refreshMs;
+      // Source cadences differ. Only the server's source-aware status may
+      // certify normal freshness; timestamps alone are not a success claim.
+      const status = freshness.status || (!signalDate ? "no_data" : signalDate < today || staleGenerated ? "delayed" : "partial");
+      const showTime = value => value ? formatHistoryDate(value) : "기록 없음";
+      const sourceErrors = freshness.sourceErrors || payload.sourceErrors;
+      const hasSourceErrors = Array.isArray(sourceErrors) ? sourceErrors.length > 0 : sourceErrors && Object.values(sourceErrors).some(Boolean);
+      const searchAdPolicy = freshness.sourceObservationPolicy?.searchAd || payload.sourceObservationPolicy?.searchAd;
+      return `신호 기준일 ${signalDate || "확인 불가"} · 생성 ${showTime(generatedAt)} · 상태 ${sourceFreshnessLabel(status)}`
+        + ` · YouTube 수집 성공 ${showTime(youtubeAt)} · Search Ad 수집 성공 ${showTime(searchAdAt)}`
+        + ` · 저장 신호 ${Number(payload.count ?? payload.items?.length ?? 0).toLocaleString("ko-KR")}건 · ${Number(payload.refreshIntervalHours || 6)}시간 주기`
+        + (hasSourceErrors ? " · 일부 소스 갱신 오류: 저장된 데이터 기준으로 표시" : "")
+        + (searchAdPolicy === "refresh_observation_window_unspecified" ? " · Search Ad 성공 시각은 수집 관측 기준이며 당일 검색량이 아닙니다." : "");
+    }
+
     async function loadTrendCacheStatus() {
       try {
         const response = await fetch("/.netlify/functions/trend-cache-status", { cache: "no-store" });
@@ -2963,20 +3037,11 @@
         const budgetState = search.exhausted ? "NAVER API 429/공식 quota 제한"
           : Number(search.dailyRemaining || 0) <= 0 ? "내부 일일 budget 소진" : "내부 budget 사용 가능";
         $("trendCacheSummary").textContent = `Trend 캐시 구축 ${cached.toLocaleString("ko-KR")} / ${target.toLocaleString("ko-KR")} · 미완료 ${Math.max(0, target - cached).toLocaleString("ko-KR")} · HOT/WARM/COLD ${Number(tiers.hot || 0).toLocaleString("ko-KR")}/${Number(tiers.warm || 0).toLocaleString("ko-KR")}/${Number(tiers.cold || 0).toLocaleString("ko-KR")} · 대기 ${Number(pending.hot || 0).toLocaleString("ko-KR")}/${Number(pending.warm || 0).toLocaleString("ko-KR")}/${Number(pending.cold || 0).toLocaleString("ko-KR")} · 예산 모드 ${payload.latestJob?.budgetMode === "bootstrap" ? "초기 구축" : "평상시"} · Search Trend 내부 할당 ${Number(search.dailyUsed || 0).toLocaleString("ko-KR")} / ${Number(search.dailyLimit || 0).toLocaleString("ko-KR")} (${budgetState}) · 내부 추정 월 사용 ${Number(search.monthlyUsed || 0).toLocaleString("ko-KR")} / 운영목표 ${Number(search.operatingMonthlyBudget || 0).toLocaleString("ko-KR")} · HTTP 200/429/기타 ${Number(search.http200 || 0).toLocaleString("ko-KR")}/${Number(search.http429 || 0).toLocaleString("ko-KR")}/${Number(search.httpOther || 0).toLocaleString("ko-KR")} · Shopping 내부 추정 월 사용 ${Number(shopping.monthlyUsed || 0).toLocaleString("ko-KR")} / 운영목표 ${Number(shopping.operatingMonthlyBudget || 0).toLocaleString("ko-KR")} · NAVER 실제 quota는 API HUB 콘솔 확인 필요`;
-        const snapshot = payload.snapshot || {}; const collection = payload.latestCollection || {}; const analysis = payload.latestAnalysis || {};
-        const scheduled = payload.schedulerExecution || {};
-        const analyzed = Number(payload.latestJob?.trendAvailableCount || 0); const total = Number(payload.latestJob?.analyzedCandidateCount || target || 5000);
-        const coverage = total ? Math.round(analyzed / total * 1000) / 10 : Number(snapshot.trendCoveragePct || 0);
-        const statusLabel = search.exhausted ? "최신 데이터 갱신 실패 · 마지막 정상 결과 표시" : coverage >= 100 ? "100% 분석 완료" : `부분 분석 · ${coverage}%`;
-        const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
-        const scheduledDay = scheduled.triggeredAt ? new Date(scheduled.triggeredAt).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }) : "";
-        const automaticState = scheduledDay !== todayKst ? "오늘 자동 수집 기록 없음"
-          : scheduled.state === "failed" ? `자동 최신 수집 실패 · 마지막 정상 데이터 ${collection.latestDataDate || snapshot.latestDataDate || "-"}`
-            : ["completed", "dispatched"].includes(scheduled.state) ? `자동 최신 수집 ${scheduled.state === "completed" ? "완료" : "진행 중"} · ${formatHistoryDate(scheduled.triggeredAt)}`
-              : scheduled.stage === "already-collected" ? `자동 수집 확인 완료 · ${formatHistoryDate(scheduled.triggeredAt)}`
-                : `자동 수집 ${scheduled.state || "상태 확인 중"} · ${formatHistoryDate(scheduled.triggeredAt)}`;
-        $("dataStatusSummary").textContent = `데이터 기준일 ${collection.latestDataDate || snapshot.latestDataDate || "-"} · Trend 분석 범위 ${analyzed.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${coverage}%) · 마지막 실제 수집 ${collection.collectedAt ? formatHistoryDate(collection.collectedAt) : "-"} · ${automaticState} · 상태 ${statusLabel}`;
-        $("dataFreshnessSummary").textContent = `마지막 실제 Trend 수집 ${collection.collectedAt ? formatHistoryDate(collection.collectedAt) : "-"} · 마지막 Fast/분석 ${analysis.analyzedAt ? formatHistoryDate(analysis.analyzedAt) : "-"} · Trend latestDataDate ${collection.latestDataDate || snapshot.latestDataDate || "-"} · 시장 후보 ${state.marketDiscoveryRefreshedAt ? formatHistoryDate(state.marketDiscoveryRefreshedAt) : "상태 패널 참조"} · 유효 snapshot 커버리지 ${Number(snapshot.trendCoveragePct || 0)}% · Shopping 캐시 ${Number(payload.cache?.shoppingInsightEntryCount || 0).toLocaleString("ko-KR")}건`;
+        const freshness = trendFreshnessDisplay(payload);
+        $("dataStatusSummary").textContent = freshness.summary;
+        $("dataFreshnessSummary").textContent = `${freshness.detail} · 시장 후보 ${state.marketDiscoveryRefreshedAt ? formatHistoryDate(state.marketDiscoveryRefreshedAt) : "상태 패널 참조"} · Shopping 캐시 ${Number(payload.cache?.shoppingInsightEntryCount || 0).toLocaleString("ko-KR")}건`;
+        $("latestDataDate").textContent = `자동 최신 NAVER 기준일: ${freshness.actualDate || "확인 불가"}`;
+        $("yesterdaySurgeMeta").textContent = freshness.resultMeta;
       } catch (error) { $("trendCacheSummary").textContent = `Trend 캐시/호출 예산 조회 실패: ${error.message}`; }
     }
 
@@ -3018,7 +3083,7 @@
       try {
         const response = await fetch("/.netlify/functions/today-early-signals", { cache: "no-store" });
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-        $("todayEarlySignalMeta").textContent = `${payload.signalDate || "오늘"} · 최근 갱신 ${payload.generatedAt ? formatHistoryDate(payload.generatedAt) : "-"} · ${Number(payload.count || 0).toLocaleString("ko-KR")}건 · ${Number(payload.refreshIntervalHours || 6)}시간 주기`;
+        $("todayEarlySignalMeta").textContent = earlySignalFreshnessDisplay(payload);
         const labels = { strong: "🔥 강한 신호", rising: "↑ 상승 신호", watch: "• 관찰 신호" };
         $("todayEarlySignalBody").innerHTML = (payload.items || []).length ? payload.items.map((item) => `<tr>
           <td><strong>${escapeHtml(item.keyword)}</strong></td><td>${escapeHtml(labels[item.strength] || "• 관찰 신호")}</td>
@@ -3027,8 +3092,11 @@
           <td>${escapeHtml([item.relatedBrand, item.relatedProductLine || item.relatedProductType].filter(Boolean).join(" · ") || "-")}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
           <td>${escapeHtml((item.sources || []).join(" + ") || "-")}</td>
           <td>${item.previousNaverState?.everSurged ? `이전 상승 · +${Number(item.previousNaverState.estimatedSurgeCount || 0).toLocaleString("ko-KR")}` : "확인 전"}</td>
-        </tr>`).join("") : '<tr><td colspan="8" class="muted">현재 기준을 충족하는 오늘 급상승 신호가 없습니다.</td></tr>';
-      } catch (error) { $("todayEarlySignalBody").innerHTML = `<tr><td colspan="8" class="muted">오늘 신호 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
+        </tr>`).join("") : '<tr><td colspan="8" class="muted">표시된 기준일에 저장된 급상승 신호가 없습니다. 데이터 없음은 시장 신호가 없다는 뜻이 아닙니다.</td></tr>';
+      } catch (error) {
+        $("todayEarlySignalMeta").textContent = `상태 갱신 실패 · 저장된 신호의 최신성 확인 불가: ${error.message}`;
+        $("todayEarlySignalBody").innerHTML = `<tr><td colspan="8" class="muted">오늘 신호 조회 실패: ${escapeHtml(error.message)}</td></tr>`;
+      }
     }
     async function refreshMarketDiscovery() {
       if (!requireEdit("신규 시장 후보 새로고침")) return;

@@ -8,6 +8,10 @@ const YOUTUBE_SEEDS = Object.freeze([
   "유산균 추천", "비타민 추천", "피부관리", "뷰티 신제품", "화장품 신제품"
 ]);
 const VERIFIED_TYPES = Object.freeze([...new Set([...PRODUCT_TYPES, "파우더", "립밤", "립글로우", "선파우더", "선로션", "비누", "스티커", "컬링에센스"])]);
+// The vocabulary is immutable: precompute the exact existing order/compact strings
+// once instead of sorting and normalizing it for every product/token comparison.
+const VERIFIED_TYPE_LOOKUP = VERIFIED_TYPES.slice().sort((a, b) => compact(b).length - compact(a).length)
+  .map((type) => ({ type, key: compact(type) }));
 const STOP = new Set(["추천", "리뷰", "후기", "신상", "신제품", "요즘", "진짜", "완전", "영상", "화장품", "제품", "사용", "써봄", "써봤어요", "소개", "공개", "광고", "협찬", "기획", "세트", "단독", "공식", "올리브영", "오늘", "내돈내산"]);
 const GENERIC_BRAND = new Set([...PRODUCT_TYPES, ...INGREDIENTS, "비타민", "두유", "카카오", "화장품", "뷰티", "건강", "영양제"]);
 
@@ -22,7 +26,7 @@ function cleanTokens(value) {
 }
 function productTypeIn(value) {
   const text = compact(value);
-  return VERIFIED_TYPES.slice().sort((a, b) => compact(b).length - compact(a).length).find((type) => text.includes(compact(type))) || "";
+  return VERIFIED_TYPE_LOOKUP.find(({ key }) => text.includes(key))?.type || "";
 }
 function buildVerifiedBrands(products) {
   const records = new Map();
@@ -112,14 +116,15 @@ function youtubeCandidates(videos, products) {
   for (const video of videos || []) {
     const title = normalizeText(video.title); const description = normalizeText(video.description).slice(0, 500);
     const titleTokens = cleanTokens(title); const allText = `${title} ${description}`;
-    for (const type of VERIFIED_TYPES.slice().sort((a, b) => compact(b).length - compact(a).length)) {
-      const typeCompact = compact(type); if (!compact(allText).includes(typeCompact)) continue;
+    const compactText = compact(allText), compactTitle = compact(title), compactDescription = compact(description);
+    for (const { type, key: typeCompact } of VERIFIED_TYPE_LOOKUP) {
+      if (!compactText.includes(typeCompact)) continue;
       for (let index = 0; index < titleTokens.length; index += 1) {
         const token = compact(titleTokens[index]); const joined = compact(`${titleTokens[index]}${titleTokens[index + 1] || ""}`);
         let brand = verifiedBrands.has(token) ? token : verifiedBrands.has(joined) ? joined : "";
         if (!brand && index < titleTokens.length - 1 && compact(titleTokens[index + 1]).includes(typeCompact)
           && token.length >= 2 && token.length <= 15 && !GENERIC_BRAND.has(token)) brand = token;
-        if (!brand || !compact(title).includes(brand) || !compact(title).includes(typeCompact)) continue;
+        if (!brand || !compactTitle.includes(brand) || !compactTitle.includes(typeCompact)) continue;
         const following = compact(titleTokens[index + 1] || "");
         const preceding = compact(titleTokens[index - 1] || "");
         let productExpression = typeCompact; let productLine = "";
@@ -129,7 +134,7 @@ function youtubeCandidates(videos, products) {
           productExpression = preceding; productLine = preceding.replace(typeCompact, "");
         }
         record(`${brand}${productExpression}`, video, { brand, productType: type, productLine,
-          titleHit: true, descriptionHit: compact(description).includes(brand + productExpression) });
+          titleHit: true, descriptionHit: compactDescription.includes(brand + productExpression) });
       }
     }
   }

@@ -1,4 +1,4 @@
-const { connect, readCache } = require("./trend-series-cache");
+const { connect, readCache, targetDataDate } = require("./trend-series-cache");
 const { connect: connectQuota, readUsage, statusFor } = require("./trend-api-quota");
 const { connect: connectAnalysis, readLastSuccess, readLastPartial, readJob } = require("./trend-analysis-cache");
 const { connect: connectSnapshot, readLatest: readLatestSnapshot, readLatestAnalysis, readLatestCollection } = require("./signal-snapshot-cache");
@@ -22,8 +22,19 @@ exports.handler = async (event) => {
     const validSnapshot = snapshot || (fallbackJob ? { jobId: fallbackJob.jobId, generatedAt: fallbackJob.completedAt, latestDataDate: fallbackJob.latestDataDate,
       trendCoveragePct: fallbackJob.trendCoveragePct ?? 100, items: fallbackJob.results || [], source: "instant-analysis-fallback" } : null);
     const latestJob = validSnapshot?.jobId ? await readJob(validSnapshot.jobId).catch(() => null) : fallbackJob;
+    const target = targetDataDate("9999-12-31");
+    const actual = validSnapshot?.latestDataDate || latestJob?.latestDataDate || null;
+    const sourceFreshness = latestJob?.sourceFreshness || validSnapshot?.sourceFreshness || null;
     return { statusCode: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }, body: JSON.stringify({
       ok: true,
+      freshness: { ...(sourceFreshness || {}), targetDataDate: target, actualDataDate: actual,
+        observedTargetDate: sourceFreshness?.targetDataDate || null,
+        targetDataCandidateCount: sourceFreshness?.targetDataDate === target ? sourceFreshness.targetDataCandidateCount : null,
+        targetDataCoveragePct: sourceFreshness?.targetDataDate === target ? sourceFreshness.targetDataCoveragePct : null,
+        status: !actual ? "missing" : actual < target ? "delayed" : Number(sourceFreshness?.targetDataCoveragePct ?? 100) < 100 ? "partial" : "normal",
+        lastCalculatedAt: latestJob?.completedAt || validSnapshot?.generatedAt || null,
+        lastPublishedAt: latestJob?.publishedAt || validSnapshot?.publishedAt || null,
+        lastSuccessfulCollectionAt: latestCollection?.collectedAt || null },
       cache: { ...(cache.manifest || {}), loadedEntryCount: cache.entries.size,
         searchTrendEntryCount: [...cache.entries.values()].filter((entry) => entry.search).length,
         shoppingInsightEntryCount: [...cache.entries.values()].filter((entry) => Object.keys(entry.shopping || {}).length).length },

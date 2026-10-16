@@ -14,7 +14,7 @@ test("partial results have separate pointers and cannot replace full success", (
   assert.deepEqual(lastPartialKeys("instant"), { mode: "last-partial/instant", latest: "last-partial/latest" });
   assert.deepEqual(lastPartialKeys("period"), { mode: "last-partial/period", latest: "last-partial/latest" });
   const source = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "trend-analysis-background.js"), "utf8");
-  assert.match(source, /job = await publishInstant\(job\)/);
+  assert.match(source, /job = await publishInstant\(job, \{ lease: instantLease \}\)/);
   const publication = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "instant-publication.js"), "utf8");
   assert.match(publication, /const publishLast = completed\.partialAnalysis \? options\.writeLastPartial \|\| analysisCache\.writeLastPartial[\s\S]*options\.writeLastSuccess \|\| analysisCache\.writeLastSuccess/);
 });

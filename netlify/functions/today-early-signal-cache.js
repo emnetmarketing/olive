@@ -8,7 +8,7 @@ function normalize(value) { return String(value || "").normalize("NFC").toLocale
 function kstDate(value = Date.now()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date(value)); }
 function ratio(delta, previous) { return previous > 0 ? Math.round(delta / previous * 10000) / 100 : null; }
 
-function buildEarlySignals(items, history, now = new Date().toISOString()) {
+function buildEarlySignals(items, history, now = new Date().toISOString(), options = {}) {
   const nowMs = Date.parse(now), sixHours = 6 * 3600000;
   const historyMap = new Map((history?.items || []).map((item) => [item.normalizedKeyword, item]));
   const output = new Map();
@@ -27,7 +27,9 @@ function buildEarlySignals(items, history, now = new Date().toISOString()) {
     const searchClickDelta = searchCurrentClicks !== null && searchPreviousClicks !== null ? searchCurrentClicks - searchPreviousClicks : null;
     const firstSeenAt = item.discoveredAt || previousRecord.firstSeenAt || item.lastSeenAt || null;
     const firstSeenToday = firstSeenAt && kstDate(firstSeenAt) === kstDate(now);
-    const youtubeTemporal = youtubeCurrent > 0; const searchTemporal = sources.includes("searchad-new-query") && (firstSeenToday || searchDelta > 0);
+    const searchObservedAt = search.observedAt || search.lastSeenAt || null;
+    const searchObservationIsCurrent = !options.requireFreshSource || (Number.isFinite(Date.parse(searchObservedAt)) && kstDate(searchObservedAt) === kstDate(now));
+    const youtubeTemporal = youtubeCurrent > 0; const searchTemporal = searchObservationIsCurrent && sources.includes("searchad-new-query") && (firstSeenToday || searchDelta > 0);
     if (!youtubeTemporal && !searchTemporal) continue;
     const context = Boolean(item.relatedBrand && (item.relatedProductType || item.relatedProductLine));
     let score = 0; const reasons = [];
@@ -35,7 +37,7 @@ function buildEarlySignals(items, history, now = new Date().toISOString()) {
     if (youtubeCurrent > 0) { score += Math.min(30, youtubeCurrent * 10); reasons.push(`최근 6시간 YouTube ${youtubeCurrent}건`); }
     if (youtubeDelta > 0) { score += 10; reasons.push(`직전 6시간 대비 YouTube +${youtubeDelta}건`); }
     if (searchTemporal) { score += 20; reasons.push("Search Ad 신규 유입"); }
-    if (searchDelta > 0) { score += Math.min(20, 5 + Math.round(Math.log10(searchDelta + 1) * 5)); reasons.push(`최근 수집 대비 Search Ad 노출 +${searchDelta}`); }
+    if (searchObservationIsCurrent && searchDelta > 0) { score += Math.min(20, 5 + Math.round(Math.log10(searchDelta + 1) * 5)); reasons.push(`최근 수집 대비 Search Ad 노출 +${searchDelta}`); }
     const temporalSources = Number(youtubeTemporal) + Number(searchTemporal);
     if (temporalSources > 1) { score += 15; reasons.push("복수 source 동시 감지"); }
     if (context) { score += 15; reasons.push(`${item.relatedBrand} · ${item.relatedProductLine || item.relatedProductType} 문맥 확인`); }
@@ -47,7 +49,7 @@ function buildEarlySignals(items, history, now = new Date().toISOString()) {
       relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
       productMatchScore: Number(item.productMatchScore || 0), relatedProduct: item.relatedProduct || "",
       comparisons: { youtube: videos.length ? { method: "recent_6h_vs_previous_6h", current: youtubeCurrent, previous: youtubePrevious, delta: youtubeDelta, deltaRate: ratio(youtubeDelta, youtubePrevious) } : null,
-        searchAd: sources.includes("searchad-new-query") ? { method: "latest_refresh_vs_previous_refresh", current: searchCurrent, previous: searchPrevious,
+        searchAd: searchObservationIsCurrent && sources.includes("searchad-new-query") ? { method: "latest_refresh_vs_previous_refresh", observedAt: searchObservedAt, observationWindow: search.observationWindow || "unspecified_api_default", current: searchCurrent, previous: searchPrevious,
           delta: searchDelta, deltaRate: hasSearchPrevious ? ratio(searchDelta, searchPrevious) : null, currentClicks: searchCurrentClicks,
           previousClicks: searchPreviousClicks, clickDelta: searchClickDelta } : null },
       previousNaverState: { everSurged: Boolean(previousRecord.everSurged), resultType: previousRecord.lastResultType || null,
@@ -62,6 +64,18 @@ function mergeCache(previous, signals, now = new Date().toISOString()) {
   for (const signal of signals || []) { const key = `${signal.earlySignalDate}:${signal.normalizedKeyword}`; history.set(key, { ...history.get(key), ...signal, confirmation: history.get(key)?.confirmation || signal.confirmation }); }
   const cutoff = Date.parse(now) - 31 * 86400000; const records = [...history.values()].filter((item) => Date.parse(`${item.earlySignalDate}T00:00:00+09:00`) >= cutoff);
   return { version: 1, generatedAt: now, signalDate: kstDate(now), refreshIntervalHours: 6, items: records.filter((item) => item.earlySignalDate === kstDate(now)), history: records };
+}
+
+function freshness(cache, now = new Date().toISOString()) {
+  const times = { youtube: cache?.sourceSuccessTimes?.youtube || null, searchAd: cache?.sourceSuccessTimes?.searchAd || null };
+  const today = kstDate(now), nowMs = Date.parse(now);
+  const youtubeFresh = Number.isFinite(Date.parse(times.youtube)) && nowMs - Date.parse(times.youtube) <= 6 * 3600000;
+  const searchFresh = Number.isFinite(Date.parse(times.searchAd)) && kstDate(times.searchAd) === today;
+  let status = !cache?.generatedAt ? "missing" : cache.signalDate !== today || (!youtubeFresh && !searchFresh) ? "stale"
+    : youtubeFresh && searchFresh && !cache.sourcePartial && !(cache.sourceErrors || []).length ? "current" : "partial";
+  return { signalDate: cache?.signalDate || null, generatedAt: cache?.generatedAt || null, status,
+    sourceSuccessTimes: times, sourceErrors: cache?.sourceErrors || [],
+    sourceObservationPolicy: cache?.sourceObservationPolicy || { searchAd: "refresh_observation_window_unspecified" } };
 }
 
 function confirmSignals(cache, traces, rows, latestDataDate) {
@@ -79,4 +93,4 @@ function confirmSignals(cache, traces, rows, latestDataDate) {
 }
 async function readCache() { return await store().get(KEY, { type: "json" }).catch(() => null) || { version: 1, items: [], history: [] }; }
 async function writeCache(value) { await store().setJSON(KEY, value); return value; }
-module.exports = { connect, readCache, writeCache, buildEarlySignals, mergeCache, confirmSignals, normalize, kstDate, STORE_NAME, KEY };
+module.exports = { connect, readCache, writeCache, buildEarlySignals, mergeCache, confirmSignals, freshness, normalize, kstDate, STORE_NAME, KEY };

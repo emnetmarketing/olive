@@ -131,7 +131,7 @@ test("persistent 429 stops safely and preserves completed cache work and last-su
   assert.match(source, /response\.status === 429 && retryAfterSeconds <= 0/);
   assert.match(source, /metrics\?\.exhausted[\s\S]*NAVER 일일 호출 한도 소진 상태/);
   assert.match(source, /catch \(error\)[\s\S]*writeDirtyTrendSeries\(seriesCache, dirtyTrendKeys\)/);
-  assert.match(source, /await persist\(\{ state: "publishing"[\s\S]*job = await publishInstant\(job\)/);
+  assert.match(source, /await persist\(\{ state: "publishing"[\s\S]*job = await publishInstant\(job, \{ lease: instantLease \}\)/);
   assert.match(source, /await publishCompletedPeriod\(job, buildSnapshot\(job\), \{ lease: workerLease \}\);[\s\S]*return;/);
 });
 

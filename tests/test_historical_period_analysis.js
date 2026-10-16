@@ -186,7 +186,7 @@ test("historical failure persists successful dirty cache batches before partial 
 test("one-click historical work stays separate from instant collection and Early Signal", () => {
   const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
   assert.match(background, /await publishCompletedPeriod\(job, buildSnapshot\(job\), \{ lease: workerLease \}\)/);
-  assert.match(background, /job = await publishInstant\(job\)/);
+  assert.match(background, /job = await publishInstant\(job, \{ lease: instantLease \}\)/);
   assert.match(background, /job\.historicalCollection/);
   const snapshotSource = fs.readFileSync("netlify/functions/signal-snapshot-cache.js", "utf8");
   assert.match(snapshotSource, /job\?\.mode === "instant" && !job\?\.fastPath/);
