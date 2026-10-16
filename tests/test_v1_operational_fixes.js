@@ -34,7 +34,9 @@ test("shared current job and download history endpoints are wired into the dashb
   assert.match(analysisCache, /current-job\/v1/);
   assert.match(analysisCache, /onlyIfMatch/);
   assert.match(analysisCache, /onlyIfNew/);
-  assert.doesNotMatch(analysisCache, /consistency: "strong"/);
+  // The legacy default store remains unchanged; publication fencing uses
+  // explicit strong reads and ETag CAS supported by the current Blob SDK.
+  assert.match(analysisCache, /function store\(\) \{ return getStore\(STORE\); \}/);
   const currentEndpoint = fs.readFileSync("netlify/functions/trend-analysis-current.js", "utf8");
   assert.match(currentEndpoint, /readCurrentJob\(\)/);
   assert.doesNotMatch(currentEndpoint, /markStale:\s*true/);
