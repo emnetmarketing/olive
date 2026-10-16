@@ -13,8 +13,9 @@ function normalizedKeyword(value) { return String(value || "").normalize("NFKC")
 function shardFor(key) { return Number.parseInt(crypto.createHash("sha1").update(key).digest("hex").slice(0, 8), 16) % SHARD_COUNT; }
 function shardKey(index) { return `shards/v1/${index}`; }
 function windowKey(startDate, endDate) { return `${startDate}_${endDate}`; }
+const seoulDateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
 function seoulDate(now = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
+  const parts = seoulDateFormatter
     .formatToParts(now).reduce((out, part) => ({ ...out, [part.type]: part.value }), {});
   return `${parts.year}-${parts.month}-${parts.day}`;
 }

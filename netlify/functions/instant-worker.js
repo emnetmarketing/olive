@@ -15,12 +15,27 @@ async function claimInstantWorker(jobId, options = {}) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const entry = await store.getWithMetadata(`jobs/${jobId}`, { type: "json" });
     const job = entry?.data; const now = clock(options);
-    if (!job || job.mode !== "instant" || !["running", "publishing", "publication_failed"].includes(job.state))
+    const ticketProvided = options.continuationTicket != null;
+    const dispatch = job?.continuationDispatch;
+    const matchingTicket = ticketProvided && typeof options.continuationTicket === "string" && Boolean(options.continuationTicket)
+      && dispatch?.ticket === options.continuationTicket;
+    if (ticketProvided && !matchingTicket) return { claimed: false, reason: "stale-continuation-delivery", job };
+    const checkpointRedelivery = matchingTicket && dispatch.enteredAt && Boolean(job?.instantStateKey)
+      && !active(job?.instantWorker, now);
+    if (matchingTicket && dispatch.enteredAt && !checkpointRedelivery)
+      return { claimed: false, reason: "continuation-already-entered", job };
+    const resumeDelivered = job?.state === "interrupted" && job.resumable === true && Boolean(job.instantStateKey)
+      && matchingTicket && (!dispatch.enteredAt || checkpointRedelivery);
+    if (!job || job.mode !== "instant" || !["running", "publishing", "publication_failed"].includes(job.state) && !resumeDelivered)
       return { claimed: false, reason: "not-runnable", job };
     if (active(job.instantWorker, now)) return { claimed: false, reason: "worker-active", job };
     const lease = { jobId, owner: options.owner || "instant-background", token: crypto.randomUUID(),
       fence: Number(job.instantWorker?.fence || 0) + 1, startedAt: new Date(now).toISOString(), expiresAt: now + LEASE_MS };
-    const next = { ...job, instantWorker: lease, invocationCount: Number(job.invocationCount || 0) + 1,
+    const next = { ...job, ...(resumeDelivered ? { state: "running" } : {}), instantWorker: lease,
+      ...(matchingTicket ? { continuationDispatch: { ...dispatch, state: "entered", enteredAt: new Date(now).toISOString(),
+        firstEnteredAt: dispatch.firstEnteredAt || dispatch.enteredAt || new Date(now).toISOString(),
+        redeliveryCount: Number(dispatch.redeliveryCount || 0) + (checkpointRedelivery ? 1 : 0),
+        invocationId: lease.owner, workerFence: lease.fence } } : {}), invocationCount: Number(job.invocationCount || 0) + 1,
       updatedAt: new Date(now).toISOString() };
     if ((await store.setJSON(`jobs/${jobId}`, next, { onlyIfMatch: entry.etag }))?.modified)
       return { claimed: true, job: next, lease };
@@ -40,8 +55,27 @@ async function writeOwnedInstantJob(lease, patch, options = {}) {
     const entry = await store.getWithMetadata(`jobs/${lease?.jobId}`, { type: "json" });
     const job = entry?.data; const now = clock(options);
     if (!owns(job, lease, now)) throw fail("INSTANT_WORKER_LOST", "A superseded Instant worker cannot write progress.");
-    for (const key of ["jobId", "mode", "createdAt", "startDate", "endDate", "queryStartDate", "surgeThreshold", "matchThreshold"])
+    for (const key of ["jobId", "mode", "createdAt", "startDate", "endDate", "queryStartDate", "surgeThreshold", "matchThreshold",
+      "collectionScope", "fastPath"])
       if (Object.hasOwn(patch, key) && patch[key] !== job[key]) throw fail("INSTANT_IDENTITY_CHANGED", "Instant analysis identity is immutable.");
+    for (const key of ["targetDataDate", "calculationVersion", "orderedCandidateHash", "productVersionHash",
+      "collectionObservationStartedAt", "collectionObservationDate"])
+      if (job[key] != null && Object.hasOwn(patch, key) && patch[key] !== job[key])
+        throw fail("INSTANT_IDENTITY_CHANGED", "Frozen Instant target and calculation version cannot change.");
+    for (const key of ["instantInputsKey", "instantInputsHash"])
+      if (job[key] && Object.hasOwn(patch, key) && patch[key] !== job[key])
+        throw fail("INSTANT_INPUTS_CHANGED", "Frozen Instant inputs cannot be replaced.");
+    if (options.expectedInstantStateRevision != null
+      && Number(job.instantStateRevision || 0) !== options.expectedInstantStateRevision)
+      throw fail("INSTANT_STATE_CONFLICT", "Another checkpoint was committed before this Instant write.");
+    for (const key of ["collectionCursor", "calculationCursor", "ratioCursor", "enrichmentCursor", "evidenceCursor", "finalizeCursor",
+      "instantStateRevision", "continuationCount"])
+      if (Object.hasOwn(patch, key) && (!Number.isSafeInteger(patch[key]) || patch[key] < Number(job[key] || 0)))
+        throw fail("INSTANT_CURSOR_REGRESSION", "Instant durable progress cannot move backwards.");
+    const stages = ["collection", "numeric", "ratio", "enrichment", "evidence", "finalize", "publishing"];
+    if (patch.instantStage != null && (!stages.includes(patch.instantStage)
+      || job.instantStage && stages.indexOf(patch.instantStage) < stages.indexOf(job.instantStage)))
+      throw fail("INSTANT_STAGE_REGRESSION", "Instant durable stages cannot move backwards.");
     if (["publishing", "publication_failed"].includes(job.state)
       && (patch.state && !["publishing", "publication_failed"].includes(patch.state)
         || patch.results && JSON.stringify(patch.results) !== JSON.stringify(job.results)))

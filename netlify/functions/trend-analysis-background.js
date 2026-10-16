@@ -668,7 +668,13 @@ exports.handler = async (event, context = {}) => {
   let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
   let job = await readJob(input.jobId) || input.job;
   if (["period", "instant"].includes(job?.mode)) job = await readRawJob(job.jobId, { forMutation: true });
-  if (!job?.jobId || !["running", "publishing", "publication_failed"].includes(job.state)) return;
+  const pendingInstantDelivery = job?.mode === "instant" && job.state === "interrupted" && job.resumable
+    && job.instantStateKey && input.continuationTicket && job.continuationDispatch?.ticket === input.continuationTicket
+    && (!job.continuationDispatch?.enteredAt || Number(job.instantWorker?.expiresAt || 0) <= Date.now());
+  if (!job?.jobId || !["running", "publishing", "publication_failed"].includes(job.state) && !pendingInstantDelivery) return;
+  // Instant collection, Fast Path and scheduled work share the same durable
+  // stage runner. Period keeps its independent inputs/checkpoints/publication.
+  if (job.mode === "instant") return require("./instant-pipeline").run(job, context, input);
   let workerLease = null;
   let instantLease = null;
   const invocationId = context.awsRequestId || context.requestId || require("node:crypto").randomUUID();

@@ -18,21 +18,30 @@ function dateDiffDays(left, right) {
 }
 function recordKey(item) { return `${item.latestDataDate}|${item.mode}|${item.calculationVersion}`; }
 
-async function readSurgeHistory() {
+async function readSurgeHistory(options = {}) {
   const manifest = await store().get(MANIFEST_KEY, { type: "json" });
   if (!manifest?.shardKeys?.length) return { manifest: null, records: new Map() };
-  const shards = await Promise.all(manifest.shardKeys.map((key) => store().get(key, { type: "json" })));
   const records = new Map();
-  for (const item of shards.flatMap((shard) => shard?.items || [])) records.set(item.normalizedKeyword, item);
+  if (options.sequential) {
+    for (const key of manifest.shardKeys) {
+      const shard = await store().get(key, { type: "json" });
+      for (const item of shard?.items || []) records.set(item.normalizedKeyword, item);
+    }
+  } else {
+    const shards = await Promise.all(manifest.shardKeys.map((key) => store().get(key, { type: "json" })));
+    for (const item of shards.flatMap((shard) => shard?.items || [])) records.set(item.normalizedKeyword, item);
+  }
   return { manifest, records };
 }
 
-async function writeSurgeHistory(records, updatedAt = new Date().toISOString()) {
+async function writeSurgeHistory(records, updatedAt = new Date().toISOString(), options = {}) {
   const version = updatedAt.replace(/[^0-9]/g, "");
   const buckets = Array.from({ length: SHARD_COUNT }, () => []);
   for (const item of records.values()) buckets[shardNumber(item.normalizedKeyword)].push(item);
   const shardKeys = buckets.map((_, index) => `surge-history/shards/${version}/${index}`);
-  await Promise.all(shardKeys.map((key, index) => store().setJSON(key, { items: buckets[index] })));
+  if (options.sequential) {
+    for (const [index, key] of shardKeys.entries()) await store().setJSON(key, { items: buckets[index] });
+  } else await Promise.all(shardKeys.map((key, index) => store().setJSON(key, { items: buckets[index] })));
   const manifest = { version: 1, calculationVersion: CALCULATION_VERSION, updatedAt, shardCount: SHARD_COUNT,
     recordCount: records.size, shardKeys };
   await store().setJSON(MANIFEST_KEY, manifest);

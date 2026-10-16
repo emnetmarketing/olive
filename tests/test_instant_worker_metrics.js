@@ -157,7 +157,7 @@ test("a denied pre-request budget reservation never calls NAVER or counts a disp
   assert.equal(network, 0); assert.equal(metrics.calls, 0);
 });
 
-test("actual Background entry skips duplicate Instant invocation before candidate or provider work", async () => {
+test("actual Background entry skips duplicate Instant invocation before candidate or provider work", { timeout: 5000 }, async () => {
   const stores = new Map(), modules = new Map(); let candidateReads = 0, allowFirst, entered;
   const firstEntered = new Promise(resolve => { entered = resolve; });
   const firstGate = new Promise(resolve => { allowFirst = resolve; });
@@ -167,7 +167,7 @@ test("actual Background entry skips duplicate Instant invocation before candidat
     "blob-store-compat.js": { connectLambda() {}, getCompatibleStore: getStore },
     "keyword-candidate-cache.js": { readCandidateCache: async () => { candidateReads++; entered(); await firstGate; throw new Error("fixture stop after ownership check"); } },
     "market-discovery-cache.js": { readCache: async () => ({ items: [] }) },
-    "search-ad-cache.js": { readCache: async () => ({ items: [] }) },
+    "search-ad-cache.js": { readCache: async () => ({ items: [{ productName: "fixture product" }] }) },
     "trend-series-cache.js": { connect() {}, readCache: async () => ({ entries: new Map() }) },
     "surge-history-cache.js": { readSurgeHistory: async () => ({ records: new Map() }) },
     "today-early-signal-cache.js": { readCache: async () => null },
@@ -186,7 +186,9 @@ test("actual Background entry skips duplicate Instant invocation before candidat
   global.fetch = async () => { network++; throw new Error("ALL external network forbidden"); };
   try {
     const first = background.handler({ body: '{"jobId":"example"}' }, { awsRequestId: "first" });
-    await firstEntered;
+    // Fail clearly if preparation exits before reaching the ownership gate.
+    // An unresolved firstEntered promise would otherwise stall the entire suite.
+    await Promise.race([firstEntered, first.then(() => { throw new Error("Background exited before the candidate ownership gate"); })]);
     await background.handler({ body: '{"jobId":"example"}' }, { awsRequestId: "duplicate" });
     assert.equal(candidateReads, 1); assert.equal(network, 0);
     allowFirst(); await first;

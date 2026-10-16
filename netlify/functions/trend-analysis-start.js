@@ -4,6 +4,7 @@ const { connect: connectSnapshot, readLatest: readLatestSnapshot } = require("./
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { readOperatingSettings } = require("./operating-settings-cache");
+const { getCompatibleStore } = require("./blob-store-compat");
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 
 function isoDate(date) { return date.toISOString().slice(0, 10); }
@@ -37,10 +38,34 @@ function matchesRequestedJob(job, request) {
     && job.queryStartDate === request.queryStartDate && (job.collectionScope || null) === (request.collectionScope || null));
 }
 
+async function recordInstantDispatchFailure(createdJob, failure, options = {}) {
+  const blobStore = options.store || getCompatibleStore({ name: "trend-analysis", consistency: "strong" });
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const entry = await blobStore.getWithMetadata(`jobs/${createdJob.jobId}`, { type: "json" });
+    const current = entry?.data;
+    if (!current || current.mode !== "instant" || current.createdAt !== createdJob.createdAt)
+      return { modified: false, job: current || null, reason: "identity-changed" };
+    const advanced = current.state !== "running" || Boolean(current.instantWorker || current.instantInputsKey || current.instantStateKey)
+      || Number(current.invocationCount || 0) > 0 || Array.isArray(current.results)
+      || current.updatedAt !== createdJob.updatedAt || Number(current.progress || 0) > Number(createdJob.progress || 0)
+      || Number(current.processedCount || 0) > Number(createdJob.processedCount || 0);
+    if (advanced) return { modified: false, job: current, reason: "worker-progressed" };
+    const at = new Date(options.now ? options.now() : Date.now()).toISOString();
+    const patch = options.ambiguous ? { dispatchState: "unknown", dispatchErrorAt: at,
+      dispatchErrorCode: failure.code || failure.name || "DISPATCH_RESPONSE_UNKNOWN",
+      message: "Background 접수 응답 확인 중 · 같은 작업의 진행 상태를 확인합니다." }
+      : { state: "failed", dispatchState: "rejected", message: "분석 시작 실패", errors: [failure.message], failedAt: at };
+    const next = { ...current, ...patch, updatedAt: at };
+    if ((await blobStore.setJSON(`jobs/${createdJob.jobId}`, next, { onlyIfMatch: entry.etag }))?.modified)
+      return { modified: true, job: next, reason: options.ambiguous ? "response-unknown" : "dispatch-rejected" };
+  }
+  throw Object.assign(new Error("Instant dispatch state changed concurrently; existing progress was preserved."), { code: "INSTANT_DISPATCH_STATE_CONFLICT" });
+}
+
 async function handle(event, { fastPath = true } = {}) {
   connect(event); connectSnapshot(event); connectQuota(event);
   if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
-  let createdJob;
+  let createdJob, dispatchAttempted = false;
   try {
     const input = JSON.parse(event.body || "{}");
     const mode = input.mode === "instant" ? "instant" : "period";
@@ -52,6 +77,14 @@ async function handle(event, { fastPath = true } = {}) {
     let endDate = String(input.endDate || "");
     if (mode === "instant") {
       const end = new Date(`${seoulDate()}T00:00:00Z`);
+      if (input.targetDataDate !== undefined) {
+        if (fastPath || collectionScope !== "search-trend-only" || !/^\d{4}-\d{2}-\d{2}$/.test(input.targetDataDate))
+          return json(400, { error: "고정 목표일은 Search Trend 전용 복구 수집에서만 지정할 수 있습니다." });
+        const target = new Date(`${input.targetDataDate}T00:00:00Z`);
+        if (!Number.isFinite(target.getTime()) || isoDate(target) !== input.targetDataDate || target >= end || end - target > 31 * 86400000)
+          return json(400, { error: "유효한 과거 목표일(최근 31일)을 지정해주세요." });
+        end.setTime(target.getTime() + 86400000);
+      }
       const start = new Date(end); start.setDate(end.getDate() - 29);
       startDate = isoDate(start); endDate = isoDate(end);
     }
@@ -87,7 +120,20 @@ async function handle(event, { fastPath = true } = {}) {
     }
     const requestedJob = { mode, startDate, endDate, queryStartDate: isoDate(queryStart), fastPath, historicalCollection,
       ...(collectionScope ? { collectionScope } : {}) };
+    let collectionObservationStartedAt;
+    if (input.reuseCollectionJobId !== undefined) {
+      if (mode !== "instant" || fastPath || collectionScope !== "search-trend-only")
+        return json(400, { error: "응답 재사용은 Search Trend 전용 복구 수집에서만 가능합니다." });
+      const previous = await readJob(String(input.reuseCollectionJobId));
+      if (!previous || previous.mode !== "instant" || previous.queryStartDate !== requestedJob.queryStartDate || previous.endDate !== endDate
+        || !Number.isFinite(Date.parse(previous.createdAt)) || !Number(previous.searchTrendHttp200Count || previous.apiMetrics?.searchTrend?.http200))
+        return json(409, { error: "이전 수집의 동일 window·성공 응답을 확인할 수 없습니다." });
+      collectionObservationStartedAt = previous.createdAt;
+    }
     const acquired = await acquireJob({ ...requestedJob, surgeThreshold, matchThreshold,
+      ...(mode === "instant" ? { targetDataDate: isoDate(new Date(end.getTime() - 86400000)),
+        calculationVersion: require("./surge-history-cache").CALCULATION_VERSION } : {}),
+      ...(collectionObservationStartedAt ? { collectionObservationStartedAt, reusedCollectionJobId: String(input.reuseCollectionJobId) } : {}),
       triggerSource, schedulerExecutionId,
       currentStage: "preparing", processedCount: 0, totalCount: 0 });
     const job = acquired.job;
@@ -100,17 +146,25 @@ async function handle(event, { fastPath = true } = {}) {
         message: "동일한 Background 작업이 실행 중입니다. 기존 진행 상태에 연결합니다." });
     }
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
+    dispatchAttempted = true;
     const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId, job })
     });
-    if (!response.ok && response.status !== 202) throw new Error(`분석 Background Function 시작 실패: HTTP ${response.status}`);
+    if (!response.ok && response.status !== 202) throw Object.assign(new Error(`분석 Background Function 시작 실패: HTTP ${response.status}`),
+      { code: "BACKGROUND_DISPATCH_REJECTED", status: response.status });
     return json(202, { existing: false, ...jobMetadata(job),
       message: fastPath ? "저장된 최신 데이터로 분석을 시작했습니다." : "최신 데이터 Background 수집을 시작했습니다." });
   } catch (error) {
-    if (createdJob) await writeJob(createdJob.jobId, { ...createdJob, state: "failed", message: "분석 시작 실패", errors: [error.message], updatedAt: new Date().toISOString() }).catch(() => {});
+    if (createdJob?.mode === "instant") {
+      const ambiguous = dispatchAttempted && error.code !== "BACKGROUND_DISPATCH_REJECTED";
+      const saved = await recordInstantDispatchFailure(createdJob, error, { ambiguous }).catch(() => null);
+      if (ambiguous || saved?.reason === "worker-progressed") return json(202, { existing: false,
+        ...jobMetadata(saved?.job || createdJob), dispatchState: ambiguous ? "unknown" : "worker-progressed",
+        message: "서버 접수 응답을 확인 중입니다. 추가 실행 없이 같은 작업의 진행 상태를 확인합니다." });
+    } else if (createdJob) await writeJob(createdJob.jobId, { ...createdJob, state: "failed", message: "분석 시작 실패", errors: [error.message], updatedAt: new Date().toISOString() }).catch(() => {});
     return json(500, { error: error.message || "분석 시작 실패" });
   }
 }
 exports.handler = (event) => handle(event, { fastPath: true });
 exports.handle = handle;
-exports._test = { inclusiveDays, analysisQueryStart, isoDate, jobMetadata, matchesRequestedJob };
+exports._test = { inclusiveDays, analysisQueryStart, isoDate, jobMetadata, matchesRequestedJob, recordInstantDispatchFailure };

@@ -247,25 +247,44 @@ async function createJob(input) {
   await writeJob(job.jobId, job);
   return job;
 }
+function checkpointProgress(job) {
+  if (job?.mode !== "instant" || !job.instantStateKey) {
+    const cursor = Number(job?.calculationCursor || job?.processedCount || 0);
+    return { lastCursor: cursor, remainingCount: Math.max(0, Number(job?.totalCount || 0) - cursor) };
+  }
+  const cursor = Number.isSafeInteger(job.instantStageCursor) ? job.instantStageCursor : null;
+  const currentStages = { collection: "search-trend", numeric: "calculation-matching", ratio: "calculation-ratio", evidence: "instant-evidence" };
+  const explicitTotal = Number.isSafeInteger(job.instantStageTotalCount) && job.instantStageTotalCount >= 0 ? job.instantStageTotalCount : null;
+  const sameStageTotal = currentStages[job.instantStage] === job.currentStage && Number.isSafeInteger(job.totalCount) && job.totalCount >= 0
+    ? job.totalCount : null;
+  const total = explicitTotal ?? sameStageTotal;
+  // A completed numeric cursor is not an enrichment/publication cursor. When
+  // the current stage total was not persisted, report unknown instead of zero.
+  return { checkpointStage: job.instantStage || null, lastCursor: cursor, checkpointTotalCount: total,
+    remainingCount: cursor != null && total != null ? Math.max(0, total - cursor) : null };
+}
 async function readCurrentJob({ markStale = false, includeStale = false } = {}) {
   const pointer = await store().get(CURRENT_JOB_KEY, { type: "json" });
   if (!pointer?.jobId) return null;
   const job = await readJob(pointer.jobId);
-  if (!job || !["running", "publishing", "recovering"].includes(job.state)) return null;
+  if (!job || !["running", "publishing", "recovering"].includes(job.state)) {
+    if (includeStale && job?.mode === "instant" && job.resumable && (job.instantStateKey || Array.isArray(job.results) && job.state === "publication_failed"))
+      return { ...job, ...checkpointProgress(job), stale: true };
+    return null;
+  }
   const age = Date.now() - Date.parse(job.updatedAt || job.createdAt || 0);
   if (Number.isFinite(age) && age <= STALE_JOB_MS) return job;
   // Recovery owns its immutable artifacts and control record. A legacy lock
   // read must not rewrite the original Job from this read-only status overlay.
   if (job.recovery) return includeStale ? { ...job, stale: true, state: "interrupted", resumable: true } : null;
-  if (includeStale && !markStale) return { ...job, stale: true, resumable: Boolean(job.historicalCollection),
+  if (includeStale && !markStale) return { ...job, stale: true, resumable: Boolean(job.historicalCollection || job.instantStateKey),
     currentStage: "interrupted", message: "분석 실행이 중단됨 · 저장된 checkpoint/cache에서 재개 가능",
-    lastCursor: Number(job.calculationCursor || job.processedCount || 0),
-    remainingCount: Math.max(0, Number(job.totalCount || 0) - Number(job.calculationCursor || job.processedCount || 0)) };
+    ...checkpointProgress(job) };
   if (markStale) {
-    const patch = { state: job.historicalCollection ? "interrupted" : "failed", resumable: Boolean(job.historicalCollection),
+    const patch = { state: job.historicalCollection || job.instantStateKey ? "interrupted" : "failed", resumable: Boolean(job.historicalCollection || job.instantStateKey),
       currentStage: job.historicalCollection ? "interrupted" : job.currentStage,
       message: job.historicalCollection ? "기간 분석 중단 · 저장된 checkpoint/cache에서 재개 가능" : "Stale analysis job expired.",
-      lastCursor: Number(job.calculationCursor || job.processedCount || 0), failedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      ...checkpointProgress(job), failedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       errors: ["Analysis job stopped updating and was released."] };
     if (job.mode === "period") {
       const blobStore = mutationStore();
@@ -309,4 +328,4 @@ module.exports = { connect, store, readJob, readRawJob, writeJob, createJob, acq
   writeLastPartial, readLastPartial, writeDiagnosticIndex, readDiagnosticIndex, lastSuccessKeys, lastPartialKeys,
   publishCompletedPeriod, periodJobGeneration, claimPeriodWorker, assertPeriodWorker, writeOwnedPeriodJob, releasePeriodWorker,
   writePeriodCheckpoint, readPeriodCheckpoint, writePeriodInputs, readPeriodInputs, PERIOD_WORKER_LEASE_MS,
-  CURRENT_JOB_KEY, DIAGNOSTIC_INDEX_KEY, STALE_JOB_MS };
+  CURRENT_JOB_KEY, DIAGNOSTIC_INDEX_KEY, STALE_JOB_MS, checkpointProgress };

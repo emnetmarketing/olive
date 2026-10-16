@@ -10,10 +10,11 @@ function runtime(overrides = {}) {
     const name = typeof value === "string" ? value : value.name;
     if (!stores.has(name)) {
       const records = new Map(), writes = [];
-      stores.set(name, { records, writes,
+      stores.set(name, { records, writes, before: null,
         async get(key) { return clone(records.get(key)?.data || null); },
         async getWithMetadata(key) { return clone(records.get(key) || null); },
         async setJSON(key, data, condition = {}) {
+          await this.before?.(key, data);
           const prior = records.get(key);
           if (condition.onlyIfNew && prior || condition.onlyIfMatch && condition.onlyIfMatch !== prior?.etag) return { modified: false };
           records.set(key, { data: clone(data), etag: String(++revision) }); writes.push(key); return { modified: true };
@@ -137,6 +138,7 @@ test("cached News is cloned from completed Instant only, never fabricated from P
 
 function backgroundFixture({ scope = SCOPE, cachedShopping = true, cachedNews = true } = {}) {
   const seriesCache = require("../netlify/functions/trend-series-cache");
+  let candidateReads = 0;
   const keywords = ["라카트윈립", "메디힐비타민씨세럼", "제로이드포밍클렌저"];
   const candidates = keywords.map(keyword => ({ keyword, category: "beauty", monthlyTotalSearches: 120000,
     sources: ["keywordstool"], firstSeenAt: "2026-09-01T00:00:00Z", priorityScore: 50, monthlyVolumeStatus: "available" }));
@@ -155,7 +157,7 @@ function backgroundFixture({ scope = SCOPE, cachedShopping = true, cachedNews = 
   let earlyWrites = 0, earlyConfirms = 0;
   const dirty = [];
   const rt = runtime({
-    "keyword-candidate-cache.js": { readCandidateCache: async () => ({ candidates: clone(candidates) }) },
+    "keyword-candidate-cache.js": { readCandidateCache: async () => { candidateReads++; return { candidates: clone(candidates) }; } },
     "market-discovery-cache.js": { readCache: async () => ({ items: [] }) },
     "search-ad-cache.js": { readCache: async () => ({ items: clone(products) }) },
     "trend-series-cache.js": { ...seriesCache, connect() {}, readCache: async () => ({ entries: new Map(entries) }),
@@ -164,7 +166,8 @@ function backgroundFixture({ scope = SCOPE, cachedShopping = true, cachedNews = 
       writeCache: async () => { earlyWrites++; } },
     "market-discovery-history-cache.js": { readHistory: async () => null },
   });
-  return { ...rt, keywords, series, shopping, news, cachedNews, early, dirty, get earlyWrites() { return earlyWrites; }, get earlyConfirms() { return earlyConfirms; },
+  return { ...rt, keywords, series, shopping, news, cachedNews, early, dirty, entries, seriesCache,
+    get earlyWrites() { return earlyWrites; }, get earlyConfirms() { return earlyConfirms; }, get candidateReads() { return candidateReads; },
     job: { jobId: scope ? "scoped-instant" : "ordinary-instant", mode: "instant", state: "running", currentStage: "preparing", fastPath: false,
       collectionScope: scope, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       startDate: "2026-09-17", endDate: "2026-10-16", queryStartDate: "2026-09-16", surgeThreshold: 300, matchThreshold: 40 } };
@@ -172,14 +175,35 @@ function backgroundFixture({ scope = SCOPE, cachedShopping = true, cachedNews = 
 
 async function runBackground(t, options) {
   const fixture = backgroundFixture(options), store = fixture.getStore("trend-analysis");
+  const seriesStore = fixture.getStore("trend-series-cache"), grouped = new Map();
+  for (const [keyword, entry] of fixture.entries) {
+    const shard = fixture.seriesCache.shardFor(keyword);
+    if (!grouped.has(shard)) grouped.set(shard, {});
+    grouped.get(shard)[keyword] = entry;
+  }
+  for (const [shard, entries] of grouped) await seriesStore.setJSON(`shards/v1/${shard}`, { version: 1, shard, entries });
   await store.setJSON("jobs/previous-instant", { jobId: "previous-instant", mode: "instant", state: "completed", completedAt: "2026-10-16T01:00:00Z",
     results: fixture.keywords.map(keyword => ({ keyword, news: fixture.cachedNews ? fixture.news(keyword) : null })) });
   await store.setJSON("last-success/instant", { jobId: "previous-instant" });
   await store.setJSON("last-success/period", { jobId: "preserved-period439" });
   await fixture.getStore("trend-signal-snapshots").setJSON("latest-valid-v1/period", { jobId: "preserved-period439", resultCount: 439 });
   await store.setJSON(`jobs/${fixture.job.jobId}`, fixture.job);
+  const queue = [], previousUrl = process.env.URL;
+  let lostDispatchResponse = false;
+  const loseOneDispatchResponse = Boolean(options?.lostDispatchResponseOnce);
+  process.env.URL = "https://instant-fixture.invalid";
   const calls = fakeNetwork(t, async (url, options) => {
     const route = new URL(url).pathname;
+    if (route === "/.netlify/functions/trend-analysis-background") {
+      assert.equal(new URL(url).origin, process.env.URL);
+      const body = JSON.parse(options.body); assert.equal(body.jobId, fixture.job.jobId);
+      queue.push(body);
+      if (loseOneDispatchResponse && !lostDispatchResponse) {
+        lostDispatchResponse = true;
+        throw Object.assign(new Error("fixture accepted continuation but response was lost"), { name: "TimeoutError" });
+      }
+      return { ok: true, status: 202 };
+    }
     if (route === "/search-trend/v1/search") return { ok: true, status: 200, headers: { get() { return null; } },
       json: async () => ({ results: JSON.parse(options.body).keywordGroups.map(group => ({ title: group.groupName, data: fixture.series })) }) };
     if (route === "/shopping/v1/category/keywords" && !fixture.job.collectionScope) return { ok: true, status: 200, headers: { get() { return null; } },
@@ -188,23 +212,40 @@ async function runBackground(t, options) {
       return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ total: value.total, items: value.items }) }; }
     throw new Error(`Unexpected source provider ${route}`);
   });
-  await fixture.load("trend-analysis-background.js").handler({ body: JSON.stringify({ jobId: fixture.job.jobId }) }, { awsRequestId: `${fixture.job.jobId}-request` });
+  let invocationCount = 0;
+  queue.push({ jobId: fixture.job.jobId });
+  await options?.setup?.({ fixture, store, seriesStore, queue });
+  try {
+    while (queue.length) {
+      assert.ok(invocationCount < 128, "Instant continuation must be bounded");
+      await fixture.load("trend-analysis-background.js").handler({ body: JSON.stringify(queue.shift()) },
+        { awsRequestId: `${fixture.job.jobId}-request-${++invocationCount}` });
+      await options?.afterInvocation?.({ fixture, store, seriesStore, queue, invocationCount });
+    }
+  } finally { if (previousUrl === undefined) delete process.env.URL; else process.env.URL = previousUrl; }
   const result = await store.get(`jobs/${fixture.job.jobId}`);
   assert.equal(result.state, "completed", JSON.stringify(result.errors));
   assert.deepEqual(await store.get("last-success/period"), { jobId: "preserved-period439" });
   assert.deepEqual(await fixture.getStore("trend-signal-snapshots").get("latest-valid-v1/period"), { jobId: "preserved-period439", resultCount: 439 });
-  return { fixture, result, calls };
+  const savedKeywords = [];
+  for (const shard of grouped.keys()) {
+    const saved = await seriesStore.get(`shards/v1/${shard}`);
+    for (const [keyword, entry] of Object.entries(saved.entries || {}))
+      if (entry.search?.rawRatioSeries?.at(-1)?.period === "2026-10-15") savedKeywords.push(keyword);
+  }
+  assert.ok(invocationCount > 1, "Actual Instant stages must cross fresh invocation boundaries");
+  return { fixture, result, calls: calls.filter(call => !new URL(call.url).pathname.startsWith("/.netlify/")), invocationCount, savedKeywords };
 }
 
 test("actual restricted Instant worker fetches only Search Trend and reuses cached Shopping/News without Early writes", async t => {
-  const { fixture, result, calls } = await runBackground(t, {});
+  const { fixture, result, calls, savedKeywords } = await runBackground(t, {});
   assert.ok(result.results.length > 0); assert.equal(result.latestDataDate, "2026-10-15");
   assert.equal(result.searchTrendApiCallCount, 1); assert.equal(result.searchTrendHttp200Count, 1);
   assert.equal(result.shoppingInsightApiCallCount, 0); assert.equal(result.newsApiCallCount || 0, 0);
   assert.equal(calls.length, 1); assert.ok(calls.every(call => new URL(call.url).pathname === "/search-trend/v1/search"));
   assert.equal(fixture.earlyWrites, 0); assert.equal(fixture.earlyConfirms, 0);
   for (const row of result.results) { assert.equal(row.shoppingRise, 20); assert.deepEqual(row.news, fixture.news(row.keyword)); assert.ok(row.newsCacheOrigin); }
-  assert.equal(fixture.dirty.length, 3);
+  assert.equal(savedKeywords.length, 3);
 });
 
 test("restricted worker does not request missing Shopping or News, and ordinary provider behavior remains intact", async t => {
@@ -219,4 +260,89 @@ test("restricted worker does not request missing Shopping or News, and ordinary 
     peakRelativeLiftPct: row.peakRelativeLiftPct, peakDailyLift: row.peakDailyLift, estimatedBaseline: row.estimatedBaseline,
     absoluteSurgePassed: row.absoluteSurgePassed, relativeSurgePassed: row.relativeSurgePassed, resultType: row.resultType, matchScore: row.match?.score }));
   assert.deepEqual(metrics(restricted.result.results), metrics(ordinary.result.results));
+});
+
+test("committed frozen inputs recover the initial missing state without rereading current candidates", async t => {
+  let removed = false;
+  const run = await runBackground(t, { afterInvocation: async ({ fixture, store, invocationCount }) => {
+    if (invocationCount !== 1) return;
+    const job = await store.get(`jobs/${fixture.job.jobId}`);
+    assert.ok(job.instantInputsKey); assert.ok(job.instantStateKey);
+    // A process can stop after inputs CAS but before its first state CAS. The
+    // already-written orphan is deliberately retained, as in Blob storage.
+    for (const field of ["instantStateKey", "instantStateHash", "instantStateRevision", "instantStage", "checkpointUpdatedAt"])
+      delete job[field];
+    await store.setJSON(`jobs/${fixture.job.jobId}`, job); removed = true;
+  } });
+  assert.equal(removed, true); assert.equal(run.fixture.candidateReads, 1);
+  assert.equal(run.calls.length, 1); assert.equal(run.result.results.length, 3);
+});
+
+test("saved source receipt resumes cache storage without a second provider request", async t => {
+  let injected = false, resumed = false, receiptSeen = false;
+  const run = await runBackground(t, { setup: async ({ seriesStore }) => {
+    seriesStore.before = async (key, data) => {
+      if (!injected && key.startsWith("shards/") && Object.values(data.entries || {}).some(entry => entry.search?.rawRatioSeries?.at(-1)?.period === "2026-10-15")) {
+        injected = true; throw Object.assign(new Error("fixture cache write interrupted after response receipt"), { code: "INSTANT_CACHE_CONFLICT" });
+      }
+    };
+  }, afterInvocation: async ({ fixture, store, queue }) => {
+    const job = await store.get(`jobs/${fixture.job.jobId}`);
+    if (!resumed && job.state === "interrupted" && job.errorCode === "INSTANT_CACHE_CONFLICT") {
+      const state = await fixture.load("instant-continuation.js").readState(job);
+      receiptSeen = Boolean(state.inflight?.receipt); assert.equal(receiptSeen, true);
+      assert.equal(state.calculationCursor, 0); assert.equal(job.searchTrendApiCallCount, 1);
+      // Simulated authorized resume changes only the in-memory Job status. No
+      // cache, receipt or cursor is discarded and no source request is replayed.
+      await store.setJSON(`jobs/${fixture.job.jobId}`, { ...job, state: "running" });
+      queue.push({ jobId: fixture.job.jobId }); resumed = true;
+    }
+  } });
+  assert.equal(injected && resumed && receiptSeen, true);
+  assert.equal(run.calls.length, 1); assert.equal(run.result.searchTrendApiCallCount, 1);
+  assert.equal(run.savedKeywords.length, 3); assert.ok(run.result.trendCollectedAt);
+  assert.equal(run.result.apiMetrics.searchTrend.keywords, 3);
+});
+
+test("enrichment resumes from saved cursor and restores counters written before state checkpoint", async t => {
+  let injected = false, resumed = false;
+  const run = await runBackground(t, { scope: null, cachedShopping: false, setup: async ({ store }) => {
+    store.before = async (key, value) => {
+      if (!injected && key.includes("/instant-v1/news-results/") && value.label === "news-results") {
+        injected = true; throw new Error("fixture result save interrupted after News accounting");
+      }
+    };
+  }, afterInvocation: async ({ fixture, store, queue }) => {
+    const job = await store.get(`jobs/${fixture.job.jobId}`);
+    if (!resumed && job.state === "interrupted" && injected) {
+      const state = await fixture.load("instant-continuation.js").readState(job);
+      assert.equal(state.stage, "enrichment"); assert.equal(state.enrichmentPhase, "news");
+      assert.equal(job.apiMetrics.news.calls, 1); assert.equal(state.apiMetrics.news.calls, 0);
+      await store.setJSON(`jobs/${fixture.job.jobId}`, { ...job, state: "running" });
+      queue.push({ jobId: fixture.job.jobId }); resumed = true;
+    }
+  } });
+  assert.equal(injected && resumed, true);
+  const news = run.calls.filter(call => new URL(call.url).pathname === "/search/v1/news");
+  assert.equal(news.length, 3); assert.equal(new Set(news.map(call => new URL(call.url).searchParams.get("query"))).size, 3);
+  assert.equal(run.result.newsApiCallCount, 3); assert.equal(run.result.newsHttp200Count, 3);
+  assert.equal(run.result.shoppingInsightApiCallCount, 1);
+});
+
+test("late queued continuation with its ticket resumes after lost acceptance response; unticketed interruption cannot", async t => {
+  let checked = false;
+  const run = await runBackground(t, { lostDispatchResponseOnce: true,
+    afterInvocation: async ({ fixture, store, queue, invocationCount }) => {
+      if (invocationCount !== 1) return;
+      const before = await store.get(`jobs/${fixture.job.jobId}`);
+      assert.equal(before.state, "interrupted"); assert.equal(before.resumable, true);
+      assert.ok(queue[0].continuationTicket); assert.equal(queue[0].continuationTicket, before.continuationDispatch.ticket);
+      await fixture.load("trend-analysis-background.js").handler({ body: JSON.stringify({ jobId: fixture.job.jobId }) },
+        { awsRequestId: "unexpected-unticketed-retry" });
+      assert.deepEqual(await store.get(`jobs/${fixture.job.jobId}`), before);
+      checked = true;
+    } });
+  assert.equal(checked, true); assert.equal(run.result.state, "completed");
+  assert.equal(run.calls.length, 1); assert.equal(run.result.searchTrendApiCallCount, 1);
+  assert.equal(run.fixture.candidateReads, 1); assert.equal(run.result.results.length, 3);
 });

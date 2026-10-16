@@ -78,7 +78,9 @@ test("final accounting writes only metric deltas and cannot double count recorde
   assert.match(background, /recordedMetrics/); assert.match(background, /Number\(current\[key\]/);
 });
 test("stale historical jobs are exposed as interrupted and resumable", () => {
-  assert.match(cache, /state: job\.historicalCollection \? "interrupted"/); assert.match(current, /includeStale: true/);
+  assert.match(cache, /state: job\.historicalCollection \|\| job\.instantStateKey \? "interrupted"/);
+  assert.match(cache, /resumable: Boolean\(job\.historicalCollection \|\| job\.instantStateKey\)/);
+  assert.match(current, /includeStale: true/);
 });
 test("uncertain hard-timeout consumption reduces historical safe availability without fabricating actual usage", () => {
   const usage = { daily: {}, monthly: { searchTrendHistoricalUncertainReserve: 1000 } };
