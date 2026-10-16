@@ -5,7 +5,8 @@ const KEY = "current-v1";
 function connect(event) { if (event?.blobs) connectLambda(event); }
 function store() { return getStore(STORE_NAME); }
 function normalize(value) { return String(value || "").normalize("NFC").toLocaleLowerCase("ko-KR").replace(/[^0-9a-z가-힣]/g, ""); }
-function kstDate(value = Date.now()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date(value)); }
+const kstDateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" });
+function kstDate(value = Date.now()) { return kstDateFormatter.format(new Date(value)); }
 function ratio(delta, previous) { return previous > 0 ? Math.round(delta / previous * 10000) / 100 : null; }
 
 function buildEarlySignals(items, history, now = new Date().toISOString(), options = {}) {
