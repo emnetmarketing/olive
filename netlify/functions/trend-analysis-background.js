@@ -1,6 +1,6 @@
 const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess, writeLastPartial, writeDiagnosticIndex, publishCompletedPeriod,
   claimPeriodWorker, writeOwnedPeriodJob, releasePeriodWorker, writePeriodCheckpoint, readPeriodCheckpoint,
-  writePeriodInputs, readPeriodInputs, readRawJob } = require("./trend-analysis-cache");
+  writePeriodInputs, readPeriodInputs, readRawJob, readLastSuccess } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readMarketDiscoveryCache } = require("./market-discovery-cache");
 const { discoveryPriority } = require("./market-discovery-core");
@@ -175,7 +175,30 @@ async function responseJson(response, name) {
   if (!response.ok) throw new Error(`${name} 호출 실패: HTTP ${response.status} · ${payload.errMsg || payload.errorMessage || payload.message || "응답 오류"}`);
   return payload;
 }
-async function api(path, { method = "GET", params, body, metrics, onMetrics } = {}) {
+function isSearchTrendOnly(job) { return job?.collectionScope === "search-trend-only"; }
+function assertProviderAllowed(path, job) {
+  if (job?.collectionScope === undefined || job?.collectionScope === null) return;
+  if (!isSearchTrendOnly(job) || job.mode !== "instant" || job.fastPath || job.historicalCollection || path !== "/search-trend/v1/search")
+    throw Object.assign(new Error("이 Job은 NAVER Search Trend 외 원천 API 호출을 허용하지 않습니다."), { code: "COLLECTION_SCOPE_BLOCKED" });
+}
+function reuseCachedNews(rows, previousInstant) {
+  if (previousInstant?.mode !== "instant" || previousInstant.state !== "completed") return 0;
+  const previousRows = new Map((previousInstant.results || []).map(row => [normalizeKeyword(row.keyword), row]));
+  let reused = 0;
+  for (const row of rows) {
+    const previous = previousRows.get(normalizeKeyword(row.keyword));
+    if (!previous?.news || typeof previous.news !== "object") continue;
+    row.news = structuredClone(previous.news);
+    row.newsCacheOrigin = { jobId: previousInstant.jobId, latestDataDate: previousInstant.latestDataDate || null,
+      analyzedAt: previousInstant.publishedAt || previousInstant.completedAt || null };
+    reused += 1;
+  }
+  return reused;
+}
+async function api(path, { method = "GET", params, body, metrics, onMetrics, collectionPolicy } = {}) {
+  // Enforce before credentials, usage reservation and dispatch: a scoped Job
+  // cannot spend another provider's quota even if an enrichment branch regresses.
+  assertProviderAllowed(path, collectionPolicy);
   const id = String(process.env.NAVER_CLIENT_ID || "").trim();
   const secret = String(process.env.NAVER_CLIENT_SECRET || "").trim();
   if (!id || !secret) throw new Error("NAVER API HUB 인증정보가 없습니다.");
@@ -800,14 +823,16 @@ exports.handler = async (event, context = {}) => {
       }
       trendCollectedAt = frozenInputs.collectionSummary.trendCollectedAt;
     }
-    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage, loadedEarlyCache] = await Promise.all([
+    const searchTrendOnly = isSearchTrendOnly(job);
+    const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage, loadedEarlyCache, priorInstant] = await Promise.all([
       frozenInputs ? frozenInputs.candidateCache : readCandidateCache(),
       frozenInputs ? frozenInputs.marketCache : readMarketDiscoveryCache().catch(() => null),
       frozenInputs ? frozenInputs.productCache : readProductCache(),
       frozenInputs ? frozenInputs.priorSignalCache : analysisStore().get("signals/current", { type: "json" }).catch(() => null),
       frozenInputs ? { ...frozenInputs.surgeHistoryCache, records: new Map(frozenInputs.surgeHistoryCache.records) } : readSurgeHistory(),
       frozenInputs ? { ...frozenInputs.seriesCache, entries: new Map(frozenInputs.seriesCache.entries) } : readTrendSeriesCache(),
-      readQuotaUsage(), frozenInputs ? frozenInputs.earlyCache : earlySignals.readCache().catch(() => null)
+      readQuotaUsage(), frozenInputs ? frozenInputs.earlyCache : earlySignals.readCache().catch(() => null),
+      searchTrendOnly ? readLastSuccess("instant").catch(() => null) : null
     ]);
     if (job.mode === "instant") for (const type of Object.keys(apiMetrics)) for (const key of metricKeys) {
       const value = Math.max(Number(apiMetrics[type][key] || 0), Number(quotaUsage.jobs?.[job.jobId]?.metricsByType?.[type]?.[key] || 0));
@@ -965,7 +990,7 @@ exports.handler = async (event, context = {}) => {
       const settled = await Promise.allSettled(requestBatch.map((batch) => api("/search-trend/v1/search", { method: "POST", body: {
           startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date",
           keywordGroups: batch.map((item) => ({ groupName: item.keyword, keywords: [item.keyword] }))
-        }, metrics: apiMetrics.searchTrend, onMetrics: () => recordMetricDelta("searchTrend") })));
+        }, metrics: apiMetrics.searchTrend, onMetrics: () => recordMetricDelta("searchTrend"), collectionPolicy: job })));
       internalBudgetStopped ||= settled.some(item => item.status === "rejected" && item.reason?.code === "QUOTA_BUDGET_EXHAUSTED");
       const ownershipError = settled.find(item => item.status === "rejected" && item.reason?.code !== "QUOTA_BUDGET_EXHAUSTED"
         && /^(INSTANT_|PERIOD_|QUOTA_)/.test(item.reason?.code || ""));
@@ -1129,7 +1154,7 @@ exports.handler = async (event, context = {}) => {
     // Slow Path only: enrich the already selected business signals. This keeps
     // Shopping Insight out of the 5,000-candidate fan-out while preserving the
     // existing shoppingRise UI for candidates where data is available.
-    if (!job.fastPath && !job.historicalCollection && rows.length) {
+    if (!job.fastPath && !job.historicalCollection && !searchTrendOnly && rows.length) {
       const candidateByKey = new Map(trendCandidates.map((candidate) => [normalizeKeyword(candidate.keyword), candidate]));
       const shoppingCandidates = rows.map((row) => candidateByKey.get(normalizeKeyword(row.keyword))).filter(Boolean)
         .filter((candidate) => !shoppingMap.has(candidate.keyword));
@@ -1146,7 +1171,7 @@ exports.handler = async (event, context = {}) => {
           const settled = await Promise.allSettled(requestBatch.map((batch) => api("/shopping/v1/category/keywords", { method: "POST", body: {
             startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date", category: CATEGORY_IDS[category],
             keyword: batch.map((item) => ({ name: item.keyword, param: [item.keyword] }))
-          }, metrics: apiMetrics.shoppingInsight, onMetrics: () => recordMetricDelta("shoppingInsight") })));
+          }, metrics: apiMetrics.shoppingInsight, onMetrics: () => recordMetricDelta("shoppingInsight"), collectionPolicy: job })));
           const shoppingBudgetStopped = settled.some(item => item.status === "rejected" && item.reason?.code === "QUOTA_BUDGET_EXHAUSTED");
           const ownershipError = settled.find(item => item.status === "rejected" && item.reason?.code !== "QUOTA_BUDGET_EXHAUSTED"
             && /^(INSTANT_|PERIOD_|QUOTA_)/.test(item.reason?.code || ""));
@@ -1211,11 +1236,12 @@ exports.handler = async (event, context = {}) => {
     addSample("sparsestTrend", samplePool.filter((item) => item.diagnosticRow.nonZeroRatioDays > 0).sort((a, b) => a.diagnosticRow.nonZeroRatioDays - b.diagnosticRow.nonZeroRatioDays)[0]);
     rows.sort((a, b) => Number(b.estimatedSurgeCount || 0) - Number(a.estimatedSurgeCount || 0)
       || Number(b.relativeRatioLift || 0) - Number(a.relativeRatioLift || 0) || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
-    await persist({ message: "상위 급등 검색어 뉴스 확인 중", progress: 90 });
+    const reusedNewsCount = searchTrendOnly ? reuseCachedNews(rows, priorInstant) : 0;
+    await persist({ message: searchTrendOnly ? "저장된 보조 근거로 최신 결과 계산 중 · 추가 원천 호출 없음" : "상위 급등 검색어 뉴스 확인 중", progress: 90 });
     job.currentStage = "news"; job.processedCount = 0; job.totalCount = Math.min(rows.length, 20);
-    const newsResults = job.fastPath || job.historicalCollection ? [] : await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
+    const newsResults = job.fastPath || job.historicalCollection || searchTrendOnly ? [] : await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
       const payload = await api("/search/v1/news", { params: { query: row.keyword, display: 3, start: 1, sort: "date" },
-        metrics: apiMetrics.news, onMetrics: () => recordMetricDelta("news") });
+        metrics: apiMetrics.news, onMetrics: () => recordMetricDelta("news"), collectionPolicy: job });
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
     }));
     newsResults.forEach((result) => { if (result.status === "fulfilled") { const row = rows.find((item) => item.keyword === result.value.keyword); if (row) row.news = result.value; } });
@@ -1265,6 +1291,7 @@ exports.handler = async (event, context = {}) => {
       progress: 99, calculatedAt: new Date().toISOString(), completedAt: new Date().toISOString(), durationMs: Date.now() - started,
       currentStage: "publishing", processedCount: trendCandidates.length, totalCount: trendCandidates.length,
       latestDataDate, sourceFreshness, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
+      ...(searchTrendOnly ? { reusedNewsCount } : {}),
       partialAnalysis, trendAvailableCount, pendingTrendCacheCount, trendCoveragePct,
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
       cacheMissCount: Number(cacheStats?.searchTrend?.misses || 0) + Number(cacheStats?.searchTrend?.stale || 0) + Number(cacheStats?.searchTrend?.windowUnavailable || 0),
@@ -1296,14 +1323,16 @@ exports.handler = async (event, context = {}) => {
         currentStage: "completed", message: "분석 완료", resumable: false });
       return;
     }
-    const discoveryHistory = await readDiscoveryHistory().catch(() => null);
-    await assertInstantWorker(instantLease);
-    const earlyCache = loadedEarlyCache;
-    const confirmedEarlyCache = earlyCache ? earlySignals.confirmSignals(earlyCache, [...analysisTrace.values()], rows, latestDataDate) : null;
-    if (confirmedEarlyCache) await earlySignals.writeCache(confirmedEarlyCache).catch(() => null);
-    if (discoveryHistory) {
-      const signalHistory = mergeSignalHistory(discoveryHistory, rows, job.completedAt);
-      await writeDiscoveryHistory(mergeEarlySignalHistory(signalHistory, confirmedEarlyCache?.history || [], job.completedAt)).catch(() => null);
+    if (!searchTrendOnly) {
+      const discoveryHistory = await readDiscoveryHistory().catch(() => null);
+      await assertInstantWorker(instantLease);
+      const earlyCache = loadedEarlyCache;
+      const confirmedEarlyCache = earlyCache ? earlySignals.confirmSignals(earlyCache, [...analysisTrace.values()], rows, latestDataDate) : null;
+      if (confirmedEarlyCache) await earlySignals.writeCache(confirmedEarlyCache).catch(() => null);
+      if (discoveryHistory) {
+        const signalHistory = mergeSignalHistory(discoveryHistory, rows, job.completedAt);
+        await writeDiscoveryHistory(mergeEarlySignalHistory(signalHistory, confirmedEarlyCache?.history || [], job.completedAt)).catch(() => null);
+      }
     }
     job = await publishInstant(job, { lease: instantLease });
     trace("publication-completed");
@@ -1366,7 +1395,8 @@ exports.handler = async (event, context = {}) => {
 exports._test = { estimate, periodMetrics, instantMetrics, surgePassSignals, similarity, buildIndex: buildProductIndex, bestMatch: findBestMatch,
   evaluateMatch, buildBrandOrCategorySignal, buildDomainRelatedSignal, classifySurgeResult, classifyLowIntensitySignal, hasBusinessDomainEvidence, productBrandToken,
   median, summaryStats, candidateDiagnostic, surgeDiagnostic, analysisPriority, selectAnalysisCandidates, selectWithMarketDiscovery,
-  marketCandidateForAnalysis, ratioOnlyMetrics, domainEvidenceScore, isRecentCandidate, trendFetchPriority, planTrendFetch, collectionTimeExceeded, api };
+  marketCandidateForAnalysis, ratioOnlyMetrics, domainEvidenceScore, isRecentCandidate, trendFetchPriority, planTrendFetch, collectionTimeExceeded, api,
+  isSearchTrendOnly, assertProviderAllowed, reuseCachedNews };
 
 // Pure candidate operations shared with fenced cache-only recovery; never call providers.
 exports.calculation = { calculateNumericCandidate, calculateRatioCandidate, buildProductIndex };

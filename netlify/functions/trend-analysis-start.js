@@ -27,13 +27,14 @@ function analysisQueryStart(mode, start, end) {
 function jobMetadata(job) {
   return { jobId: job?.jobId || null, mode: job?.mode || null, fastPath: Boolean(job?.fastPath),
     historicalCollection: Boolean(job?.historicalCollection), startDate: job?.startDate || null,
-    endDate: job?.endDate || null, queryStartDate: job?.queryStartDate || null, state: job?.state || null };
+    endDate: job?.endDate || null, queryStartDate: job?.queryStartDate || null, state: job?.state || null,
+    ...(job?.collectionScope ? { collectionScope: job.collectionScope } : {}) };
 }
 function matchesRequestedJob(job, request) {
   return Boolean(job && job.mode === request.mode && Boolean(job.fastPath) === Boolean(request.fastPath)
     && Boolean(job.historicalCollection) === Boolean(request.historicalCollection)
     && job.startDate === request.startDate && job.endDate === request.endDate
-    && job.queryStartDate === request.queryStartDate);
+    && job.queryStartDate === request.queryStartDate && (job.collectionScope || null) === (request.collectionScope || null));
 }
 
 async function handle(event, { fastPath = true } = {}) {
@@ -43,6 +44,9 @@ async function handle(event, { fastPath = true } = {}) {
   try {
     const input = JSON.parse(event.body || "{}");
     const mode = input.mode === "instant" ? "instant" : "period";
+    if (input.collectionScope !== undefined && (input.collectionScope !== "search-trend-only" || mode !== "instant" || fastPath))
+      return json(400, { error: "Search Trend 전용 수집은 즉시 분석 Slow Path에서만 사용할 수 있습니다.", errorCode: "INVALID_COLLECTION_SCOPE" });
+    const collectionScope = input.collectionScope;
     const { surgeThreshold, matchThreshold } = await readOperatingSettings();
     let startDate = String(input.startDate || "");
     let endDate = String(input.endDate || "");
@@ -81,7 +85,8 @@ async function handle(event, { fastPath = true } = {}) {
           uncertainUsageReserveCalls: riskCalls, uncertainUsageReservedAt: new Date().toISOString() });
       }
     }
-    const requestedJob = { mode, startDate, endDate, queryStartDate: isoDate(queryStart), fastPath, historicalCollection };
+    const requestedJob = { mode, startDate, endDate, queryStartDate: isoDate(queryStart), fastPath, historicalCollection,
+      ...(collectionScope ? { collectionScope } : {}) };
     const acquired = await acquireJob({ ...requestedJob, surgeThreshold, matchThreshold,
       triggerSource, schedulerExecutionId,
       currentStage: "preparing", processedCount: 0, totalCount: 0 });
@@ -89,7 +94,7 @@ async function handle(event, { fastPath = true } = {}) {
     createdJob = job;
     if (acquired.existing) {
       const metadata = jobMetadata(job);
-      if (historicalCollection && !matchesRequestedJob(job, requestedJob)) return json(409, { error: "요청과 다른 분석 Job이 아직 실행 상태로 보입니다.",
+      if ((historicalCollection || collectionScope) && !matchesRequestedJob(job, requestedJob)) return json(409, { error: "요청과 다른 분석 Job이 아직 실행 상태로 보입니다.",
         errorCode: "INCOMPATIBLE_ACTIVE_JOB", retryable: true, existing: true, ...metadata });
       return json(200, { existing: true, ...metadata,
         message: "동일한 Background 작업이 실행 중입니다. 기존 진행 상태에 연결합니다." });

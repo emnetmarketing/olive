@@ -215,7 +215,7 @@ test("only the same historical job type and exact required window can dedupe", (
 
 test("server rejects an incompatible existing job as a retryable conflict", () => {
   const source = fs.readFileSync("netlify/functions/trend-analysis-start.js", "utf8");
-  assert.match(source, /if \(historicalCollection && !matchesRequestedJob/);
+  assert.match(source, /if \(\(historicalCollection \|\| collectionScope\) && !matchesRequestedJob/);
   assert.match(source, /INCOMPATIBLE_ACTIVE_JOB/);
   assert.match(source, /retryable: true/);
   assert.match(source, /return json\(409/);
@@ -278,6 +278,6 @@ test("historical implementation does not call YouTube Search Ad Shopping or News
   const endpoint = fs.readFileSync("netlify/functions/trend-period-data-collection-start.js", "utf8");
   const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
   assert.doesNotMatch(endpoint, /youtube|keywordstool|shopping|news|search-ad/i);
-  assert.match(background, /!job\.historicalCollection && rows\.length/);
-  assert.match(background, /job\.fastPath \|\| job\.historicalCollection \? \[\]/);
+  assert.match(background, /!job\.historicalCollection && !searchTrendOnly && rows\.length/);
+  assert.match(background, /job\.fastPath \|\| job\.historicalCollection \|\| searchTrendOnly \? \[\]/);
 });
