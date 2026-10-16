@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@netlify/aws-lambda-compat':
+        specifier: 2.0.2
+        version: 2.0.2
       '@netlify/blobs':
         specifier: ^10.0.0
         version: 10.7.12
@@ -30,6 +33,10 @@ packages:
   '@fastify/busboy@3.2.0':
     resolution: {integrity: sha512-m9FVDXU3GT2ITSe0UaMA5rU3QkfC/UXtCU8y0gSN/GugTqtVldOBWIB5V6V3sbmenVZUIpU6f+mPEO2+m5iTaA==}
 
+  '@netlify/aws-lambda-compat@2.0.2':
+    resolution: {integrity: sha512-LAyM6Q/uN4kTGzHAZo7sOT86iJls8QntjQFE9HLetu/cGxD3gmpOXrI+rOfpMtU27JK5P1lktCV/cRp0UeJ3pA==}
+    engines: {node: '>=22.12.0'}
+
   '@netlify/blobs@10.7.12':
     resolution: {integrity: sha512-4YL/MKu0t+gPeIL+GkqBxYVkqh1612Cgw4J5OaF3XIa3HRH/EMsZ7+cssLOE9i4e2pEAI48+BiehoV30b9xPfg==}
     engines: {node: ^14.16.0 || >=16.0.0}
@@ -45,6 +52,10 @@ packages:
   '@netlify/runtime-utils@2.3.0':
     resolution: {integrity: sha512-cW8weDvsKV7zfia2m5EcBy6KILGoPD+eYZ3qWNGnIo05DGF28goPES0xKSDkNYgAF/2rRSIhie2qcBhbGVgSRg==}
     engines: {node: ^18.14.0 || >=20}
+
+  '@netlify/types@3.2.0':
+    resolution: {integrity: sha512-PVvY1EEN9i2Er0LQoiyNG7i/BnwnttLuZqIkBnhL2Jrcj3P5N/NcGkv1i20MJ2ngNGSPQcT7tagDmF3V6BsdWg==}
+    engines: {node: '>=22.12.0'}
 
   '@opentelemetry/api-logs@0.220.0':
     resolution: {integrity: sha512-CmVa4ImJ+ynfrPMNaAXHET6Bhb44SwzmfyVJFq9ni2jgXJR/l7C6gfVFddNmHP+ZOkP9cf4f9DBe68qVLTHc9w==}
@@ -541,6 +552,10 @@ snapshots:
 
   '@fastify/busboy@3.2.0': {}
 
+  '@netlify/aws-lambda-compat@2.0.2':
+    dependencies:
+      '@netlify/types': 3.2.0
+
   '@netlify/blobs@10.7.12':
     dependencies:
       '@netlify/dev-utils': 4.4.7
@@ -577,6 +592,8 @@ snapshots:
       - supports-color
 
   '@netlify/runtime-utils@2.3.0': {}
+
+  '@netlify/types@3.2.0': {}
 
   '@opentelemetry/api-logs@0.220.0':
     dependencies:

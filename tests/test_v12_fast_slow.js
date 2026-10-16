@@ -24,7 +24,7 @@ test("fast analysis cannot schedule external APIs and slow Shopping is deferred 
   const start = fs.readFileSync("netlify/functions/trend-analysis-start.js", "utf8");
   const background = fs.readFileSync("netlify/functions/trend-analysis-background.js", "utf8");
   assert.match(start, /exports\.handler = \(event\) => handle\(event, \{ fastPath: true \}\)/);
-  assert.match(background, /job\.fastPath \? \{ selected: \[\], pending: searchFetchQueue/);
+  assert.match(background, /job\.fastPath \|\| frozenInputs \? \{ selected: \[\], pending: searchFetchQueue/);
   assert.match(background, /if \(!job\.fastPath && !job\.historicalCollection && rows\.length\)/);
   assert.match(background, /const shoppingCandidates = rows\.map/);
   assert.match(background, /const newsResults = job\.fastPath \|\| job\.historicalCollection \? \[\]/);

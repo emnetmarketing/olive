@@ -180,7 +180,7 @@ test("equal generation with a different Job fails rather than overwriting", asyn
 
 test("equal generation cannot silently change an already published result", async () => {
   const store = memoryStore(); await publication.publishPeriod(input(), options(store));
-  const changed = input(); changed.job.results[0].estimatedSurgeCount += 1;
+  const changed = input(); changed.job.results[0].estimatedSurgeCount += 1; changed.snapshot.items[0].estimatedSurgeCount += 1;
   await assert.rejects(publication.publishPeriod(changed, options(store)), { code: "PERIOD_GENERATION_CONFLICT" });
   assert.equal((await publication.readLatest({ store })).job.results[0].estimatedSurgeCount, 1234);
 });
@@ -304,4 +304,92 @@ test("an initial zero-coverage result is readable as analysis but never as a val
   await publication.publishPeriod(empty, options(store));
   assert.equal((await publication.readLatest({ store })).job.jobId, empty.job.jobId);
   assert.equal(await publication.readLatestValid({ store }), null);
+});
+
+test("lease is rechecked after a slow previous-result read before committing latest", async () => {
+  const store = memoryStore();
+  const previous = await publication.publishPeriod(input("previous", 99), options(store));
+  let leaseValid = true;
+  store.before = async (op, key) => {
+    if (op === "get" && key === previous.commit.bodyKey) leaseValid = false;
+  };
+  await assert.rejects(publication.publishPeriod(input("new-period", 100), options(store, {
+    assertLease: async () => leaseValid
+  })), { code: "PERIOD_LEASE_LOST" });
+  store.before = null;
+  assert.equal((await publication.readLatest({ store })).job.jobId, "previous",
+    "a worker whose lease expired while reading previous data must not advance canonical latest");
+  assert.equal(await publication.readPublishedJob("new-period", { store }), null);
+});
+
+test("two concurrent identical publishers produce one canonical commit and one exact result", async () => {
+  const store = memoryStore(); const source = input();
+  const results = await Promise.all([
+    publication.publishPeriod(source, options(store)), publication.publishPeriod(source, options(store))
+  ]);
+  assert.ok(results.every(result => result.job.state === "completed"));
+  assert.equal(store.writes.filter(key => key === publication.LATEST_KEY).length, 1);
+  assert.equal(store.writes.filter(key => key === publication.receiptKey(source.job.jobId)).length, 1);
+  assert.deepEqual((await publication.readPublishedJob(source.job.jobId, { store })).job.results, source.job.results);
+});
+
+test("concurrent conflicting publishers in one generation cannot both be committed", async () => {
+  const store = memoryStore();
+  const results = await Promise.allSettled([
+    publication.publishPeriod(input("first", 100), options(store)),
+    publication.publishPeriod(input("second", 100), options(store))
+  ]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(results.find(result => result.status === "rejected").reason.code, "PERIOD_GENERATION_CONFLICT");
+  const latest = await publication.readLatest({ store });
+  assert.equal(latest.job.jobId, latest.snapshot.jobId);
+  assert.equal(store.writes.filter(key => key === publication.LATEST_KEY).length, 1);
+});
+
+test("failure after immutable snapshot storage can retry without recalculation or row loss", async () => {
+  const store = memoryStore(); const source = input(); let failed = false;
+  store.after = async (op, key) => {
+    if (!failed && op === "set" && key.includes("/snapshot-")) { failed = true; throw Error("response lost after snapshot"); }
+  };
+  await assert.rejects(publication.publishPeriod(source, options(store)), /response lost after snapshot/);
+  assert.equal(await publication.readLatest({ store }), null);
+  store.after = null;
+  const result = await publication.publishPeriod(source, options(store));
+  assert.deepEqual(result.job.results, source.job.results);
+  assert.equal(store.writes.filter(key => key.includes("/body-")).length, 1);
+  assert.equal(store.writes.filter(key => key.includes("/snapshot-")).length, 1);
+});
+
+test("an old same-Job generation cannot replace a newer receipt or canonical body", async () => {
+  const store = memoryStore(); const newer = input("same-job", 200);
+  newer.job.results[0].estimatedSurgeCount = 4321; newer.snapshot.items[0].estimatedSurgeCount = 4321;
+  await publication.publishPeriod(newer, options(store));
+  const result = await publication.publishPeriod(input("same-job", 100), options(store));
+  assert.equal(result.publishedAsLatest, false);
+  assert.equal((await publication.readLatest({ store })).job.results[0].estimatedSurgeCount, 4321);
+  assert.equal((await publication.readPublishedJob("same-job", { store })).job.results[0].estimatedSurgeCount, 4321);
+  assert.equal(store.records.get(publication.receiptKey("same-job")).data.generation, 200);
+});
+
+test("publication refuses contradictory Job and snapshot coverage, dates or partial metadata", async () => {
+  for (const mutate of [
+    value => { value.snapshot.latestDataDate = "2026-10-14"; },
+    value => { value.snapshot.trendCoveragePct = 0; },
+    value => { value.snapshot.partialAnalysis = true; },
+    value => { value.job.surgeThreshold = 300; value.snapshot.surgeThreshold = 500; },
+    value => { value.job.matchThreshold = 40; value.snapshot.matchThreshold = 80; }
+  ]) {
+    const store = memoryStore(); const source = input(); mutate(source);
+    await assert.rejects(publication.publishPeriod(source, options(store)), { code: "INVALID_PERIOD_PUBLICATION" });
+    assert.equal(store.writes.length, 0);
+  }
+});
+
+test("publication rejects mismatched shared surge or confidence values without recomputing them", async () => {
+  for (const field of ["estimatedSurgeCount", "peakDailyLift", "marketConfidenceScore", "periodMarketConfidenceScore"]) {
+    const store = memoryStore(); const source = input();
+    source.job.results[0][field] = 42; source.snapshot.items[0][field] = 43;
+    await assert.rejects(publication.publishPeriod(source, options(store)), { code: "INVALID_PERIOD_PUBLICATION" });
+    assert.equal(store.writes.length, 0);
+  }
 });

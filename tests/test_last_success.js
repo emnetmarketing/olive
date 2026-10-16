@@ -14,18 +14,22 @@ test("partial results have separate pointers and cannot replace full success", (
   assert.deepEqual(lastPartialKeys("instant"), { mode: "last-partial/instant", latest: "last-partial/latest" });
   assert.deepEqual(lastPartialKeys("period"), { mode: "last-partial/period", latest: "last-partial/latest" });
   const source = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "trend-analysis-background.js"), "utf8");
-  assert.match(source, /if \(partialAnalysis\) await writeLastPartial\(job\); else await writeLastSuccess\(job\)/);
+  assert.match(source, /job = await publishInstant\(job\)/);
+  const publication = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "instant-publication.js"), "utf8");
+  assert.match(publication, /const publishLast = completed\.partialAnalysis \? options\.writeLastPartial \|\| analysisCache\.writeLastPartial[\s\S]*options\.writeLastSuccess \|\| analysisCache\.writeLastSuccess/);
 });
 
-test("background analysis publishes last-success only after completion", () => {
+test("Instant completion is committed only after snapshot and last-success are staged and verified", () => {
   const source = fs.readFileSync(
-    path.join(__dirname, "..", "netlify", "functions", "trend-analysis-background.js"),
+    path.join(__dirname, "..", "netlify", "functions", "instant-publication.js"),
     "utf8",
   );
-  const completed = source.indexOf('state: "completed"');
-  const publish = source.indexOf("writeLastSuccess(job)");
-  assert.ok(completed >= 0);
-  assert.ok(publish > completed);
+  const publish = source.indexOf("await publishLast(completed");
+  const snapshotVerify = source.indexOf("digest(storedSnapshot)");
+  const completed = source.indexOf("analysis.setJSON(key, completed");
+  assert.ok(publish >= 0 && snapshotVerify > publish);
+  assert.ok(completed > snapshotVerify);
+  assert.match(source, /requiresCompleted: true, store: analysis, readJob/);
 });
 
 test("frontend restores the latest completed analysis on startup", () => {

@@ -1,5 +1,7 @@
-const { connectLambda, getStore } = require("@netlify/blobs");
+const { getStore } = require("@netlify/blobs");
+const { connectLambda, getCompatibleStore } = require("./blob-store-compat");
 const periodPublication = require("./period-publication");
+const { stagePointer, visiblePointer } = require("./instant-publication");
 const STORE_NAME = "trend-signal-snapshots"; const LATEST_KEY = "latest-v1";
 const LATEST_VALID_KEY = "latest-valid-v1"; const LATEST_ANALYSIS_KEY = "latest-analysis-v1"; const LATEST_COLLECTION_KEY = "latest-collection-v1";
 const MIN_INSTANT_COVERAGE_PCT = 10;
@@ -30,43 +32,55 @@ function buildSnapshot(job) {
     trendCoveragePct: job.trendCoveragePct, partialAnalysis: Boolean(job.partialAnalysis), surgeThreshold: job.surgeThreshold,
     matchThreshold: job.matchThreshold, executionPath: job.fastPath ? "fast" : "slow", items: (job.results || []).map(compactItem) };
 }
-async function writeSnapshot(job) {
+async function writeSnapshot(job, options = {}) {
+  const guarded = options.requiresCompleted === true && job.mode === "instant";
+  const blobStore = options.store || (guarded ? getCompatibleStore({ name: STORE_NAME, consistency: "strong" }) : store());
+  const readJob = options.readJob || (id => getStore("trend-analysis").get(`jobs/${id}`, { type: "json" }));
   const snapshot = buildSnapshot(job);
-  const pointer = { jobId: job.jobId, generatedAt: job.completedAt };
-  await store().setJSON(`snapshots/${job.jobId}`, snapshot);
-  await store().setJSON(modeKey(LATEST_ANALYSIS_KEY, snapshot.mode), pointer);
-  if (snapshot.mode === "instant") await store().setJSON(LATEST_ANALYSIS_KEY, pointer);
+  const pointer = { jobId: job.jobId, generatedAt: job.completedAt,
+    ...(guarded ? { generation: Date.parse(job.createdAt) } : {}) };
+  const writePointer = (key, value = pointer) => guarded ? stagePointer(blobStore, key, value, readJob) : blobStore.setJSON(key, value);
+  await blobStore.setJSON(`snapshots/${job.jobId}`, snapshot);
+  await writePointer(modeKey(LATEST_ANALYSIS_KEY, snapshot.mode));
+  if (snapshot.mode === "instant") await writePointer(LATEST_ANALYSIS_KEY);
   const valid = isValidSnapshot(snapshot);
   let publishedAsLatestValid = false;
   if (snapshot.mode === "period") {
-    if (valid) { await store().setJSON(modeKey(LATEST_VALID_KEY, "period"), pointer); publishedAsLatestValid = true; }
+    if (valid) { await writePointer(modeKey(LATEST_VALID_KEY, "period")); publishedAsLatestValid = true; }
   } else {
-    const previousInstant = await readSnapshotPointer(modeKey(LATEST_VALID_KEY, "instant"));
+    const previousInstant = await readSnapshotPointer(modeKey(LATEST_VALID_KEY, "instant"), { store: blobStore, readJob });
     if (shouldPromoteInstant(snapshot, previousInstant)) {
-      await Promise.all([store().setJSON(modeKey(LATEST_VALID_KEY, "instant"), pointer),
+      await Promise.all([writePointer(modeKey(LATEST_VALID_KEY, "instant")),
         // Legacy aliases remain instant-only for backward compatibility.
-        store().setJSON(LATEST_VALID_KEY, pointer), store().setJSON(LATEST_KEY, pointer)]);
+        writePointer(LATEST_VALID_KEY), writePointer(LATEST_KEY)]);
       publishedAsLatestValid = true;
     }
   }
   // Only a Slow Path job that actually fetched Trend data may advance the
   // collection clock. Fast Path analysis must never masquerade as collection.
-  if (shouldAdvanceCollection(job)) await store().setJSON(LATEST_COLLECTION_KEY, {
+  if (shouldAdvanceCollection(job)) await writePointer(LATEST_COLLECTION_KEY, {
     ...pointer, collectedAt: job.trendCollectedAt || job.completedAt, latestDataDate: job.latestDataDate,
     freshFetchCount: Number(job.freshFetchCount || 0), searchTrendApiCallCount: Number(job.searchTrendApiCallCount || 0),
     triggerSource: job.triggerSource || "admin-manual"
   });
   return { ...snapshot, publishedAsLatestValid };
 }
-async function readPointer(key) { const pointer = await store().get(key, { type: "json" }).catch(() => null); return pointer?.jobId ? pointer : null; }
-async function readSnapshotPointer(key) { const pointer = await readPointer(key); return pointer ? store().get(`snapshots/${pointer.jobId}`, { type: "json" }).catch(() => null) : null; }
+async function readPointer(key, options = {}) {
+  const pointer = await (options.store || store()).get(key, { type: "json" }).catch(() => null);
+  if (!pointer?.jobId) return null;
+  return visiblePointer(pointer, options.readJob || (id => getStore("trend-analysis").get(`jobs/${id}`, { type: "json" })));
+}
+async function readSnapshotPointer(key, options = {}) {
+  const pointer = await readPointer(key, options);
+  return pointer ? (options.store || store()).get(`snapshots/${pointer.jobId}`, { type: "json" }).catch(() => null) : null;
+}
 async function choosePeriodSnapshot(legacy, { validOnly = false } = {}) {
   const published = await (validOnly ? periodPublication.readLatestValid() : periodPublication.readLatest());
   if (!published || validOnly && !isValidSnapshot(published.snapshot)) return legacy;
   if (!legacy) return published.snapshot;
   // Legacy snapshots did not retain createdAt. Read the original Job generation
   // so a late-finishing old worker cannot displace a newer recovery publication.
-  const legacyJob = legacy.createdAt ? null : await getStore("trend-analysis").get(`jobs/${legacy.jobId}`, { type: "json", consistency: "strong" });
+  const legacyJob = legacy.createdAt ? null : await getStore("trend-analysis").get(`jobs/${legacy.jobId}`, { type: "json" });
   const legacyGeneration = Date.parse(legacy.createdAt || legacyJob?.createdAt || legacy.generatedAt || "") || 0;
   return published.commit.generation >= legacyGeneration ? published.snapshot : legacy;
 }
@@ -87,6 +101,6 @@ async function readLatestAnalysis(mode = "instant") {
   const legacy = await readSnapshotPointer(LATEST_ANALYSIS_KEY);
   return legacy?.mode !== "period" ? legacy : null;
 }
-async function readLatestCollection() { return store().get(LATEST_COLLECTION_KEY, { type: "json" }).catch(() => null); }
+async function readLatestCollection() { return readPointer(LATEST_COLLECTION_KEY); }
 module.exports = { connect, writeSnapshot, buildSnapshot, readLatest, readLatestAnalysis, readLatestCollection, compactItem, isValidSnapshot, shouldPromoteInstant,
   shouldAdvanceCollection, modeKey, MIN_INSTANT_COVERAGE_PCT, LATEST_KEY, LATEST_VALID_KEY, LATEST_ANALYSIS_KEY, LATEST_COLLECTION_KEY };

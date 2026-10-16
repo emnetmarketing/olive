@@ -2751,10 +2751,11 @@
         const progressAgeMs = progressUpdatedAt ? Math.max(0, Date.now() - Date.parse(progressUpdatedAt)) : 0;
         const progressAgeMinutes = Math.floor(progressAgeMs / 60000);
         const progressAgeLabel = progressAgeMinutes < 1 ? "방금 전" : `${progressAgeMinutes.toLocaleString("ko-KR")}분 전`;
-        const stalePeriod = job.mode === "period" && job.state === "running" && progressAgeMs >= 12 * 60 * 1000;
-        const livePeriodStatus = job.mode === "period" && job.state === "running"
-          ? stalePeriod ? ` · 계산이 중단된 것으로 보입니다 · 재개 가능 · 마지막 진행 갱신 ${progressAgeLabel}`
-            : ` · 정상 계산 중 · 마지막 진행 갱신 ${progressAgeLabel}` : "";
+        const activePeriod = job.mode === "period" && ["running", "publishing", "recovering"].includes(job.state);
+        const stalePeriod = activePeriod && progressAgeMs >= 12 * 60 * 1000;
+        const livePeriodStatus = activePeriod
+          ? stalePeriod ? ` · ${job.state === "publishing" ? "결과 게시가 중단된 것으로 보입니다" : "계산이 중단된 것으로 보입니다"} · 재개 가능 · 마지막 진행 갱신 ${progressAgeLabel}`
+            : ` · ${job.state === "publishing" ? "계산 완료 · 결과 게시 중" : "정상 계산 중"} · 마지막 진행 갱신 ${progressAgeLabel}` : "";
         $("analysisProgressText").textContent = `${periodText}${started} · ${stageLabels[job.currentStage] || job.message || "분석 중"}${counts} · ${Number(job.progress || 0)}%${livePeriodStatus}`;
         if (["running", "publishing", "recovering"].includes(job.state)) {
           if (stalePeriod) { finishAnalysisControls(); return; }

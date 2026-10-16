@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { getStore } = require("@netlify/blobs");
+const { getCompatibleStore } = require("./blob-store-compat");
 
 const STORE_NAME = "trend-period-recovery";
 const VERSION = 1;
@@ -11,7 +11,7 @@ const PROGRESS_FIELDS = ["totalCount", "ratioTotalCount", "evidenceTotalCount", 
 function recoveryError(code, message) { const error = new Error(message); error.code = code; return error; }
 function hashValue(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function context(deps = {}) {
-  return { store: deps.store || getStore({ name: STORE_NAME, consistency: "strong" }),
+  return { store: deps.store || getCompatibleStore({ name: STORE_NAME, consistency: "strong" }),
     now: deps.now || Date.now, leaseMs: deps.leaseMs || DEFAULT_LEASE_MS,
     uuid: deps.uuid || crypto.randomUUID, frozen: deps.frozen };
 }

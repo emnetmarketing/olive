@@ -72,7 +72,7 @@ async function handle(event, { fastPath = true } = {}) {
     const schedulerExecutionId = input.schedulerExecutionId ? String(input.schedulerExecutionId) : null;
     const historicalCollection = mode === "period" && !fastPath;
     const staleJob = historicalCollection ? await readCurrentJob({ includeStale: true }).catch(() => null) : null;
-    if (staleJob?.stale && staleJob.historicalCollection && !staleJob.uncertainUsageReserved
+    if (staleJob?.stale && staleJob.historicalCollection && !staleJob.workerLease && !staleJob.uncertainUsageReserved
       && ["calculation-matching", "calculation-checkpoint", "interrupted"].includes(staleJob.currentStage)) {
       const riskCalls = Math.min(1000, Math.max(0, Number(staleJob.historicalRequiredCalls || 1000)));
       if (riskCalls) {

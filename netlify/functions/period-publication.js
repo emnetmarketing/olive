@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
-const { connectLambda, getStore } = require("@netlify/blobs");
+const { getStore } = require("@netlify/blobs");
+const { connectLambda, getCompatibleStore } = require("./blob-store-compat");
 
 // Readers use this commit, never a mixture of independently updated legacy
 // pointers. Prepared data is immutable and is not a completed analysis.
@@ -8,7 +9,13 @@ const LATEST_KEY = "latest-v1";
 const VERSION = 1;
 const MAX_COMMIT_ATTEMPTS = 5;
 function connect(event) { if (event?.blobs) connectLambda(event); }
-function store() { return getStore({ name: STORE_NAME, consistency: "strong" }); }
+// Published payloads are immutable and hash-verified. Public GETs may observe an
+// older complete commit while edge caches propagate; they must never require a
+// strong-only transport that legacy Lambda contexts do not provide. Mutations
+// use a separate strong store and fail closed if that transport is unavailable.
+function store({ writable = false } = {}) {
+  return writable ? getCompatibleStore({ name: STORE_NAME, consistency: "strong" }) : getStore(STORE_NAME);
+}
 function error(code, message) { return Object.assign(new Error(message), { code }); }
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -37,8 +44,8 @@ function assertCommit(commit) {
 async function readCommitted(commit, blobStore) {
   assertCommit(commit);
   const [body, snapshot] = await Promise.all([
-    blobStore.get(commit.bodyKey, { type: "json", consistency: "strong" }),
-    blobStore.get(commit.snapshotKey, { type: "json", consistency: "strong" })
+    blobStore.get(commit.bodyKey, { type: "json" }),
+    blobStore.get(commit.snapshotKey, { type: "json" })
   ]);
   if (!body || !snapshot || digest(body) !== commit.bodyHash || digest(snapshot) !== commit.snapshotHash
     || body.jobId !== commit.jobId || snapshot.jobId !== commit.jobId || body.mode !== "period" || snapshot.mode !== "period") {
@@ -50,7 +57,7 @@ async function readCommitted(commit, blobStore) {
 }
 async function readLatest(options = {}) {
   const blobStore = options.store || store();
-  const commit = await blobStore.get(LATEST_KEY, { type: "json", consistency: "strong" });
+  const commit = await blobStore.get(LATEST_KEY, { type: "json" });
   return commit ? readCommitted(commit, blobStore) : null;
 }
 async function readLatestKind(options = {}) {
@@ -77,8 +84,8 @@ async function readLatestValid(options = {}) {
 async function readPublishedJob(jobId, options = {}) {
   const blobStore = options.store || store();
   const [receipt, latest] = await Promise.all([
-    blobStore.get(receiptKey(jobId), { type: "json", consistency: "strong" }),
-    blobStore.get(LATEST_KEY, { type: "json", consistency: "strong" })
+    blobStore.get(receiptKey(jobId), { type: "json" }),
+    blobStore.get(LATEST_KEY, { type: "json" })
   ]);
   // A crash after the single latest commit but before the per-job receipt must
   // still expose the correctly published result without writing during a GET.
@@ -89,17 +96,22 @@ async function readPublishedJob(jobId, options = {}) {
 
 async function publishPeriod(input, options = {}) {
   const { job, snapshot, generation, leaseToken } = input || {};
+  const metadataFields = ["latestDataDate", "trendCoveragePct", "surgeThreshold", "matchThreshold"];
+  const rowFields = ["estimatedSurgeCount", "peakDailyLift", "peakRelativeLiftPct", "marketConfidenceScore", "periodMarketConfidenceScore"];
+  const conflictingMetadata = metadataFields.some(key => job?.[key] !== undefined && snapshot?.[key] !== undefined
+    && job[key] !== snapshot[key]) || Boolean(job?.partialAnalysis) !== Boolean(snapshot?.partialAnalysis);
   if (job?.mode !== "period" || snapshot?.mode !== "period" || !job.jobId || snapshot.jobId !== job.jobId
     || !Array.isArray(job.results) || !Array.isArray(snapshot.items)
     || !Number.isSafeInteger(generation) || generation < 0
     || snapshot.startDate !== job.startDate || snapshot.endDate !== job.endDate
     || snapshot.queryStartDate !== job.queryStartDate || snapshot.items.length !== job.results.length
-    || job.resultCount != null && Number(job.resultCount) !== job.results.length
-    || snapshot.items.some((item, index) => item.keyword !== job.results[index].keyword || item.resultType !== job.results[index].resultType)) {
+    || job.resultCount != null && Number(job.resultCount) !== job.results.length || conflictingMetadata
+    || snapshot.items.some((item, index) => item.keyword !== job.results[index].keyword || item.resultType !== job.results[index].resultType
+      || rowFields.some(key => item[key] !== undefined && job.results[index][key] !== undefined && item[key] !== job.results[index][key]))) {
     throw error("INVALID_PERIOD_PUBLICATION", "Period publication requires matching, complete result and snapshot payloads.");
   }
   if (typeof options.assertLease !== "function") throw error("PERIOD_LEASE_REQUIRED", "A current worker lease must guard period publication.");
-  const blobStore = options.store || store();
+  const blobStore = options.store || store({ writable: true });
   const guard = async (phase) => {
     if (await options.assertLease({ jobId: job.jobId, generation, leaseToken, phase }) === false)
       throw error("PERIOD_LEASE_LOST", "Period publication worker no longer owns its lease.");
@@ -160,6 +172,9 @@ async function publishPeriod(input, options = {}) {
     }
     const next = { ...manifest, publishedAt, ...(otherKind ? { otherKind } : {}), ...(previousValid ? { previousValid } : {}) };
     const condition = current?.etag ? { onlyIfMatch: current.etag } : { onlyIfNew: true };
+    // Reading a previous large result may outlive this worker's lease. Recheck
+    // immediately before the conditional publication, not only before reads.
+    await guard("commit-latest-write");
     const result = await blobStore.setJSON(LATEST_KEY, next, condition);
     if (result?.modified) { committed = next; publishedAsLatest = true; break; }
   }

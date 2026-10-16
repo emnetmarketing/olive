@@ -58,9 +58,32 @@ test("dashboard and Excel use the same current Period Job identity", () => {
 test("running Period jobs show recent progress while stale jobs are distinct", () => {
   assert.match(html, /job\.updatedAt \|\| job\.progressUpdatedAt/);
   assert.match(html, /progressAgeMs >= 12 \* 60 \* 1000/);
-  assert.match(html, /정상 계산 중 · 마지막 진행 갱신/);
-  assert.match(html, /계산이 중단된 것으로 보입니다 · 재개 가능/);
-  assert.match(html, /job\.mode === "period" && job\.state === "running"/);
+  assert.match(html, /정상 계산 중/);
+  assert.match(html, /마지막 진행 갱신/);
+  assert.match(html, /계산이 중단된 것으로 보입니다/);
+  assert.match(html, /재개 가능 · 마지막 진행 갱신/);
+  assert.match(html, /job\.mode === "period" && \["running", "publishing", "recovering"\]\.includes\(job\.state\)/);
+});
+
+test("running, recovering and publishing all stop live polling after the same stale threshold", () => {
+  const start = html.indexOf("const progressUpdatedAt = job.updatedAt");
+  const end = html.indexOf('$("analysisProgressText").textContent', start);
+  assert.ok(start > 0 && end > start);
+  const evaluate = new Function("job", "Date", `${html.slice(start, end)} return { stalePeriod, livePeriodStatus };`);
+  const now = Date.parse("2026-10-16T07:00:00Z");
+  const fixedDate = { now: () => now, parse: Date.parse };
+  for (const state of ["running", "recovering", "publishing"]) {
+    const recent = evaluate({ mode: "period", state, updatedAt: new Date(now - 2 * 60000).toISOString() }, fixedDate);
+    assert.equal(recent.stalePeriod, false);
+    assert.match(recent.livePeriodStatus, /마지막 진행 갱신 2분 전/);
+    assert.match(recent.livePeriodStatus, state === "publishing" ? /계산 완료 · 결과 게시 중/ : /정상 계산 중/);
+    const stale = evaluate({ mode: "period", state, updatedAt: new Date(now - 13 * 60000).toISOString() }, fixedDate);
+    assert.equal(stale.stalePeriod, true);
+    assert.match(stale.livePeriodStatus, /중단된 것으로 보입니다 · 재개 가능/);
+    assert.match(stale.livePeriodStatus, state === "publishing" ? /결과 게시가 중단/ : /계산이 중단/);
+  }
+  assert.equal(evaluate({ mode: "period", state: "completed", updatedAt: "2020-01-01" }, fixedDate).stalePeriod, false);
+  assert.equal(evaluate({ mode: "instant", state: "running", updatedAt: "2020-01-01" }, fixedDate).stalePeriod, false);
 });
 
 test("period dashboard change is display-only and keeps collection and instant paths", () => {

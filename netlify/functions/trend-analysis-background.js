@@ -1,10 +1,12 @@
-const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess, writeLastPartial, writeDiagnosticIndex, publishCompletedPeriod } = require("./trend-analysis-cache");
+const { connect, store: analysisStore, readJob, writeJob, writeLastSuccess, writeLastPartial, writeDiagnosticIndex, publishCompletedPeriod,
+  claimPeriodWorker, writeOwnedPeriodJob, releasePeriodWorker, writePeriodCheckpoint, readPeriodCheckpoint,
+  writePeriodInputs, readPeriodInputs, readRawJob } = require("./trend-analysis-cache");
 const { readCandidateCache } = require("./keyword-candidate-cache");
 const { readCache: readMarketDiscoveryCache } = require("./market-discovery-cache");
 const { discoveryPriority } = require("./market-discovery-core");
 const { readCache: readProductCache } = require("./search-ad-cache");
 const { connect: connectTrendCache, readCache: readTrendSeriesCache, lookup: lookupTrendSeries,
-  upsert: upsertTrendSeries, writeDirty: writeDirtyTrendSeries } = require("./trend-series-cache");
+  upsert: upsertTrendSeries, writeDirty: writeDirtyTrendSeries, normalizedKeyword: normalizeCacheKeyword } = require("./trend-series-cache");
 const { connect: connectQuota, readUsage: readQuotaUsage, statusFor: quotaStatusFor, recordUsageBatch: recordQuotaUsageBatch,
   historicalRemaining } = require("./trend-api-quota");
 const { candidateTier, isDueForCollection, priorityWeight } = require("./trend-collection-policy");
@@ -15,6 +17,7 @@ const { calculateMarketConfidence } = require("./market-confidence");
 const { buildPeriodMarketEvidence, calculatePeriodMarketConfidence } = require("./period-market-evidence");
 const schedulerExecutions = require("./trend-scheduler-execution-cache");
 const historicalContinuation = require("./historical-continuation");
+const { publishInstant, patchInstantPublication } = require("./instant-publication");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
   detectVerifiedBrandProductContext } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
@@ -621,12 +624,27 @@ function calculateRatioCandidate(candidate, context) {
     resultType: "ratio_only_market_signal", surgeSignalType: "ratio_only", relatedSignal: evidenceSignal, marketEvidence: candidate.marketEvidence || [] });
 }
 
-exports.handler = async (event) => {
+exports.handler = async (event, context = {}) => {
   connect(event); connectTrendCache(event); connectQuota(event); connectSnapshot(event); schedulerExecutions.connect(event);
   let input; try { input = JSON.parse(event.body || "{}"); } catch { return; }
   let job = await readJob(input.jobId) || input.job;
-  if (!job?.jobId || job.state !== "running") return;
-  const persist = async (patch) => { job = { ...job, ...patch, updatedAt: new Date().toISOString() }; await writeJob(job.jobId, job); };
+  if (job?.mode === "period") job = await readRawJob(job.jobId, { forMutation: true });
+  if (!job?.jobId || !["running", "publishing", "publication_failed"].includes(job.state)) return;
+  let workerLease = null;
+  const invocationId = context.awsRequestId || context.requestId || require("node:crypto").randomUUID();
+  const trace = (name, details = {}) => console.log(JSON.stringify({ event: name, jobId: job.jobId, invocationId,
+    generation: workerLease?.fence || null, continuation: job.continuationCount || 0,
+    stage: job.currentStage, cursor: job.calculationCursor || 0, at: new Date().toISOString(), ...details }));
+  if (job.mode === "period") {
+    const claimed = await claimPeriodWorker(job.jobId, { owner: invocationId });
+    if (!claimed.claimed) { trace("worker-skipped", { reason: claimed.reason }); return; }
+    job = claimed.job; workerLease = claimed.lease;
+  }
+  trace("invocation-entered");
+  const persist = async (patch) => {
+    if (job.mode === "period") job = await writeOwnedPeriodJob(workerLease, patch);
+    else { job = { ...job, ...patch, updatedAt: new Date().toISOString() }; await writeJob(job.jobId, job); }
+  };
   const started = Date.now();
   let seriesCache = null; const dirtyTrendKeys = new Set();
   let cacheStats = null;
@@ -664,17 +682,68 @@ exports.handler = async (event) => {
   const invokeContinuation = async (patch = {}) => {
     const continuationCount = Number(job.continuationCount || 0) + 1;
     if (continuationCount > historicalContinuation.MAX_CONTINUATIONS) throw new Error("Historical continuation 최대 횟수를 초과했습니다.");
-    await persist({ ...patch, continuationCount, continuationRequestedAt: new Date().toISOString(), resumable: true });
+    const next = { ...patch, continuationCount, continuationRequestedAt: new Date().toISOString(), resumable: true };
+    if (workerLease) job = await releasePeriodWorker(workerLease, next);
+    else if (job.mode === "instant" && job.currentStage === "publishing" && Array.isArray(job.results)) {
+      job = (await patchInstantPublication(job.jobId, next)).job;
+      if (job.state === "completed") { trace("continuation-skipped-already-published"); return; }
+    } else await persist(next);
+    trace("continuation-requested");
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
-    const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId })
-    });
-    if (!response.ok && response.status !== 202) throw new Error(`Historical continuation 시작 실패: HTTP ${response.status}`);
+    try {
+      const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId }),
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!response.ok && response.status !== 202) throw new Error(`Historical continuation 시작 실패: HTTP ${response.status}`);
+      trace("continuation-accepted", { httpStatus: response.status });
+    } catch (error) {
+      // The next worker may already have entered even when this HTTP response
+      // was lost. Only reacquire an unowned Job before recording failure.
+      if (workerLease) {
+        const claimed = await claimPeriodWorker(job.jobId, { owner: invocationId });
+        if (!claimed.claimed) { trace("continuation-response-unknown-worker-active"); return; }
+        job = claimed.job; workerLease = claimed.lease;
+      }
+      throw error;
+    }
   };
   try {
+    // Saved calculation is retried at publication only, before any cache or
+    // provider work. A verified publication is the user-visible completion.
+    if (job.mode === "period" && job.currentStage === "publishing" && Array.isArray(job.results)) {
+      await publishCompletedPeriod(job, buildSnapshot(job), { lease: workerLease });
+      trace("publication-completed");
+      await releasePeriodWorker(workerLease, { state: "completed", publicationState: "published", progress: 100,
+        currentStage: "completed", message: "분석 완료", resumable: false });
+      return;
+    }
+    if (job.mode === "instant" && job.currentStage === "publishing" && Array.isArray(job.results)) {
+      job = await publishInstant(job);
+      trace("publication-completed");
+      if (job.schedulerExecutionId) await schedulerExecutions.updateById(job.schedulerExecutionId, { state: "completed", stage: "completed",
+        jobId: job.jobId, completedAt: job.completedAt, latestDataDate: job.latestDataDate,
+        trendCoveragePct: job.trendCoveragePct, searchTrendApiCallCount: job.searchTrendApiCallCount }).catch(() => null);
+      return;
+    }
+    const frozenInputs = job.mode === "period" ? await readPeriodInputs(job) : null;
+    if (frozenInputs && frozenInputs.calculationVersion !== CALCULATION_VERSION)
+      throw Object.assign(new Error("Saved period calculation inputs are incompatible."), { code: "PERIOD_INPUT_VERSION" });
+    if (frozenInputs?.collectionSummary) {
+      for (const type of ["searchTrend", "shoppingInsight"]) {
+        Object.assign(apiMetrics[type], frozenInputs.collectionSummary.apiMetrics[type]);
+        Object.assign(recordedMetrics[type], apiMetrics[type]);
+      }
+      trendCollectedAt = frozenInputs.collectionSummary.trendCollectedAt;
+    }
     const [candidateCache, marketCache, productCache, priorSignalCache, surgeHistoryCache, loadedSeriesCache, quotaUsage, loadedEarlyCache] = await Promise.all([
-      readCandidateCache(), readMarketDiscoveryCache().catch(() => null), readProductCache(), analysisStore().get("signals/current", { type: "json" }).catch(() => null), readSurgeHistory(),
-      readTrendSeriesCache(), readQuotaUsage(), earlySignals.readCache().catch(() => null)
+      frozenInputs ? frozenInputs.candidateCache : readCandidateCache(),
+      frozenInputs ? frozenInputs.marketCache : readMarketDiscoveryCache().catch(() => null),
+      frozenInputs ? frozenInputs.productCache : readProductCache(),
+      frozenInputs ? frozenInputs.priorSignalCache : analysisStore().get("signals/current", { type: "json" }).catch(() => null),
+      frozenInputs ? { ...frozenInputs.surgeHistoryCache, records: new Map(frozenInputs.surgeHistoryCache.records) } : readSurgeHistory(),
+      frozenInputs ? { ...frozenInputs.seriesCache, entries: new Map(frozenInputs.seriesCache.entries) } : readTrendSeriesCache(),
+      readQuotaUsage(), frozenInputs ? frozenInputs.earlyCache : earlySignals.readCache().catch(() => null)
     ]);
     seriesCache = loadedSeriesCache;
     const priorSignals = new Map((priorSignalCache?.items || []).map((item) => [item.keyword, item]));
@@ -688,7 +757,7 @@ exports.handler = async (event) => {
     const unknownCandidates = allCandidates.filter((item) => item.category === "unknown");
     const monthlyPresent = allCandidates.filter((item) => item.monthlyTotalSearches !== null && item.monthlyTotalSearches !== undefined && Number.isFinite(Number(item.monthlyTotalSearches)));
     const eligibleBeforeLimit = relevantCandidates.filter((item) => Number(item.monthlyTotalSearches || 0) >= job.surgeThreshold);
-    const selection = selectWithMarketDiscovery(eligibleBeforeLimit, marketCache?.items || [], priorSignals);
+    const selection = frozenInputs?.selection || selectWithMarketDiscovery(eligibleBeforeLimit, marketCache?.items || [], priorSignals);
     const eligible = selection.selected;
     const ratioOnlyCandidates = selection.ratioOnly;
     const excludedByLimit = selection.excluded;
@@ -772,9 +841,10 @@ exports.handler = async (event) => {
       searchQuota = { ...searchQuota, budgetMode: "historical", historical,
         remaining: Math.min(searchQuota.monthlyRemaining, historical.remaining), dailyRemaining: historical.remaining };
     }
-    const searchPlan = job.fastPath ? { selected: [], pending: searchFetchQueue, callBudget: 0, expectedCalls: 0 }
+    const searchPlan = job.fastPath || frozenInputs ? { selected: [], pending: searchFetchQueue, callBudget: 0, expectedCalls: 0 }
       : planTrendFetch(searchFetchQueue, searchQuota);
-    historicalRequiredCalls = job.historicalCollection ? Math.ceil(searchFetchQueue.length / 5) : 0;
+    historicalRequiredCalls = frozenInputs?.collectionSummary?.historicalRequiredCalls
+      ?? (job.historicalCollection ? Math.ceil(searchFetchQueue.length / 5) : 0);
     historicalSafeAvailableCalls = job.historicalCollection ? Number(searchQuota.historical?.remaining || 0) : 0;
     historicalSafetyLimited = job.historicalCollection && historicalRequiredCalls > historicalSafeAvailableCalls;
     const pendingTrendKeys = new Set(searchPlan.pending.map((candidate) => normalizeKeyword(candidate.keyword)));
@@ -869,7 +939,16 @@ exports.handler = async (event) => {
         : trace.trendWaitReason === "provider_quota_wait" ? "NAVER API 429/공식 quota 제한 대기"
           : trace.trendWaitReason === "internal_budget_wait" ? "내부 일일 Trend budget 소진 대기" : "Fast Path Trend 캐시 대기";
     }
-    if (job.historicalCollection && job.continuationPhase !== "calculation") {
+    if (job.mode === "period" && !frozenInputs) {
+      const selectedCacheKeys = new Set(trendCandidates.map(c => normalizeCacheKeyword(c.keyword)));
+      job = await writePeriodInputs(workerLease, { calculationVersion: CALCULATION_VERSION,
+        candidateCache, marketCache, productCache, priorSignalCache, selection,
+        surgeHistoryCache: { ...surgeHistoryCache, records: [...surgeHistoryCache.records] },
+        seriesCache: { ...seriesCache, entries: [...seriesCache.entries].filter(([key]) => selectedCacheKeys.has(key)) },
+        earlyCache: loadedEarlyCache,
+        collectionSummary: { apiMetrics, trendCollectedAt, historicalRequiredCalls } });
+    }
+    if (job.mode === "period" && job.continuationPhase !== "calculation") {
       await recordObservedUsage();
       try {
         await invokeContinuation({ continuationPhase: "calculation", currentStage: "calculation-checkpoint",
@@ -887,30 +966,36 @@ exports.handler = async (event) => {
     job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
     const productIndex = buildProductIndex(productCache.items);
     const checkpointKey = historicalContinuation.checkpointKey(job);
-    const loadedCheckpoint = job.historicalCollection
-      ? await analysisStore().get(checkpointKey, { type: "json" }).catch(() => null) : null;
+    const loadedCheckpoint = job.mode === "period" ? await readPeriodCheckpoint(job)
+      || (job.historicalCollection ? await analysisStore().get(checkpointKey, { type: "json" }).catch(() => null) : null) : null;
     const checkpoint = historicalContinuation.isCompatible(loadedCheckpoint, job, eligible) ? loadedCheckpoint : null;
+    if (job.calculationCheckpointKey && !checkpoint)
+      throw Object.assign(new Error("Saved period checkpoint does not match the frozen inputs."), { code: "PERIOD_CHECKPOINT_INCOMPATIBLE" });
     if (checkpoint?.funnel) for (const [key, value] of Object.entries(checkpoint.funnel)) funnel[key] = value;
     if (checkpoint?.analysisTrace) for (const trace of checkpoint.analysisTrace) analysisTrace.set(trace.normalizedKeyword, trace);
     const rows = checkpoint?.rows || []; const calculated = checkpoint?.calculated || [];
     const matchedDiagnostics = checkpoint?.matchedDiagnostics || []; const boundaryRelated = checkpoint?.boundaryRelated || [];
     const calculationContext = { job, trendMap, analysisTrace, funnel, calculated, productCache, productIndex, shoppingMap, loadedEarlyCache, rows, matchedDiagnostics, boundaryRelated, priorSignals };
     let calculationProcessed = Number(checkpoint?.calculationCursor || 0);
+    let ratioProcessed = Number(checkpoint?.ratioCursor || 0);
+    let evidenceProcessed = Number(checkpoint?.evidenceCursor || 0);
     const invocationStartCursor = calculationProcessed;
     const persistCalculationCheckpoint = async () => {
       const value = { version: historicalContinuation.CHECKPOINT_VERSION, jobId: job.jobId,
         selectedStartDate: job.startDate, selectedEndDate: job.endDate, queryStartDate: job.queryStartDate,
         requiredWindow: `${job.queryStartDate}:${job.endDate}`, calculationCursor: calculationProcessed,
+        ratioCursor: ratioProcessed, evidenceCursor: evidenceProcessed,
         eligibleKeywords: eligible.map((item) => item.keyword),
         processedCount: calculationProcessed, totalCount: eligible.length, rows, calculated, matchedDiagnostics,
         boundaryRelated, funnel, analysisTrace: [...analysisTrace.values()], updatedAt: new Date().toISOString() };
-      await analysisStore().setJSON(checkpointKey, value);
+      job = await writePeriodCheckpoint(workerLease, value);
+      trace("checkpoint-saved", { ratioCursor: ratioProcessed, evidenceCursor: evidenceProcessed });
       await persist({ currentStage: "calculation-matching", calculationCursor: calculationProcessed,
         processedCount: calculationProcessed, totalCount: eligible.length, checkpointKey,
         progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14) });
     };
     for (const candidate of eligible.slice(calculationProcessed)) {
-      if (job.historicalCollection && calculationProcessed > invocationStartCursor
+      if (job.mode === "period" && calculationProcessed > invocationStartCursor
         && (calculationProcessed % 500 === 0 || historicalContinuation.shouldContinue({ startedAt: started,
           cursor: calculationProcessed, invocationStartCursor, totalCount: eligible.length }))) {
         await persistCalculationCheckpoint();
@@ -926,15 +1011,17 @@ exports.handler = async (event) => {
       }
       calculationProcessed += 1;
       if (calculationProcessed % 500 === 0) {
-        if (!job.historicalCollection) await persist({ currentStage: "calculation-matching", processedCount: calculationProcessed,
+        if (job.mode !== "period") await persist({ currentStage: "calculation-matching", processedCount: calculationProcessed,
           totalCount: eligible.length, progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14) });
       }
       calculateNumericCandidate(candidate, calculationContext);
     }
-    if (job.historicalCollection) await persistCalculationCheckpoint();
-    for (const candidate of ratioOnlyCandidates) {
+    if (job.mode === "period") await persistCalculationCheckpoint();
+    for (const candidate of ratioOnlyCandidates.slice(ratioProcessed)) {
       calculateRatioCandidate(candidate, calculationContext);
+      ratioProcessed += 1;
     }
+    if (job.mode === "period") await persistCalculationCheckpoint();
     // Slow Path only: enrich the already selected business signals. This keeps
     // Shopping Insight out of the 5,000-candidate fan-out while preserving the
     // existing shoppingRise UI for candidates where data is available.
@@ -1017,7 +1104,7 @@ exports.handler = async (event) => {
       return { keyword: row.keyword, total: Number(payload.total || 0), items: (payload.items || []).slice(0, 3) };
     }));
     newsResults.forEach((result) => { if (result.status === "fulfilled") { const row = rows.find((item) => item.keyword === result.value.keyword); if (row) row.news = result.value; } });
-    for (const row of rows) {
+    for (const row of rows.slice(evidenceProcessed)) {
       if (job.mode === "period") {
         row.periodMarketEvidence = buildPeriodMarketEvidence(row.keyword, job.startDate, job.endDate, loadedEarlyCache?.history || []);
         Object.assign(row, calculatePeriodMarketConfidence(row, row.periodMarketEvidence, job.surgeThreshold));
@@ -1026,6 +1113,15 @@ exports.handler = async (event) => {
         row.marketConfidenceReasons = row.periodMarketConfidenceReasons;
         row.marketConfidenceComponents = row.periodMarketConfidenceComponents;
       } else Object.assign(row, calculateMarketConfidence(row, job.surgeThreshold));
+      evidenceProcessed += 1;
+      if (job.mode === "period" && evidenceProcessed % 50 === 0) {
+        await persistCalculationCheckpoint();
+        if (Date.now() - started >= historicalContinuation.SAFE_EXECUTION_MS && evidenceProcessed < rows.length) {
+          await invokeContinuation({ continuationPhase: "calculation", currentStage: "period-evidence",
+            message: "기간 근거 checkpoint 저장 · 다음 구간 자동 계속" });
+          return;
+        }
+      }
     }
     const latestDataDate = [...trendMap.values()].flatMap((data) => (data || []).map((point) => point.period)).filter(Boolean).sort().at(-1) || null;
     const resultByKeyword = new Map(rows.map((row) => [normalizeKeyword(row.keyword), row]));
@@ -1043,9 +1139,9 @@ exports.handler = async (event) => {
     if (!partialAnalysis && job.mode === "instant") await analysisStore().setJSON("signals/current", { updatedAt: new Date().toISOString(), mode: job.mode,
       items: calculated.map((entry) => ({ keyword: entry.candidate.keyword, estimatedSurgeCount: Math.round(entry.metrics.surgeCount),
         endLift: Math.round(entry.metrics.endLift), peakLift: Math.round(entry.metrics.peakLift), latestDataDate: entry.metrics.latestPeriod })) });
-    await persist({ state: job.mode === "period" ? "publishing" : "completed", message: job.mode === "period" ? "계산 완료 · 결과 게시 중" : "분석 완료",
-      progress: job.mode === "period" ? 99 : 100, completedAt: new Date().toISOString(), durationMs: Date.now() - started,
-      currentStage: job.mode === "period" ? "publishing" : "completed", processedCount: trendCandidates.length, totalCount: trendCandidates.length,
+    await persist({ state: "publishing", message: "계산 완료 · 결과 게시 중",
+      progress: 99, calculatedAt: new Date().toISOString(), completedAt: new Date().toISOString(), durationMs: Date.now() - started,
+      currentStage: "publishing", processedCount: trendCandidates.length, totalCount: trendCandidates.length,
       latestDataDate, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
       partialAnalysis, trendAvailableCount, pendingTrendCacheCount, trendCoveragePct,
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),
@@ -1072,13 +1168,12 @@ exports.handler = async (event) => {
     if (job.mode === "period") {
       // The verified publication commit is the only completion boundary. A
       // failed publish preserves the calculated body and can retry without APIs.
-      await publishCompletedPeriod(job, buildSnapshot(job));
+      await publishCompletedPeriod(job, buildSnapshot(job), { lease: workerLease });
+      trace("publication-completed");
+      await releasePeriodWorker(workerLease, { state: "completed", publicationState: "published", progress: 100,
+        currentStage: "completed", message: "분석 완료", resumable: false });
       return;
     }
-    await writeSnapshot(job);
-    if (job.schedulerExecutionId) await schedulerExecutions.updateById(job.schedulerExecutionId, { state: "completed", stage: "completed",
-      jobId: job.jobId, completedAt: job.completedAt, latestDataDate: job.latestDataDate,
-      trendCoveragePct: job.trendCoveragePct, searchTrendApiCallCount: job.searchTrendApiCallCount }).catch(() => null);
     const discoveryHistory = await readDiscoveryHistory().catch(() => null);
     const earlyCache = loadedEarlyCache;
     const confirmedEarlyCache = earlyCache ? earlySignals.confirmSignals(earlyCache, [...analysisTrace.values()], rows, latestDataDate) : null;
@@ -1087,11 +1182,37 @@ exports.handler = async (event) => {
       const signalHistory = mergeSignalHistory(discoveryHistory, rows, job.completedAt);
       await writeDiscoveryHistory(mergeEarlySignalHistory(signalHistory, confirmedEarlyCache?.history || [], job.completedAt)).catch(() => null);
     }
-    if (partialAnalysis) await writeLastPartial(job); else await writeLastSuccess(job);
+    job = await publishInstant(job);
+    trace("publication-completed");
+    if (job.schedulerExecutionId) await schedulerExecutions.updateById(job.schedulerExecutionId, { state: "completed", stage: "completed",
+      jobId: job.jobId, completedAt: job.completedAt, latestDataDate: job.latestDataDate,
+      trendCoveragePct: job.trendCoveragePct, searchTrendApiCallCount: job.searchTrendApiCallCount }).catch(() => null);
   } catch (error) {
+    trace("invocation-error", { errorCode: error.code || "BACKGROUND_FAILED" });
+    if (["PERIOD_WORKER_LOST", "PERIOD_WORKER_REQUIRED", "PERIOD_WRITE_CONFLICT", "INSTANT_WRITE_PROTECTED"].includes(error.code)) return;
+    if (job.mode === "instant" && job.currentStage === "publishing" && Array.isArray(job.results)) {
+      // Publication retries use the saved calculation only; they must never
+      // re-enter collection, product matching or evidence calculation.
+      job = (await patchInstantPublication(job.jobId, { state: "publication_failed", publicationState: "pending", resumable: true,
+        errors: [error.message], failedAt: new Date().toISOString(), message: "자동 계산 보존 · 결과 게시 재시도 필요" })).job;
+      if (job.state === "completed") return;
+      if (Number(job.publicationAttempt || 0) < 2) {
+        try { await invokeContinuation({ state: "publishing", publicationAttempt: Number(job.publicationAttempt || 0) + 1 }); }
+        catch (dispatchError) {
+          job = (await patchInstantPublication(job.jobId, { state: "publication_failed", errors: [dispatchError.message], resumable: true })).job;
+        }
+      }
+      return;
+    }
     if (job.mode === "period" && job.currentStage === "publishing" && Array.isArray(job.results)) {
       await persist({ state: "publication_failed", publicationState: "pending", currentStage: "publishing", resumable: true,
         errors: [error.message], failedAt: new Date().toISOString(), message: "기간 계산 보존 · 결과 게시 재시도 필요" });
+      if (Number(job.publicationAttempt || 0) < 2) {
+        try { await invokeContinuation({ state: "publishing", publicationAttempt: Number(job.publicationAttempt || 0) + 1 }); }
+        catch (dispatchError) {
+          job = await releasePeriodWorker(workerLease, { state: "publication_failed", errors: [dispatchError.message], publicationState: "pending", resumable: true });
+        }
+      } else job = await releasePeriodWorker(workerLease, { state: "publication_failed", resumable: true });
       return;
     }
     if (seriesCache && dirtyTrendKeys.size) await writeDirtyTrendSeries(seriesCache, dirtyTrendKeys).catch(() => null);
@@ -1113,6 +1234,8 @@ exports.handler = async (event) => {
       errors: [error.message] });
     if (job?.schedulerExecutionId) await schedulerExecutions.updateById(job.schedulerExecutionId, { state: "failed", stage: job.currentStage || "background",
       jobId: job.jobId, failedAt: new Date().toISOString(), errorCode: "BACKGROUND_FAILED", errorMessage: error.message, retryable: true }).catch(() => null);
+  } finally {
+    trace("invocation-exited");
   }
 };
 

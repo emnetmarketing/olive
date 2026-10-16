@@ -46,12 +46,13 @@ test("trend status and main snapshot APIs are pinned to instant mode", () => {
 test("period completion cannot write the legacy main valid pointer", () => {
   const source = fs.readFileSync("netlify/functions/signal-snapshot-cache.js", "utf8");
   assert.match(source, /if \(snapshot\.mode === "period"\)[\s\S]*modeKey\(LATEST_VALID_KEY, "period"\)/);
-  assert.match(source, /else \{[\s\S]*LATEST_VALID_KEY, pointer/);
+  assert.match(source, /else \{[\s\S]*writePointer\(LATEST_VALID_KEY\)/);
+  assert.match(source, /const writePointer = \(key, value = pointer\) => guarded \? stagePointer/);
 });
 
 test("instant completion preserves the period latest analysis pointer", () => {
   const source = fs.readFileSync("netlify/functions/signal-snapshot-cache.js", "utf8");
-  assert.match(source, /setJSON\(modeKey\(LATEST_ANALYSIS_KEY, snapshot\.mode\), pointer\)/);
+  assert.match(source, /writePointer\(modeKey\(LATEST_ANALYSIS_KEY, snapshot\.mode\)\)/);
   assert.doesNotMatch(source, /delete\(/);
 });
 
