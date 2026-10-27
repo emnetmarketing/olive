@@ -2,6 +2,7 @@ const { handle } = require("./trend-analysis-start");
 const { connect: connectSnapshot, readLatestCollection } = require("./signal-snapshot-cache");
 const { connect: connectAnalysis, readCurrentJob } = require("./trend-analysis-cache");
 const executions = require("./trend-scheduler-execution-cache");
+const { recoverWaiting } = require("./instant-dispatch");
 
 function seoulDate(value = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
@@ -15,7 +16,7 @@ function collectedToday(collection, now = new Date()) {
     && Number(collection.sourceFreshness?.refreshPendingCount || 0) === 0;
 }
 async function run(event, source, overrides = {}) {
-  const deps = { handle, readLatestCollection, readCurrentJob, begin: executions.begin, update: executions.update, ...overrides };
+  const deps = { handle, readLatestCollection, readCurrentJob, recoverWaiting, begin: executions.begin, update: executions.update, ...overrides };
   if (!overrides.skipConnect) { connectSnapshot(event); connectAnalysis(event); executions.connect(event); }
   let execution;
   try {
@@ -33,6 +34,15 @@ async function run(event, source, overrides = {}) {
     if (running) {
       await deps.update(execution, { state: "skipped", stage: "analysis-lock", retryable: true, jobId: running.jobId });
       return { statusCode: 200, body: "an analysis job is already running" };
+    }
+    const now = new Date(), target = new Date(`${seoulDate(now)}T00:00:00Z`);
+    target.setUTCDate(target.getUTCDate() - 1);
+    const resumed = await deps.recoverWaiting({ requiredCollectionTarget: target.toISOString().slice(0, 10),
+      dispatchDeadline: now.getTime() + 12000 });
+    if (resumed) {
+      await deps.update(execution, { state: "skipped", stage: "existing-checkpoint-queued", jobId: resumed.jobId,
+        resumedExecutionId: resumed.schedulerExecutionId || null, retryable: false });
+      return { statusCode: 202, body: JSON.stringify({ jobId: resumed.jobId, existing: true, resumed: true }) };
     }
     const response = await deps.handle({ ...event, httpMethod: "POST", body: JSON.stringify({ mode: "instant", triggerSource: source,
       schedulerExecutionId: execution.executionId }) }, { fastPath: false });

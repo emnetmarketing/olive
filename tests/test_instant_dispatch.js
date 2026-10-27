@@ -215,6 +215,7 @@ test("eight-hint scan cap rotates fairly past ineligible Jobs", async () => {
 
 test("scan deadline reserves time for a single bounded HTTP delivery", async () => {
   const f = await fixture();
+  f.advance(60000); // Delivery-only tick; ten-minute orphan scan has its own bound.
   for (let n = 0; n < 8; n++) {
     const jobId = `busy-${n}`; await f.store.setJSON(`jobs/${jobId}`, { ...f.job, jobId,
       instantWorker: { token: "active", expiresAt: f.options.now() + worker.LEASE_MS } });
@@ -277,6 +278,75 @@ test("active workers cannot be adopted and old failure diagnostics survive outsi
   assert.deepEqual(adopted.errors, []); assert.equal(adopted.failedAt, null); assert.equal(adopted.errorCode, null);
   assert.equal(adopted.continuationDispatch.adoptedPreviousError.errorCode, "HTTP_508");
   assert.equal(adopted.continuationDispatch.adoptedPreviousError.failedAt, saved.failedAt);
+});
+
+test("adoption repairs a hint removed concurrently before its Job CAS", async () => {
+  const f = await fixture({ state: "interrupted" }); const set = f.store.setJSON.bind(f.store); let raced = false;
+  f.store.setJSON = async (key, value, options) => {
+    if (key === 'jobs/example' && value.state === 'running' && !raced) {
+      raced = true; await dispatch.removeJob('example', { ...f.options, recoverable: f.job });
+    }
+    return set(key, value, options);
+  };
+  await dispatch.adoptCheckpoint('example', f.adoptOptions);
+  assert.ok((await f.store.get(dispatch.REGISTRY_KEY)).jobs.some(v => v.jobId === 'example'));
+  assert.equal((await dispatch.tick(f.options)).dispatched, true);
+});
+
+test("bounded orphan recovery preserves cursor and permits only source-free past targets", async () => {
+  const f = await fixture({ state: 'interrupted' });
+  await f.store.setJSON('current-job/v1', { jobId: 'example' });
+  await f.store.setJSON('jobs/example', { ...f.job, errorCode: 'INSTANT_DISPATCH_FAILED' });
+  const resumed = await dispatch.recoverWaiting(f.options);
+  assert.equal(resumed.calculationCursor, 250); assert.equal(resumed.autoRecovery.attempts, 1);
+  assert.equal(resumed.instantInputsHash, f.job.instantInputsHash); assert.equal(f.calls.length, 0);
+  const blocked = await fixture({ state: 'interrupted', phase: 'collection' });
+  await blocked.store.setJSON('current-job/v1', { jobId: 'example' });
+  await blocked.store.setJSON('jobs/example', { ...blocked.job, errorCode: 'INSTANT_DISPATCH_FAILED' });
+  assert.equal(await dispatch.recoverWaiting(blocked.options), null);
+});
+
+test("orphan retry bounds, backoff, active leases, completed and corrupt state are enforced", async () => {
+  const f = await fixture({ state: 'interrupted' });
+  await f.store.setJSON('current-job/v1', { jobId: 'example' });
+  const base = { ...f.job, errorCode: 'INSTANT_DISPATCH_FAILED' };
+  for (const patch of [{ state: 'completed' }, { autoRecovery: { attempts: 2 } },
+    { autoRecovery: { attempts: 1, lastAttemptAt: new Date(f.options.now()).toISOString() } },
+    { instantWorker: { token: 'active', expiresAt: f.options.now() + 10000 } }, { errorCode: 'INSTANT_ARTIFACT_INTEGRITY' }]) {
+    await f.store.setJSON('jobs/example', { ...base, ...patch }); assert.equal(await dispatch.recoverWaiting(f.options), null);
+  }
+  await f.store.setJSON('jobs/example', { ...base, errorCode: null, errors: ['Analysis job stopped updating and was released.'] });
+  assert.ok(await dispatch.recoverWaiting(f.options));
+});
+
+test("automatic orphan recovery uses preserved hints even when current pointer changes", async () => {
+  const f = await fixture({ state: 'interrupted' });
+  await f.store.setJSON('jobs/example', { ...f.job, errorCode: 'INSTANT_DISPATCH_FAILED' });
+  await dispatch.registerJob('example', f.options);
+  await dispatch.removeJob('example', { ...f.options, recoverable: f.job });
+  await f.store.setJSON('current-job/v1', { jobId: 'unrelated-period' });
+  assert.equal((await dispatch.recoverWaiting(f.options)).jobId, 'example');
+  assert.equal((await f.store.get('current-job/v1')).jobId, 'unrelated-period');
+});
+
+test("bounded recovery scan rotates beyond eight unusable hints without listing Jobs", async () => {
+  const f = await fixture({ state: 'interrupted' });
+  await f.store.setJSON('jobs/example', { ...f.job, errorCode: 'INSTANT_DISPATCH_FAILED' });
+  const hints = Array.from({ length: 9 }, (_, i) => ({ jobId: 'terminal-' + i, targetDataDate: '2026-10-26', createdAt: String(9-i) }));
+  for (const hint of hints) await f.store.setJSON('jobs/' + hint.jobId, { ...hint, mode: 'instant', state: 'completed' });
+  await f.store.setJSON(dispatch.REGISTRY_KEY, { version: 1, jobs: [], recoveryHints: [...hints, { jobId: 'example', targetDataDate: '2026-10-15' }] });
+  let found = null;
+  for (let n = 0; n < 3 && !found; n++) found = await dispatch.recoverWaiting(f.options);
+  assert.equal(found.jobId, 'example'); assert.equal(f.calls.length, 0);
+});
+
+test("simultaneous orphan recovery cannot increment retry generation twice", async () => {
+  const f = await fixture({ state: 'interrupted' });
+  await f.store.setJSON('current-job/v1', { jobId: 'example' });
+  await f.store.setJSON('jobs/example', { ...f.job, errorCode: 'INSTANT_DISPATCH_FAILED' });
+  await Promise.all([dispatch.recoverWaiting(f.options), dispatch.recoverWaiting(f.options)]);
+  assert.equal((await f.read()).autoRecovery.attempts, 1);
+  assert.equal((await f.store.get(dispatch.REGISTRY_KEY)).jobs.filter(v => v.jobId === 'example').length, 1);
 });
 
 test("checkpoint reads reaching the preparation deadline do not begin an HTTP delivery", async () => {

@@ -2,9 +2,10 @@ const { getStore } = require("@netlify/blobs");
 const { connectLambda, getCompatibleStore } = require("./blob-store-compat");
 const periodPublication = require("./period-publication");
 const { stagePointer, visiblePointer } = require("./instant-publication");
+const instantSelection = require("./instant-selection-policy");
 const STORE_NAME = "trend-signal-snapshots"; const LATEST_KEY = "latest-v1";
 const LATEST_VALID_KEY = "latest-valid-v1"; const LATEST_ANALYSIS_KEY = "latest-analysis-v1"; const LATEST_COLLECTION_KEY = "latest-collection-v1";
-const MIN_INSTANT_COVERAGE_PCT = 10;
+const MIN_INSTANT_COVERAGE_PCT = instantSelection.MIN_INSTANT_COVERAGE_PCT;
 function modeKey(base, mode) { return `${base}/${mode === "period" ? "period" : "instant"}`; }
 function connect(event) { if (event?.blobs) connectLambda(event); periodPublication.connect(event); }
 function store() { return getStore(STORE_NAME); }
@@ -18,11 +19,7 @@ function compactItem(row) { return { keyword: row.keyword, resultType: row.resul
   marketConfidenceReasons: row.marketConfidenceReasons || [] } }
 function isValidSnapshot(snapshot) { return Number(snapshot?.trendCoveragePct || 0) > 0 && Boolean(snapshot?.latestDataDate); }
 function shouldPromoteInstant(snapshot, previous) {
-  if (snapshot?.mode !== "instant" || !isValidSnapshot(snapshot)) return false;
-  const coverage = Number(snapshot.trendCoveragePct || 0);
-  if (coverage < MIN_INSTANT_COVERAGE_PCT) return false;
-  const previousCoverage = Number(previous?.trendCoveragePct || 0);
-  return !isValidSnapshot(previous) || coverage >= previousCoverage * 0.5;
+  return instantSelection.canPromoteInstant(snapshot, previous);
 }
 function shouldAdvanceCollection(job) { return job?.mode === "instant" && !job?.fastPath && Number(job?.freshFetchCount || 0) > 0; }
 function buildSnapshot(job) {
@@ -30,6 +27,7 @@ function buildSnapshot(job) {
     createdAt: job.createdAt,
     queryStartDate: job.queryStartDate, generatedAt: job.completedAt, latestDataDate: job.latestDataDate,
     sourceFreshness: job.sourceFreshness || null, publishedAt: job.publishedAt || null,
+    ...(job.productCacheObservedAt ? { productCacheObservedAt: job.productCacheObservedAt } : {}),
     trendCoveragePct: job.trendCoveragePct, partialAnalysis: Boolean(job.partialAnalysis), surgeThreshold: job.surgeThreshold,
     matchThreshold: job.matchThreshold, executionPath: job.fastPath ? "fast" : "slow", items: (job.results || []).map(compactItem) };
 }
@@ -40,7 +38,8 @@ async function writeSnapshot(job, options = {}) {
   const snapshot = buildSnapshot(job);
   const pointer = { jobId: job.jobId, generatedAt: job.completedAt,
     ...(guarded ? { generation: Date.parse(job.createdAt) } : {}) };
-  const writePointer = (key, value = pointer) => guarded ? stagePointer(blobStore, key, value, readJob) : blobStore.setJSON(key, value);
+  const writePointer = (key, value = pointer) => guarded ? stagePointer(blobStore, key, value, readJob,
+    { candidate: snapshot, preferDataFreshness: [modeKey(LATEST_VALID_KEY, "instant"), LATEST_VALID_KEY, LATEST_KEY].includes(key) }) : blobStore.setJSON(key, value);
   await blobStore.setJSON(`snapshots/${job.jobId}`, snapshot);
   await writePointer(modeKey(LATEST_ANALYSIS_KEY, snapshot.mode));
   if (snapshot.mode === "instant") await writePointer(LATEST_ANALYSIS_KEY);

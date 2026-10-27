@@ -15,6 +15,7 @@ const { connect: connectSnapshot, writeSnapshot, buildSnapshot } = require("./si
 const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, mergeSignalHistory, mergeEarlySignalHistory } = require("./market-discovery-history-cache");
 const earlySignals = require("./today-early-signal-cache");
 const { calculateMarketConfidence } = require("./market-confidence");
+const { normalizeSearchAdObservation } = require("./search-ad-observation");
 const { buildPeriodMarketEvidence, calculatePeriodMarketConfidence } = require("./period-market-evidence");
 const schedulerExecutions = require("./trend-scheduler-execution-cache");
 const historicalContinuation = require("./historical-continuation");
@@ -446,9 +447,9 @@ function marketCandidateForAnalysis(item) {
   return { keyword: item.keyword, category: item.category || (health ? "health" : "beauty"), categoryEvidence: "market-discovery",
     sources: [...new Set([...(item.discoverySource || []), "market-discovery"])], firstSeenAt: item.discoveredAt, lastSeenAt: item.lastSeenAt,
     isNewSearchQuery: item.discoverySource?.includes("searchad-new-query"), impressions30d: Number(item.searchAdEvidence?.recentImpressions || 0),
+    searchAdObservation: normalizeSearchAdObservation(item.searchAdEvidence || {}),
     clicks30d: Number(item.searchAdEvidence?.recentClicks || 0), impressionDelta: Number(item.searchAdEvidence?.recentImpressions || 0),
-    confidenceImpressionDelta: Number.isFinite(Number(item.searchAdEvidence?.previousImpressions))
-      ? Number(item.searchAdEvidence?.recentImpressions || 0) - Number(item.searchAdEvidence.previousImpressions) : 0,
+    confidenceImpressionDelta: normalizeSearchAdObservation(item.searchAdEvidence || {}).delta,
     monthlyPcSearches: item.monthlyPcSearches ?? null, monthlyMobileSearches: item.monthlyMobileSearches ?? null,
     monthlyTotalSearches: item.monthlyTotalSearches ?? null, monthlyVolumeStatus: item.monthlySearchStatus || "not-requested",
     priorityScore: discoveryPriority(item), marketDiscovery: true, marketEvidence: item.evidence || [], sourceConfidence: item.sourceConfidence,
@@ -585,7 +586,8 @@ function calculateNumericCandidate(candidate, context) {
     trendSeries: metrics.series, trendSlope: slope(metrics.series.map((point) => point.estimated)),
     shoppingTrend: shopping, shoppingRise: shoppingRatios.length > 1 ? shoppingRatios.at(-1) - median(shoppingRatios.slice(-8, -1)) : 0,
     newSearchAdQuery: candidate.sources.includes("searchad-query"), searchAdNewQuery: Boolean(candidate.isNewSearchQuery),
-    searchAdImpressions30d: candidate.impressions30d, searchAdImpressionDelta: Number(candidate.confidenceImpressionDelta ?? candidate.impressionDelta ?? 0), searchAdClicks30d: Number(candidate.clicks30d || 0),
+    searchAdObservation: normalizeSearchAdObservation(candidate.searchAdObservation || candidate),
+    searchAdImpressions30d: candidate.impressions30d, searchAdImpressionDelta: normalizeSearchAdObservation(candidate.searchAdObservation || candidate).delta, searchAdClicks30d: Number(candidate.clicks30d || 0),
     match, sources: candidate.sources, discoverySource: candidate.sources, marketSourceConfidence: Number(candidate.sourceConfidence || 0),
     marketEvidence: candidate.marketEvidence || [], earlyMarketEvidence: (loadedEarlyCache?.history || []).filter((item) => item.normalizedKeyword === normalizeKeyword(candidate.keyword)
       && item.earlySignalDate <= metrics.latestPeriod).sort((a, b) => b.earlySignalDate.localeCompare(a.earlySignalDate))[0] || null,
@@ -652,7 +654,8 @@ function calculateRatioCandidate(candidate, context) {
     cacheHit: Boolean(trace?.cacheHit), dataFreshness: trace?.dataFreshness || null,
     trendSeries: ratioMetrics.series, trendSlope: slope(ratioMetrics.series.map((point) => point.ratio)),
     shoppingTrend: [], shoppingRise: 0, newSearchAdQuery: candidate.sources.includes("searchad-new-query"), searchAdNewQuery: Boolean(candidate.isNewSearchQuery),
-    searchAdImpressions30d: candidate.impressions30d, searchAdImpressionDelta: Number(candidate.confidenceImpressionDelta ?? candidate.impressionDelta ?? 0), searchAdClicks30d: Number(candidate.clicks30d || 0),
+    searchAdObservation: normalizeSearchAdObservation(candidate.searchAdObservation || candidate),
+    searchAdImpressions30d: candidate.impressions30d, searchAdImpressionDelta: normalizeSearchAdObservation(candidate.searchAdObservation || candidate).delta, searchAdClicks30d: Number(candidate.clicks30d || 0),
     match, sources: candidate.sources, discoverySource: candidate.sources, marketSourceConfidence: Number(candidate.sourceConfidence || 0),
     earlyMarketEvidence: (loadedEarlyCache?.history || []).filter((item) => item.normalizedKeyword === normalizeKeyword(candidate.keyword)
       && item.earlySignalDate <= (ratioMetrics.series.at(-1)?.period || "")).sort((a, b) => b.earlySignalDate.localeCompare(a.earlySignalDate))[0] || null,

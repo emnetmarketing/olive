@@ -24,6 +24,7 @@ function load(legacy = false) {
     Intl: { DateTimeFormat: CountingFormatter },
     fetch() { networkCalls += 1; throw new Error("External API forbidden in formatter regression"); },
     require(name) {
+      if (name === "./search-ad-observation") return require("../netlify/functions/search-ad-observation");
       assert.equal(name, "@netlify/blobs");
       return { connectLambda() { storageCalls += 1; throw new Error("Storage access forbidden"); },
         getStore() { storageCalls += 1; throw new Error("Storage access forbidden"); } };
@@ -41,7 +42,7 @@ function fixture(now) {
     items: [base,
       { ...base, keyword: "복합근거", normalizedKeyword: "복합근거", discoverySource: ["youtube", "searchad-new-query", "product-cache"],
         productMatchScore: 87, relatedProductLine: "보습", youtubeEvidence: [0, 1, 2, 6, 11.99, 12, -1].map(hours => ({ publishedAt: ago(hours) })),
-        searchAdEvidence: { observedAt: now, recentImpressions: 80, previousImpressions: 20, recentClicks: 8, previousClicks: 3 } },
+        searchAdEvidence: { observedAt: now, previousObservedAt: ago(24), recentImpressions: 80, previousImpressions: 20, recentClicks: 8, previousClicks: 3 } },
       { ...base, keyword: "검색신규", normalizedKeyword: "검색신규", discoverySource: ["searchad-new-query"], youtubeEvidence: [],
         searchAdEvidence: { observedAt: now, recentImpressions: 3 } },
       { ...base, keyword: "이전검색", normalizedKeyword: "이전검색", discoverySource: ["searchad-new-query"], youtubeEvidence: [],

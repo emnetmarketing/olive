@@ -137,6 +137,7 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
     }
   }, { codeGeneration: { strings: false, wasm: false } });
   const functions = ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "surgeSignalSummary", "periodSelectionMatchesJob",
+    ...(html.includes("function storedPeriodConfidenceDisplay(") ? ["storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay"] : []),
     "periodConfidenceSummary", "periodRelationSummary", "periodSourceEvidence", "periodDataStatus", "periodResultRow",
     "renderPeriodResultTables", "refreshPeriodSelectionDisplay", "displayPeriodAnalysis", "displayCompletedAnalysis",
     "loadLastSuccessfulAnalysis", "downloadExcelShared"];
@@ -162,7 +163,9 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
     assert.equal(cells[3], row.peakRelativeLiftPct == null ? "비교 불가" : `+${Number(row.peakRelativeLiftPct).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%`);
     const confidence = row.periodMarketConfidenceScore ?? row.marketConfidenceScore;
     assert.ok(cells[4].includes(confidence == null ? "미계산" : `${Number(confidence)}/100`));
-    for (const reason of (row.periodMarketConfidenceReasons || row.marketConfidenceReasons || []).slice(0, 5)) assert.ok(cells[5].includes(reason));
+    const displayReasons = context.storedPeriodConfidenceDisplay ? context.storedPeriodConfidenceDisplay(row).reasons
+      : row.periodMarketConfidenceReasons || row.marketConfidenceReasons || [];
+    for (const reason of displayReasons.slice(0, 5)) assert.ok(cells[5].includes(reason));
     for (const [column, source] of [[7, row.periodMarketEvidence?.youtube], [8, row.periodMarketEvidence?.searchAd]]) {
       if (!source || source.availability === "no_data") assert.equal(cells[column], "데이터 없음");
       else if (source.delta == null) assert.ok(cells[column].includes("비교 불가"));

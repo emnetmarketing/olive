@@ -4,6 +4,7 @@ const { connect: connectAnalysis, readJob, readLastSuccess, readLastPartial } = 
 const { connect: connectSnapshot, readLatest: readLatestSnapshot } = require("./signal-snapshot-cache");
 const earlyCache = require("./today-early-signal-cache");
 const { toBuffer } = require("./unified-excel");
+const { selectCompletedInstant } = require("./instant-selection-policy");
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 const compactDate = (value) => String(value || "").replaceAll("-", "");
 function filenameFor(job) {
@@ -18,6 +19,7 @@ function unifiedFilename(now = new Date(), period = null) {
 }
 async function newest(mode) {
   const jobs = await Promise.all([readLastSuccess(mode).catch(() => null), readLastPartial(mode).catch(() => null)]);
+  if (mode === "instant") return selectCompletedInstant(jobs);
   return jobs.filter(Boolean).sort((a, b) => Date.parse(b.completedAt || 0) - Date.parse(a.completedAt || 0))[0] || null;
 }
 exports.handler = async (event) => {

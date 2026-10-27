@@ -1,6 +1,7 @@
 const { getCompatibleStore } = require("./blob-store-compat");
 const { digest } = require("./period-publication");
 const { assertInstantWorker, owns: ownsInstantWorker, active: activeInstantWorker } = require("./instant-worker");
+const { canPromoteInstant } = require("./instant-selection-policy");
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
 const withoutPrevious = pointer => { const { previous, ...value } = pointer; return value; };
@@ -14,25 +15,34 @@ async function visiblePointer(pointer, readJob) {
   }
   return null;
 }
-async function stagePointer(store, key, pointer, readJob) {
+async function stagePointer(store, key, pointer, readJob, options = {}) {
   if (!pointer?.jobId || !Number.isFinite(pointer.generation) || pointer.generation <= 0)
     throw failure("INVALID_INSTANT_POINTER", "An instant pointer requires its original Job generation.");
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const entry = await store.getWithMetadata(key, { type: "json" });
     const previous = entry?.data;
+    const previousJob = previous?.jobId ? await readJob(previous.jobId) : null;
     let previousGeneration = Number(previous?.generation || 0);
     if (previous?.jobId && !previousGeneration) {
-      const previousJob = await readJob(previous.jobId);
       previousGeneration = Date.parse(previousJob?.createdAt || previous.generatedAt || previous.completedAt || "") || 0;
     }
-    if (previousGeneration > pointer.generation) return { skippedNewer: true };
     if (previous?.jobId === pointer.jobId && previous.requiresCompleted) return { staged: true };
+    const compareData = options.preferDataFreshness === true && previousJob?.mode === "instant" && previousJob.state === "completed";
+    // Preserve the generation fence for pending/unavailable publications.
+    // Completed publications are compared by observations, not finish time.
+    if (compareData) {
+      if (!canPromoteInstant(options.candidate, previousJob)) return { skippedOlderData: true };
+    } else if (previousGeneration > pointer.generation) return { skippedNewer: true };
     const visible = await visiblePointer(previous, readJob);
     const next = { ...pointer, requiresCompleted: true, ...(visible ? { previous: withoutPrevious(visible) } : {}) };
     const written = await store.setJSON(key, next, entry?.etag ? { onlyIfMatch: entry.etag } : { onlyIfNew: true });
     if (!written?.modified) continue;
     const verified = await store.get(key, { type: "json" });
     if (verified?.jobId === pointer.jobId && digest(verified) === digest(next)) return { staged: true };
+    if (options.preferDataFreshness && verified?.jobId) {
+      const verifiedJob = await readJob(verified.jobId);
+      if (verifiedJob?.state === "completed" && !canPromoteInstant(options.candidate, verifiedJob)) return { skippedOlderData: true };
+    }
     if (Number(verified?.generation || 0) > pointer.generation) return { skippedNewer: true };
     throw failure("INSTANT_POINTER_VERIFY_FAILED", "Instant publication pointer could not be verified.");
   }

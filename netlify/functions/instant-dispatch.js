@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const { getCompatibleStore } = require("./blob-store-compat");
 const artifacts = require("./instant-continuation");
+const { CALCULATION_VERSION } = require("./surge-history-cache");
 const { active } = require("./instant-worker");
 
 const REGISTRY_KEY = "instant-dispatch/v1";
@@ -13,6 +14,9 @@ const ACCEPTED_GRACE_MS = 120000;
 const BACKOFF_MS = [60000, 120000, 300000, 600000, 900000];
 const MAX_HINTS_PER_TICK = 8;
 const PRE_DISPATCH_BUDGET_MS = 12000;
+const MAX_AUTO_RECOVERIES = 2;
+const RECOVERY_BACKOFF_MS = [120000, 600000];
+const MAX_RECOVERY_HINTS = 16;
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const clock = options => options.now ? Number(options.now()) : Date.now();
 const storeFor = options => options.store || getCompatibleStore({ name: "trend-analysis", consistency: "strong" });
@@ -35,16 +39,24 @@ async function mutateRegistry(change, options = {}) {
 }
 async function registerJob(jobId, options = {}) {
   assertId(jobId);
+  const saved = options.hint ? null : await storeFor(options).get(`jobs/${jobId}`, { type: "json" });
+  const metadata = options.hint || { targetDataDate: saved?.targetDataDate, createdAt: saved?.createdAt };
   return mutateRegistry(previous => {
-    if (previous.jobs.some(item => item.jobId === jobId)) return null;
+    const existing = previous.jobs.find(item => item.jobId === jobId);
+    if (existing && (!metadata.targetDataDate || existing.targetDataDate === metadata.targetDataDate)) return null;
     if (previous.jobs.length >= 256) throw fail("INSTANT_DISPATCH_REGISTRY_FULL", "Pending Instant registry is full; existing Jobs are preserved.");
-    return { ...previous, jobs: [...previous.jobs, { jobId, registeredAt: iso(clock(options)) }] };
+    const hint = { ...existing, jobId, registeredAt: existing?.registeredAt || iso(clock(options)), ...metadata };
+    return { ...previous, jobs: [...previous.jobs.filter(item => item.jobId !== jobId), hint], recoveryHints: [...(previous.recoveryHints || [])
+      .filter(item => item.jobId !== jobId), hint].slice(-MAX_RECOVERY_HINTS) };
   }, options);
 }
 async function removeJob(jobId, options = {}) {
   assertId(jobId);
   return mutateRegistry(previous => previous.jobs.some(item => item.jobId === jobId)
-    ? { ...previous, jobs: previous.jobs.filter(item => item.jobId !== jobId) } : null, options);
+    ? { ...previous, jobs: previous.jobs.filter(item => item.jobId !== jobId),
+      recoveryHints: options.recoverable ? [...(previous.recoveryHints || []).filter(item => item.jobId !== jobId),
+        { jobId, targetDataDate: options.recoverable.targetDataDate, createdAt: options.recoverable.createdAt }].slice(-MAX_RECOVERY_HINTS)
+        : (previous.recoveryHints || []).filter(item => item.jobId !== jobId) } : null, options);
 }
 async function mutateJob(jobId, change, options = {}) {
   const store = storeFor(options);
@@ -112,8 +124,10 @@ async function adoptCheckpoint(jobId, options = {}) {
       throw fail("INSTANT_ADOPTION_CHANGED", "The audited checkpoint, input hash, or target changed before adoption.");
     await validateCheckpoint(current, options);
     const at = iso(clock(options)), previous = current.continuationDispatch || {};
+    if (options.automatic && !autoRecoverable(current, clock(options), options)) return null;
     return { ...current, state: current.state === "publication_failed" ? "publication_failed" : "running",
       errorCode: null, dispatchErrorCode: null, errors: [], failedAt: null,
+      ...(options.automatic ? { autoRecovery: { attempts: Number(current.autoRecovery?.attempts || 0) + 1, lastAttemptAt: at } } : {}),
       continuationDispatch: { ...previous, ticket: previous.ticket || crypto.randomUUID(), state: "pending",
         number: previous.number ?? Number(current.continuationCount || 0), requestedAt: previous.requestedAt || at,
         readyAt: at, nextAttemptAt: at, attemptCount: 0, attemptToken: null, dispatchLeaseUntil: 0,
@@ -123,7 +137,88 @@ async function adoptCheckpoint(jobId, options = {}) {
           errors: Array.isArray(current.errors) ? current.errors.map(value => String(value).slice(0, 400)).slice(0, 5) : [] } }, resumable: true };
   }, options);
   if (!job) throw fail("INSTANT_ADOPTION_NOT_FOUND", "The requested Instant Job is unavailable.");
+  // A scheduler may remove the first advisory hint while the Job is still
+  // interrupted. Re-register after CAS as well; recovery hints cover a crash
+  // between this CAS and the second registration.
+  await registerJob(jobId, { ...options, hint: { targetDataDate: job.targetDataDate, createdAt: job.createdAt } });
   return job;
+}
+
+function targetToday(now) { return new Date(now + 9 * 3600000 - 86400000).toISOString().slice(0, 10); }
+function sourceFree(job) {
+  return job.fastPath === true || ["evidence", "finalize", "publishing"].includes(job.instantStage)
+    || job.collectionScope === "search-trend-only" && ["numeric", "ratio", "enrichment"].includes(job.instantStage);
+}
+function autoRecoverable(job, now, options = {}) {
+  if (!job || job.mode !== "instant" || job.resumable !== true || active(job.instantWorker, now)
+    || !job.instantInputsKey || !job.instantStateKey || job.calculationVersion !== CALCULATION_VERSION) return false;
+  if (Number(job.continuationCount || 0) >= artifacts.MAX_CONTINUATIONS) return false;
+  if (options.requiredCollectionTarget && (job.targetDataDate !== options.requiredCollectionTarget || job.fastPath
+    || job.collectionScope === "search-trend-only")) return false;
+  if (job.targetDataDate !== targetToday(now) && !sourceFree(job)) return false;
+  if (!["running", "publishing", "interrupted", "continuation_failed", "publication_failed"].includes(job.state)) return false;
+  const attempts = Number(job.autoRecovery?.attempts || 0);
+  if (attempts >= MAX_AUTO_RECOVERIES) return false;
+  const since = Math.max(dueAt(job.autoRecovery?.lastAttemptAt), dueAt(job.failedAt), dueAt(job.updatedAt));
+  if (since + RECOVERY_BACKOFF_MS[attempts] > now) return false;
+  if (["running", "publishing"].includes(job.state)) return true;
+  const code = job.errorCode || job.dispatchErrorCode || job.continuationDispatch?.lastErrorCode || "";
+  return /^(INSTANT_DISPATCH_(FAILED|ATTEMPTS_EXHAUSTED)|DISPATCH_RESPONSE_(TIMEOUT|UNAVAILABLE)|HTTP_(408|429|5\d\d)|WRITE_FAILED|FETCH_ERROR|ECONNRESET|ETIMEDOUT)$/.test(code)
+    || !code && (job.errors || []).includes("Analysis job stopped updating and was released.");
+}
+async function recoverWaiting(options = {}) {
+  const store = storeFor(options), now = clock(options);
+  const registry = await store.get(REGISTRY_KEY, { type: "json" });
+  const pointer = await store.get("current-job/v1", { type: "json" });
+  const hints = [...(registry?.recoveryHints || [])].sort((a, b) => String(b.targetDataDate || "").localeCompare(String(a.targetDataDate || ""))
+    || String(b.createdAt || b.registeredAt || "").localeCompare(String(a.createdAt || a.registeredAt || "")));
+  const allIds = [...new Set([pointer?.jobId, ...hints.map(v => v.jobId)].filter(validId))];
+  const rest = allIds.slice(2), offset = rest.length ? Number(registry?.recoveryScanOffset || 0) % rest.length : 0;
+  const ids = [...allIds.slice(0, 2), ...rest.slice(offset), ...rest.slice(0, offset)].slice(0, MAX_HINTS_PER_TICK);
+  if (allIds.length > MAX_HINTS_PER_TICK) await mutateRegistry(previous => ({ ...previous,
+    recoveryScanOffset: (offset + MAX_HINTS_PER_TICK - 2) % rest.length }), options);
+  const jobs = [];
+  for (const id of ids) {
+    if (options.dispatchDeadline && clock(options) >= options.dispatchDeadline) break;
+    const job = await store.get(`jobs/${id}`, { type: "json" }); if (job) jobs.push(job);
+  }
+  jobs.sort((a, b) => String(b.targetDataDate || "").localeCompare(String(a.targetDataDate || ""))
+    || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  for (const job of jobs) {
+    if (options.dispatchDeadline && clock(options) >= options.dispatchDeadline) break;
+    if (!autoRecoverable(job, now, options)) continue;
+    const quarantined = hints.find(hint => hint.jobId === job.jobId && hint.blockedInputHash === job.instantInputsHash
+      && hint.blockedStateHash === job.instantStateHash);
+    if (quarantined) continue;
+    if (jobs.some(other => other.jobId !== job.jobId && active(other.instantWorker, now))) continue;
+    // A newer equivalent operation wins; never merge different frozen inputs.
+    if (jobs.some(other => other.jobId !== job.jobId && other.targetDataDate === job.targetDataDate
+      && other.startDate === job.startDate && other.endDate === job.endDate && other.fastPath === job.fastPath
+      && ["running", "publishing", "completed"].includes(other.state)
+      && other.collectionScope === job.collectionScope && other.orderedCandidateHash === job.orderedCandidateHash
+      && other.productVersionHash === job.productVersionHash && other.calculationVersion === job.calculationVersion
+      && other.surgeThreshold === job.surgeThreshold && other.matchThreshold === job.matchThreshold
+      && String(other.createdAt || "") > String(job.createdAt || ""))) continue;
+    try {
+      await validateCheckpoint(job, options);
+      if (options.dispatchDeadline && clock(options) >= options.dispatchDeadline) break;
+      if (["running", "publishing"].includes(job.state)) {
+        await registerJob(job.jobId, { ...options, hint: { targetDataDate: job.targetDataDate, createdAt: job.createdAt } });
+        return job;
+      }
+      return await adoptCheckpoint(job.jobId, { ...options, automatic: true, expectedInputsHash: job.instantInputsHash,
+        expectedStateHash: job.instantStateHash, expectedTargetDataDate: job.targetDataDate });
+    } catch (error) {
+      if (!/^INSTANT_/.test(error.code || "")) throw error;
+      if (/^INSTANT_(ARTIFACT_|STATE_|DISPATCH_INPUT_MISMATCH|DISPATCH_CHECKPOINT_MISSING)/.test(error.code)) {
+        await mutateRegistry(previous => ({ ...previous, recoveryHints: [...(previous.recoveryHints || []).filter(h => h.jobId !== job.jobId),
+          { jobId: job.jobId, targetDataDate: job.targetDataDate, createdAt: job.createdAt,
+            blockedInputHash: job.instantInputsHash, blockedStateHash: job.instantStateHash, blockedReason: error.code }].slice(-MAX_RECOVERY_HINTS) }), options);
+      }
+      break; // At most one large checkpoint validation per recovery tick.
+    }
+  }
+  return null;
 }
 
 function canDispatch(job, now) {
@@ -178,7 +273,11 @@ async function finishDispatch(jobId, ticket, attemptToken, outcome, options) {
 
 async function tick(options = {}) {
   const store = storeFor(options), now = clock(options), leaseToken = crypto.randomUUID();
-  const initial = await store.get(REGISTRY_KEY, { type: "json" });
+  let initial = await store.get(REGISTRY_KEY, { type: "json" });
+  if (Math.floor(now / 60000) % 10 === 0) {
+    await recoverWaiting({ ...options, dispatchDeadline: now + PRE_DISPATCH_BUDGET_MS });
+    initial = await store.get(REGISTRY_KEY, { type: "json" });
+  }
   if (!initial?.jobs?.length) return { status: "idle", dispatched: false };
   const registry = await mutateRegistry(previous => {
     if (Number(previous.lease?.expiresAt || 0) > now) return null;
@@ -187,7 +286,8 @@ async function tick(options = {}) {
   if (registry.lease?.token !== leaseToken) return { status: "busy", dispatched: false };
   let lastScanned = registry.scanAfterJobId || null;
   const startIndex = Math.max(0, registry.jobs.findIndex(item => item.jobId === lastScanned) + 1) % registry.jobs.length;
-  const hints = [...registry.jobs.slice(startIndex), ...registry.jobs.slice(0, startIndex)].slice(0, MAX_HINTS_PER_TICK);
+  const hints = [...registry.jobs.slice(startIndex), ...registry.jobs.slice(0, startIndex)]
+    .sort((a, b) => String(b.targetDataDate || "").localeCompare(String(a.targetDataDate || ""))).slice(0, MAX_HINTS_PER_TICK);
   const boundedOptions = { ...options, dispatchDeadline: now + PRE_DISPATCH_BUDGET_MS };
   const issues = [];
   try {
@@ -201,7 +301,7 @@ async function tick(options = {}) {
       if (["interrupted", "continuation_failed", "failed"].includes(job.state)
         || job.continuationDispatch?.state === "blocked"
         || job.state === "publication_failed" && (!job.continuationDispatch?.adoptedAt || job.continuationDispatch.state === "entered")) {
-        await removeJob(hint.jobId, options); continue;
+        await removeJob(hint.jobId, { ...options, recoverable: job }); continue;
       }
       if (!job.continuationDispatch?.ticket && untouchedInitial(job)) job = await enqueueInitial(job.jobId, options);
       if (!canDispatch(job, clock(options))) continue;
@@ -237,5 +337,6 @@ async function tick(options = {}) {
 }
 
 module.exports = { registerJob, removeJob, enqueueInitial, adoptCheckpoint, tick, validateCheckpoint,
+  recoverWaiting, autoRecoverable, sourceFree, MAX_AUTO_RECOVERIES, RECOVERY_BACKOFF_MS,
   REGISTRY_KEY, MAX_ATTEMPTS, REQUEST_TIMEOUT_MS, DISPATCH_LEASE_MS, ACCEPTED_GRACE_MS, BACKOFF_MS,
   MAX_HINTS_PER_TICK, PRE_DISPATCH_BUDGET_MS };

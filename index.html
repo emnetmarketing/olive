@@ -2555,13 +2555,13 @@
     function periodResultRow(row, index) {
       const surge = row.estimatedSurgeCount == null ? "계산 불가" : `+${Number(row.estimatedSurgeCount).toLocaleString("ko-KR")}`;
       const rise = row.peakRelativeLiftPct == null ? "비교 불가" : `+${Number(row.peakRelativeLiftPct).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%`;
-      const reasons = row.periodMarketConfidenceReasons || row.marketConfidenceReasons || [];
+      const display = storedPeriodConfidenceDisplay(row), reasons = display.reasons;
       return `<tr data-period-keyword="${escapeHtml(String(row.keyword || "").toLowerCase())}">
         <td>${index + 1}</td><td><strong>${escapeHtml(row.keyword)}</strong><br><small class="muted">${surgeSignalSummary(row)}</small></td>
         <td><span class="period-metric">${escapeHtml(surge)}</span></td><td><span class="period-metric">${escapeHtml(rise)}</span></td>
-        <td>${periodConfidenceSummary(row)}</td><td>${reasons.length ? escapeHtml(reasons.slice(0, 5).join(" · ")) : '<span class="muted">확인된 기간 신뢰 근거 없음</span>'}</td>
+        <td>${periodConfidenceSummary(row)}</td><td>${reasons.length ? escapeHtml(reasons.slice(0, 5).join(" · ")) : '<span class="muted">확인된 기간 신뢰 근거 없음</span>'}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}</td>
         <td>${periodRelationSummary(row)}</td><td>${periodSourceEvidence(row.periodMarketEvidence?.youtube, "YouTube")}</td>
-        <td>${periodSourceEvidence(row.periodMarketEvidence?.searchAd, "Search Ad")}</td><td>${escapeHtml(periodDataStatus(row.periodMarketEvidence))}</td>
+        <td>${periodSourceEvidence(display.searchAd, "Search Ad")}</td><td>${escapeHtml(periodDataStatus(row.periodMarketEvidence))}</td>
         <td>${escapeHtml(row.latestDataDate || state.currentPeriodAnalysisJob?.latestDataDate || "-")}</td></tr>`;
     }
 
@@ -2714,6 +2714,7 @@
           + ` · 유효 시계열 ${countText(freshness.validSeriesCount)} · 빈 시계열 ${countText(freshness.emptySeriesCount)}`
           + " · 캐시 확보와 목표일 관측은 다릅니다. 희소·빈 시계열의 미관측은 수집 오류를 뜻하지 않습니다.";
       }
+      $("yesterdaySurgeMeta").textContent += ` · 상품 매칭 cache 관측 ${job.productCacheObservedAt ? formatHistoryDate(job.productCacheObservedAt) : "기록 없음"} (NAVER 기준일과 별도)`;
       render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount,
         news: results.filter((row) => row.news).length }, results, results.slice(0, 10), job.completedAt);
       $("analysisProgressPanel").classList.toggle("visible", !restored);
@@ -2724,6 +2725,23 @@
 
     async function loadLastSuccessfulAnalysis(mode = "instant") {
       try {
+        if (mode === "instant") {
+          // Main UI and Excel follow the same valid snapshot. A late-completing
+          // old full/partial Job must not replace fresher published observations.
+          const snapshotResponse = await fetch("/.netlify/functions/signal-snapshot-latest?mode=instant", { cache: "no-store" });
+          if (snapshotResponse.status === 404) return null;
+          if (!snapshotResponse.ok) throw new Error(`자동 결과 snapshot 조회 실패: HTTP ${snapshotResponse.status}`);
+          const snapshot = await snapshotResponse.json();
+          if (!snapshot?.jobId) return null;
+          const response = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(snapshot.jobId)}`, { cache: "no-store" });
+          if (!response.ok) throw new Error(`자동 결과 Job 조회 실패: HTTP ${response.status}`);
+          const job = await response.json();
+          if (job.mode !== "instant" || job.state !== "completed" || job.jobId !== snapshot.jobId
+            || job.latestDataDate !== snapshot.latestDataDate || Number(job.trendCoveragePct) !== Number(snapshot.trendCoveragePct)
+            || (job.results || []).length !== (snapshot.items || []).length) throw new Error("자동 결과 snapshot과 Job이 일치하지 않습니다.");
+          displayCompletedAnalysis(job, { restored: true });
+          return job;
+        }
         const responses = await Promise.all(["full", "partial"].map((result) => fetch(`/.netlify/functions/trend-analysis-latest?mode=${encodeURIComponent(mode)}&result=${result}`, { cache: "no-store" })));
         const jobs = await Promise.all(responses.map(async (response) => response.ok ? response.json().catch(() => null) : null));
         const resultGeneration = (job) => mode === "period"
@@ -2784,7 +2802,8 @@
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
         if (job.state !== "completed") { finishAnalysisControls(); return; }
         if (periodFlow?.active && job.mode === "period" && await continuePeriodOneClick(job, periodFlow)) return;
-        const results = displayCompletedAnalysis(job);
+        const displayedInstant = job.mode === "instant" ? await loadLastSuccessfulAnalysis("instant") : null;
+        const results = job.mode === "instant" ? displayedInstant?.results || [] : displayCompletedAnalysis(job);
         await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList(), loadTodayEarlySignals()]);
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
         finishAnalysisControls();
@@ -2995,11 +3014,12 @@
         + ` (${freshness.targetDataCoveragePct == null ? "확인 불가" : `${Number(freshness.targetDataCoveragePct)}%`})`
         + ` · 유효 시계열 ${countText(freshness.validSeriesCount)} · 빈 시계열 ${countText(freshness.emptySeriesCount)}`;
       const observationNote = "희소·빈 시계열의 목표일 미관측은 수집 오류를 뜻하지 않습니다.";
+      const productCacheNote = `상품 매칭 cache 관측 ${showTime(job.productCacheObservedAt || snapshot.productCacheObservedAt)} (NAVER 기준일과 별도)`;
       return { status, actualDate, targetDate, coverage,
         summary: `${dates} · ${scope} · ${observedScope} · 상태 ${sourceFreshnessLabel(status)} · ${automation}`,
         detail: `마지막 실제 Trend 수집 ${showTime(collectionAt)} · 마지막 계산 ${showTime(calculatedAt)} · 마지막 게시 ${showTime(publishedAt)}`
-          + ` · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"} · 유효 snapshot 캐시 확보율 ${Number(snapshot.trendCoveragePct || 0)}% · ${observationNote}`,
-        resultMeta: `${dates} · ${scope} · ${observedScope} · ${sourceFreshnessLabel(status)} · 계산 ${showTime(calculatedAt)} · 게시 ${showTime(publishedAt)} · ${observationNote}` };
+          + ` · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"} · 유효 snapshot 캐시 확보율 ${Number(snapshot.trendCoveragePct || 0)}% · ${productCacheNote} · ${observationNote}`,
+        resultMeta: `${dates} · ${scope} · ${observedScope} · ${sourceFreshnessLabel(status)} · 계산 ${showTime(calculatedAt)} · 게시 ${showTime(publishedAt)} · ${productCacheNote} · ${observationNote}` };
     }
 
     function earlySignalFreshnessDisplay(payload, now = new Date()) {
@@ -3087,7 +3107,7 @@
         const labels = { strong: "🔥 강한 신호", rising: "↑ 상승 신호", watch: "• 관찰 신호" };
         $("todayEarlySignalBody").innerHTML = (payload.items || []).length ? payload.items.map((item) => `<tr>
           <td><strong>${escapeHtml(item.keyword)}</strong></td><td>${escapeHtml(labels[item.strength] || "• 관찰 신호")}</td>
-          <td><strong>${Number(item.todayEarlySignalScore || 0)}</strong></td><td>${item.detectedAt ? formatHistoryDate(item.detectedAt) : "-"}</td>
+          <td><strong>${Number(item.todayEarlySignalScore || 0)}</strong>${item.scoreWarning ? `<br><small class="muted">${escapeHtml(item.scoreWarning)}</small>` : ""}</td><td>${item.detectedAt ? formatHistoryDate(item.detectedAt) : "-"}</td>
           <td>${escapeHtml((item.reasons || []).join(" · ") || "-")}</td>
           <td>${escapeHtml([item.relatedBrand, item.relatedProductLine || item.relatedProductType].filter(Boolean).join(" · ") || "-")}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
           <td>${escapeHtml((item.sources || []).join(" + ") || "-")}</td>
@@ -3140,7 +3160,7 @@
         const item = row.match.item;
         return `
           <tr>
-            <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")} · ${escapeHtml(row.latestDataDate || "-")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
+            <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
             <td>${row.today.toLocaleString("ko-KR")} / ${Number(row.estimatedPeak || row.today).toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
             <td>+${row.lift.toLocaleString("ko-KR")}</td>
             <td>${formatSurgeHistory(row.surgeHistoryState)}</td>
@@ -3169,7 +3189,7 @@
       const body = $("ratioOnlySignalBody");
       if (!results.length) { body.innerHTML = '<tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr>'; return; }
       body.innerHTML = results.map((row) => { const signal = row.relatedSignal || {}; const refs = (signal.referenceProducts || []).slice(0, 3).map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
-        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}</td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${Number(row.ratioBaseline || 0).toFixed(2)}</td><td>+${Number(row.relativeRatioLift || 0).toFixed(2)}%</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
+        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${Number(row.ratioBaseline || 0).toFixed(2)}</td><td>+${Number(row.relativeRatioLift || 0).toFixed(2)}%</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
       }).join("");
     }
 
@@ -3192,7 +3212,7 @@
         const references = (signal.referenceProducts || []).slice(0, 3)
           .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
         return `<tr>
-          <td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}</td>
+          <td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td>
           <td>${escapeHtml(row.peakDate || row.peakDailyDate || "-")}</td>
           <td><strong>+${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</strong></td>
           <td>+${Number(row.peakRelativeLiftPct || 0).toFixed(2)}%</td>
@@ -3226,7 +3246,7 @@
           <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
           <td><strong>${escapeHtml(signal.judgment || row.match?.judgment || "관련 신호")}</strong></td>
           <td>${escapeHtml(signal.reason || row.match?.reason || "-")}</td>
-          <td>${escapeHtml(row.latestDataDate || "-")}</td>
+          <td>${instantRowDateSummary(row)}</td>
         </tr>`;
       }).join("");
     }
@@ -3241,19 +3261,58 @@
       return `<span class="pill">${escapeHtml(label)}</span><span class="muted">${escapeHtml(detail)}</span>`;
     }
 
+    function storedInstantConfidenceDisplay(row) {
+      const source = row.searchAdObservation || row.earlyMarketEvidence?.comparisons?.searchAd || {};
+      const number = value => value == null || value === "" || typeof value === "boolean" || !Number.isFinite(Number(value)) ? null : Number(value);
+      const first = names => { for (const name of names) if (Object.prototype.hasOwnProperty.call(source, name)) return source[name]; return null; };
+      const observed = source.observedAt || source.searchAdObservedAt || source.lastSeenAt;
+      const previousObserved = source.previousObservedAt || source.previousSearchAdObservedAt;
+      const newlyObserved = source.isNewlyObserved === true || source.isNewSearchQuery === true || Boolean(!previousObserved && source.firstSeenAt && source.firstSeenAt === observed);
+      const comparable = (source.previousObservationAvailable ?? source.previousSearchAdObservationAvailable) !== false && !newlyObserved
+        && Number.isFinite(Date.parse(observed)) && Number.isFinite(Date.parse(previousObserved)) && Date.parse(previousObserved) < Date.parse(observed);
+      const current = number(first(["current", "recentImpressions", "impressions30d"])), previous = number(first(["previous", "previousImpressions", "previousImpressions30d"]));
+      const clicks = number(first(["currentClicks", "recentClicks", "clicks30d"])), previousClicks = number(first(["previousClicks", "previousClicks30d"]));
+      const impressionIncrease = current != null && previous != null && current > previous;
+      const clickIncrease = clicks != null && previousClicks != null && clicks > previousClicks;
+      let unverified = false;
+      const reasons = (row.marketConfidenceReasons || []).map(reason => {
+        if (reason === "Search Ad 신규 유입") return "Search Ad 신규 발견 · 저장 광고 관측 참고 · 집계기간 미확인";
+        if (reason === "Search Ad 클릭 유입 확인") return "Search Ad 저장 클릭 관측 참고 · 집계기간 미확인";
+        const verifiedIncrease = comparable && (/노출/.test(reason) ? impressionIncrease : /클릭/.test(reason) ? clickIncrease : impressionIncrease || clickIncrease);
+        if (!verifiedIncrease && /Search\s*Ad.*(?:증가|(?:노출|클릭)\s*\+\s*[\d.,]+)/i.test(String(reason))) {
+          unverified = true; return "Search Ad 저장 광고 관측 · 이전 비교 근거 확인 불가 · 집계기간 미확인";
+        }
+        return reason;
+      });
+      return { reasons, observation: { ...source, previous: comparable ? previous : null, previousClicks: comparable ? previousClicks : null,
+        delta: comparable && current != null && previous != null ? current - previous : null,
+        clickDelta: comparable && clicks != null && previousClicks != null ? clicks - previousClicks : null,
+        comparisonStatus: comparable && ((current != null && previous != null) || (clicks != null && previousClicks != null)) ? "comparable" : "unavailable" },
+        scoreWarning: unverified ? "기존 저장 점수 · Search Ad 증가 비교 미검증(점수 재계산 안 됨)" : null };
+    }
+
+    function storedPeriodConfidenceDisplay(row) {
+      const source = row.periodMarketEvidence?.searchAd;
+      const display = storedInstantConfidenceDisplay({ marketConfidenceReasons: row.periodMarketConfidenceReasons || row.marketConfidenceReasons || [], searchAdObservation: source || {} });
+      const unverifiedComparison = source && display.observation.comparisonStatus !== "comparable"
+        && [source.previous, source.previousClicks, source.delta, source.clickDelta].some(value => value != null);
+      return { ...display, searchAd: source ? display.observation : null,
+        scoreWarning: display.scoreWarning || (unverifiedComparison ? "기존 저장 점수 · Search Ad 기간 비교 미검증(점수 재계산 안 됨)" : null) };
+    }
+
     function marketConfidenceSummary(row) {
       if (row.marketConfidenceScore == null) return '<span class="muted">종합 신뢰도: 이전 결과에는 미계산</span>';
       const grades = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
-      const reasons = (row.marketConfidenceReasons || []).slice(0, 5).join(" · ");
-      return `<span class="pill">종합 신뢰도 ${Number(row.marketConfidenceScore)}/100 · ${escapeHtml(grades[row.marketConfidenceGrade] || "참고")}</span>${reasons ? `<br><small class="muted">${escapeHtml(reasons)}</small>` : ""}`;
+      const display = storedInstantConfidenceDisplay(row), reasons = display.reasons.slice(0, 5).join(" · ");
+      return `<span class="pill">종합 신뢰도 ${Number(row.marketConfidenceScore)}/100 · ${escapeHtml(grades[row.marketConfidenceGrade] || "참고")}</span>${reasons ? `<br><small class="muted">${escapeHtml(reasons)}</small>` : ""}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}`;
     }
 
     function periodSourceEvidence(source, label) {
       if (!source || source.availability === "no_data") return '<span class="muted">데이터 없음</span>';
       const availability = source.availability === "partial" ? "일부 기간" : "저장 관측치";
       const delta = source.delta == null ? "비교 불가" : `Δ ${Number(source.delta) >= 0 ? "+" : ""}${Number(source.delta).toLocaleString("ko-KR")}`;
-      const fresh = label === "Search Ad" && source.newQuery ? " · 기간 내 신규 유입" : "";
-      return `${escapeHtml(availability)} · ${escapeHtml(delta + fresh)}`;
+      const fresh = label === "Search Ad" && source.newQuery ? " · 기간 내 신규 발견" : "";
+      return `${escapeHtml(availability)} · ${escapeHtml(delta + fresh)}${label === "Search Ad" ? " · 저장 광고 관측 참고 · 집계기간 미확인" : ""}`;
     }
 
     function periodDataStatus(evidence) {
@@ -3421,7 +3480,7 @@
           row.keyword,
           row.marketConfidenceScore ?? "",
           ({ very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" })[row.marketConfidenceGrade] || "",
-          (row.marketConfidenceReasons || []).join(" / "),
+          [...storedInstantConfidenceDisplay(row).reasons, storedInstantConfidenceDisplay(row).scoreWarning].filter(Boolean).join(" / "),
           row.category || "unknown",
           row.today,
           row.estimatedPeak,
@@ -3539,6 +3598,12 @@
       return `${String(date.getFullYear()).slice(2)}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
     }
 
+    function instantRowDateSummary(row) {
+      const actual = row.latestDataDate || null;
+      const target = state.currentAnalysisJob?.sourceFreshness?.targetDataDate || state.currentAnalysisJob?.targetDataDate || null;
+      return `<span class="muted">NAVER 기준 ${escapeHtml(actual || "확인 불가")}${actual && target && actual < target ? " · 목표일 이전 관측" : ""}</span>`;
+    }
+
     function renderTrendChart(rows) {
       const chart = $("trendChart");
       const topRows = rows.map((row) => ({
@@ -3548,7 +3613,8 @@
         lift: Number(row.today || 0) - Number(row.yesterday || 0),
         rate: Number(row.yesterday || 0) > 0 ? ((Number(row.today || 0) - Number(row.yesterday || 0)) / Number(row.yesterday || 0)) * 100 : 100,
         marketConfidenceScore: row.marketConfidenceScore, marketConfidenceGrade: row.marketConfidenceGrade,
-        marketConfidenceReasons: row.marketConfidenceReasons || []
+        marketConfidenceReasons: row.marketConfidenceReasons || [], latestDataDate: row.latestDataDate,
+        searchAdObservation: row.searchAdObservation, earlyMarketEvidence: row.earlyMarketEvidence
       })).sort((a, b) => b.lift - a.lift).slice(0, 10);
 
       if (!topRows.length) {
@@ -3565,6 +3631,7 @@
               ${escapeHtml(row.keyword)}
               <span class="trend-sub">추정 기준 ${row.yesterday.toLocaleString("ko-KR")} → 추정 최신/최대 ${row.today.toLocaleString("ko-KR")}</span>
               <span class="trend-sub">${marketConfidenceSummary(row)}</span>
+              <span class="trend-sub">${instantRowDateSummary(row)}</span>
             </div>
             <div class="trend-track" aria-label="${escapeHtml(row.keyword)} 증가량">
               <div class="trend-fill" style="width:${width}%"></div>

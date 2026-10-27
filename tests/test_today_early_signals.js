@@ -18,7 +18,7 @@ test("today Early Signal detects actual recent YouTube evidence and classifies s
 test("repeated and multi-source evidence raises score and preserves real deltas", () => {
   const rows = buildEarlySignals([marketItem({ discoverySource: ["youtube", "searchad-new-query"],
     youtubeEvidence: [{ publishedAt: "2026-09-02T02:00:00.000Z" }, { publishedAt: "2026-09-02T03:00:00.000Z" }, { publishedAt: "2026-09-01T21:00:00.000Z" }],
-    searchAdEvidence: { recentImpressions: 80, previousImpressions: 20 } })], { items: [] }, now);
+    searchAdEvidence: { observedAt: now, previousObservedAt: "2026-09-01T04:00:00.000Z", recentImpressions: 80, previousImpressions: 20 } })], { items: [] }, now);
   assert.equal(rows[0].comparisons.youtube.delta, 1); assert.equal(rows[0].comparisons.searchAd.delta, 60);
   assert.ok(rows[0].todayEarlySignalScore >= 70); assert.match(rows[0].reasons.join(" "), /복수 source/);
 });

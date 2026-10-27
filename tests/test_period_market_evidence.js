@@ -8,9 +8,9 @@ const { toBuffer } = require("../netlify/functions/unified-excel");
 
 const history = [
   { normalizedKeyword: "라카트윈립", earlySignalDate: "2026-08-30", detectedAt: "2026-08-30T06:00:00Z", firstSeenAt: "2026-08-30T01:00:00Z",
-    sources: ["youtube", "searchad-new-query"], comparisons: { youtube: { current: 3, previous: 1 }, searchAd: { current: 70, previous: 40, currentClicks: 7, previousClicks: 4 } } },
+    sources: ["youtube", "searchad-new-query"], comparisons: { youtube: { current: 3, previous: 1 }, searchAd: { observedAt: "2026-08-30T06:00:00Z", previousObservedAt: "2026-08-30T01:00:00Z", current: 70, previous: 40, currentClicks: 7, previousClicks: 4 } } },
   { normalizedKeyword: "라카트윈립", earlySignalDate: "2026-09-01", detectedAt: "2026-09-01T06:00:00Z", firstSeenAt: "2026-08-30T01:00:00Z",
-    sources: ["youtube", "searchad-new-query"], comparisons: { youtube: { current: 4, previous: 2 }, searchAd: { current: 100, previous: 70, currentClicks: 11, previousClicks: 7 } } },
+    sources: ["youtube", "searchad-new-query"], comparisons: { youtube: { current: 4, previous: 2 }, searchAd: { observedAt: "2026-09-01T06:00:00Z", previousObservedAt: "2026-08-30T06:00:00Z", current: 100, previous: 70, currentClicks: 11, previousClicks: 7 } } },
   { normalizedKeyword: "라카트윈립", earlySignalDate: "2026-09-04", detectedAt: "2026-09-04T06:00:00Z",
     sources: ["youtube"], comparisons: { youtube: { current: 99, previous: 0 }, searchAd: { current: 999, previous: 1 } } }
 ];
@@ -42,10 +42,10 @@ test("period confidence uses period evidence while NAVER surge values remain unt
 
 test("a stored click-only increase is the lowest Search Ad confidence evidence without double counting", () => {
   const evidence = buildPeriodMarketEvidence("라카트윈립", "2026-08-30", "2026-09-01", history);
-  evidence.searchAd.newQuery = false; evidence.searchAd.delta = 0; evidence.searchAd.clickDelta = 7;
+  evidence.searchAd.newQuery = false; evidence.searchAd.current = evidence.searchAd.previous; evidence.searchAd.delta = 0; evidence.searchAd.clickDelta = 7;
   const confidence = calculatePeriodMarketConfidence(result(evidence), evidence, 500);
   assert.equal(confidence.periodMarketConfidenceComponents.searchAd, 4);
-  assert.match(confidence.periodMarketConfidenceReasons.join(" "), /클릭 증가 \+7/);
+  assert.match(confidence.periodMarketConfidenceReasons.join(" "), /저장 광고 관측 대비 Search Ad 클릭 \+7/);
 });
 
 test("instant confidence calculator remains independent", () => {

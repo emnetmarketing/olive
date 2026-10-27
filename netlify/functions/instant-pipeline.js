@@ -14,6 +14,7 @@ const { publishInstant } = require("./instant-publication");
 const { calculateMarketConfidence } = require("./market-confidence");
 const scheduler = require("./trend-scheduler-execution-cache");
 const dispatch = require("./instant-dispatch");
+const executionBudget = require("./instant-execution-budget");
 const PART_SIZE = 250;
 const SAFE_MS = 4 * 60 * 1000;
 const COLLECTION_MS = 3 * 60 * 1000;
@@ -59,7 +60,8 @@ async function prepare(job, lease, core) {
   const freezeProducts = async () => {
     const product = await require("./search-ad-cache").readCache();
     if (!product?.items?.length) throw error("INSTANT_INPUT_MISSING", "Frozen products are unavailable.");
-    return { hash: digest(product), ref: await artifacts.writeArtifact(lease, "products", product) };
+    return { hash: digest(product), observedAt: product.refreshedAt || product.updatedAt || null,
+      ref: await artifacts.writeArtifact(lease, "products", product) };
   };
   const products = await freezeProducts();
   const candidateCache = await require("./keyword-candidate-cache").readCandidateCache();
@@ -113,6 +115,7 @@ async function prepare(job, lease, core) {
   const input = { version: 1, calculationVersion: history.CALCULATION_VERSION, jobId: job.jobId,
     startDate: job.startDate, endDate: job.endDate, queryStartDate: job.queryStartDate, requiredWindow: `${job.queryStartDate}:${job.endDate}`,
     targetDataDate: frozenJob.targetDataDate, surgeThreshold: job.surgeThreshold, matchThreshold: job.matchThreshold,
+    productCacheObservedAt: products.observedAt,
     orderedCandidateHash: digest(all.map(c => c.keyword)), productHash: products.hash,
     numericCount: selection.selected.length, ratioCount: selection.ratioOnly.length, totalCount: all.length, parts,
     product: products.ref,
@@ -273,7 +276,8 @@ async function run(original, context = {}, delivery = {}) {
       await next(); return;
     }
     if (state.stage === "numeric" || state.stage === "ratio") {
-      await calculate({ job, lease, input, state, calculation, started, save, patch, log });
+      await executionBudget.runCalculationChunks({ job, lease, input, state, calculation, started, save, patch, log },
+        { calculate });
       await next(); return;
     }
     if (state.stage === "enrichment") {
@@ -441,17 +445,23 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
   }
 }
 
-async function calculate({ job, lease, input, state, calculation, started, save, patch, log }) {
+async function calculate({ job, lease, input, state, calculation, started, save, patch, log, shared = {} }) {
   const phase = state.stage, limit = phase === "numeric" ? input.numericCount : input.ratioCount;
   const absoluteCursor = (phase === "numeric" ? 0 : input.numericCount) + state.cursor;
   const partIndex = Math.floor(absoluteCursor / PART_SIZE);
   if (state.cursor >= limit) { state.stage = phase === "numeric" ? "ratio" : "enrichment"; state.cursor = 0; return; }
-  const productCache = await artifacts.readArtifact(input.product), entries = await artifacts.readArtifact(state.parts[partIndex]);
+  // One immutable product/index per invocation, not per checkpoint. Previous
+  // output arrays remain Blob references and are not accumulated in this cache.
+  if (!shared.productCache) {
+    shared.productCache = await artifacts.readArtifact(input.product);
+    shared.productIndex = calculation.buildProductIndex(shared.productCache.items);
+  }
+  const productCache = shared.productCache, entries = await artifacts.readArtifact(state.parts[partIndex]);
   const selected = entries.slice(absoluteCursor % PART_SIZE).filter(e => e.numeric === (phase === "numeric"));
   const rows = [], calculated = [], matchedDiagnostics = [], boundaryRelated = [];
   const funnel = structuredClone(input.funnel);
   const traces = new Map(entries.map(e => [key(e.candidate.keyword), { ...e.trace }]));
-  const ctx = { job, productCache, productIndex: calculation.buildProductIndex(productCache.items),
+  const ctx = { job, productCache, productIndex: shared.productIndex,
     trendMap: new Map(entries.filter(e => e.data !== null).map(e => [e.candidate.keyword, e.data])),
     shoppingMap: new Map(entries.map(e => [e.candidate.keyword, e.shopping])), analysisTrace: traces, funnel,
     loadedEarlyCache: { history: entries.flatMap(e => e.early) }, priorSignals: new Map(entries.map(e => [e.candidate.keyword, e.prior])),
@@ -728,6 +738,7 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
   const final = { state: "publishing", currentStage: "publishing", publicationState: "pending", calculatedAt: completedAt,
     completedAt, progress: 99, message: "계산 완료 · 결과 게시 중", results: rows, resultCount: rows.length, errors: [],
     sourceFreshness, latestDataDate, analyzedCandidateCount: input.totalCount,
+    productCacheObservedAt: input.productCacheObservedAt || null,
     processedCount: input.totalCount, totalCount: input.totalCount,
     searchAdCount: (await artifacts.readArtifact(input.product)).items.length,
     partialAnalysis: pending > 0, trendAvailableCount: sourceFreshness.cacheAvailableCount, pendingTrendCacheCount: pending,

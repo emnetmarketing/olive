@@ -149,7 +149,9 @@ function youtubeCandidates(videos, products) {
   }).filter((item) => item.sourceConfidence >= 55).sort((a, b) => b.sourceConfidence - a.sourceConfidence);
 }
 function mergeCandidates(existing, incoming, now = new Date().toISOString()) {
-  const map = new Map((existing || []).map((item) => [item.normalizedKeyword || normalizedKeyword(item.keyword), { ...item }]));
+  const { sanitizeSearchAdEvidence } = require("./search-ad-observation");
+  const map = new Map((existing || []).map((item) => [item.normalizedKeyword || normalizedKeyword(item.keyword),
+    { ...item, searchAdEvidence: sanitizeSearchAdEvidence(item.searchAdEvidence) }]));
   for (const item of incoming || []) {
     const key = item.normalizedKeyword || normalizedKeyword(item.keyword); const previous = map.get(key);
     const sources = [...new Set([...(previous?.discoverySource || []), ...(item.discoverySource || []), ...(item.evidence || []).map((entry) => entry.source)].filter(Boolean))];
@@ -158,7 +160,7 @@ function mergeCandidates(existing, incoming, now = new Date().toISOString()) {
       evidence: [...(previous?.evidence || []), ...(item.evidence || [])].slice(-20),
       youtubeEvidence: item.youtubeEvidence || previous?.youtubeEvidence || [],
       productEvidence: item.productEvidence || previous?.productEvidence || [],
-      searchAdEvidence: item.searchAdEvidence || previous?.searchAdEvidence || null,
+      searchAdEvidence: sanitizeSearchAdEvidence(item.searchAdEvidence || previous?.searchAdEvidence),
       sourceConfidence: Math.min(100, Math.max(Number(previous?.sourceConfidence || 0), Number(item.sourceConfidence || 0)) + Math.max(0, sources.length - 1) * 8),
       monthlySearchStatus: previous?.monthlySearchStatus || "not-requested", monthlyTotalSearches: previous?.monthlyTotalSearches ?? null });
   }

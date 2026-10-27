@@ -1,4 +1,5 @@
 function bounded(value, min, max) { return Math.max(min, Math.min(max, Number(value || 0))); }
+const { normalizeSearchAdObservation } = require("./search-ad-observation");
 function grade(score) { return score >= 85 ? "very_strong" : score >= 70 ? "strong" : score >= 50 ? "medium" : "reference"; }
 
 function calculateMarketConfidence(row, surgeThreshold) {
@@ -24,9 +25,11 @@ function calculateMarketConfidence(row, surgeThreshold) {
   else if (youtube && Number(youtube.current || 0) > 0) { components.youtube = 5; reasons.push(`YouTube 최근 언급 ${Number(youtube.current)}건`); }
   score += components.youtube;
 
-  if (row.searchAdNewQuery) { components.searchAd = 8; reasons.push("Search Ad 신규 유입"); }
-  else if (Number(row.searchAdImpressionDelta || 0) > 0) { components.searchAd = 6; reasons.push(`Search Ad 노출 증가 +${Number(row.searchAdImpressionDelta)}`); }
-  else if (Number(row.searchAdClicks30d || 0) > 0) { components.searchAd = 4; reasons.push("Search Ad 클릭 유입 확인"); }
+  const search = normalizeSearchAdObservation(row.searchAdObservation || row.earlyMarketEvidence?.comparisons?.searchAd || {});
+  if (row.searchAdNewQuery) { components.searchAd = 8; reasons.push("Search Ad 신규 발견 · 저장 광고 관측 참고"); }
+  else if (search.comparisonStatus === "comparable" && search.delta > 0) { components.searchAd = 6;
+    reasons.push(`저장 광고 관측 대비 Search Ad 노출 +${search.delta} · 집계기간 미확인`); }
+  else if (Number(row.searchAdClicks30d || 0) > 0) { components.searchAd = 4; reasons.push("Search Ad 저장 클릭 관측 참고 · 집계기간 미확인"); }
   score += components.searchAd;
 
   const sources = new Set((row.discoverySource || row.sources || []).filter((source) => !["market-discovery", "keywordstool"].includes(source)));

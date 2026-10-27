@@ -106,6 +106,8 @@ exports.handler = async (event, context = {}) => {
       relatedBrand: "", relatedProductType: "", relatedProductLine: "", category: item.category, categoryEvidence: item.categoryEvidence,
       monthlySearchStatus: item.monthlyVolumeStatus, monthlyTotalSearches: item.monthlyTotalSearches,
       searchAdEvidence: { firstSeenAt: item.firstSeenAt, lastSeenAt: item.lastSeenAt, observedAt: item.lastSeenAt || candidateCache.refreshedAt,
+        previousObservedAt: item.previousSearchAdObservedAt || null, previousObservationAvailable: item.previousSearchAdObservationAvailable === true,
+        isNewlyObserved: item.isNewSearchQuery === true, observationSource: "search-ad-stats",
         sourceRefreshedAt: candidateCache.refreshedAt, observationWindow: "unspecified_api_default", recentImpressions: item.impressions30d, recentClicks: item.clicks30d,
         previousImpressions: item.previousImpressions30d, previousClicks: item.previousClicks30d,
         accountSources: item.accountNumbers || [] }, evidence: [{ source: "searchad-new-query", impressions: item.impressions30d, clicks: item.clicks30d }] }));

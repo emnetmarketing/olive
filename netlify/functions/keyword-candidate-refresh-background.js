@@ -1,5 +1,6 @@
 const { accounts, isActive, searchAdGet, readCache: readProductCache } = require("./search-ad-cache");
 const { connect, readCandidateCache, writeCandidateCache, readCandidateStatus, writeCandidateStatus } = require("./keyword-candidate-cache");
+const { previousCandidateObservation, normalizeSearchAdObservation } = require("./search-ad-observation");
 
 // Keep Search Ad calls bounded, but finish comfortably inside Netlify's
 // background-function execution window. Product synchronization remains
@@ -186,7 +187,8 @@ exports.handler = async (event) => {
             const category = classify(keyword, context.text);
             const existing = candidateMap.get(key) || { keyword, category, categoryEvidence: category === "unknown" ? "unknown" : (categoryCounts(keyword)[category] ? "keyword" : "adgroup-product"),
               sources: [], impressions30d: 0, clicks30d: 0, accountNumbers: [], relatedAdgroupIds: [], relatedProducts: [], relatedBrands: [],
-              firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, previousImpressions30d: Number(previous?.impressions30d || 0), previousClicks30d: Number(previous?.clicks30d || 0),
+              firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, searchAdObservedAt: observedAt,
+              ...previousCandidateObservation(previous, observedAt),
               monthlyPcSearches: previous?.monthlyPcSearches ?? null, monthlyMobileSearches: previous?.monthlyMobileSearches ?? null,
               monthlyTotalSearches: previous?.monthlyTotalSearches ?? null, monthlyVolumeStatus: previous?.monthlyVolumeStatus || (previous?.monthlyTotalSearches != null ? "available" : null) };
             if (!existing.sources.includes("searchad-query")) existing.sources.push("searchad-query");
@@ -230,7 +232,8 @@ exports.handler = async (event) => {
         const category = classify(keyword, seedBatch.join(" "));
         const existing = candidateMap.get(key) || { keyword, category, categoryEvidence: category === "unknown" ? "unknown" : "keywordstool-seed",
           sources: [], impressions30d: 0, clicks30d: 0, accountNumbers: [], relatedAdgroupIds: [], relatedProducts: [], relatedBrands: [],
-          firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt, previousImpressions30d: Number(previous?.impressions30d || 0), previousClicks30d: Number(previous?.clicks30d || 0),
+          firstSeenAt: previous?.firstSeenAt || observedAt, lastSeenAt: observedAt,
+          ...previousCandidateObservation(previous, observedAt),
           monthlyPcSearches: previous?.monthlyPcSearches ?? null, monthlyMobileSearches: previous?.monthlyMobileSearches ?? null,
           monthlyTotalSearches: previous?.monthlyTotalSearches ?? null, monthlyVolumeStatus: previous?.monthlyVolumeStatus || (previous?.monthlyTotalSearches != null ? "available" : null) };
         if (!existing.sources.includes("keywordstool")) existing.sources.push("keywordstool");
@@ -290,8 +293,11 @@ exports.handler = async (event) => {
 
     for (const item of candidateMap.values()) {
       const key = item.keyword.toLocaleLowerCase("ko-KR");
-      item.impressionDelta = Number(item.impressions30d || 0) - Number(item.previousImpressions30d || 0);
       item.isNewSearchQuery = !previousCandidates.has(key);
+      const observation = normalizeSearchAdObservation(item);
+      item.impressionDelta = observation.delta;
+      item.searchAdComparisonStatus = observation.comparisonStatus;
+      item.searchAdObservationWindow = "unspecified_api_default";
       if (!item.monthlyVolumeStatus) item.monthlyVolumeStatus = failedSeeds.has(key) ? "request-failed"
         : requestedSeeds.has(key) ? "keywordtool-unavailable" : "not-requested";
       item.priorityScore = candidatePriority(item);

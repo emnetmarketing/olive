@@ -7,7 +7,7 @@ function mocks({ collection = null, running = null, response = { statusCode: 202
   const updates = []; let calls = 0;
   return { updates, get calls() { return calls; }, deps: { skipConnect: true,
     begin: async (source) => ({ executionId: "execution-1", source }), update: async (record, patch) => { updates.push(patch); return { ...record, ...patch }; },
-    readLatestCollection: async () => collection, readCurrentJob: async () => running,
+    readLatestCollection: async () => collection, readCurrentJob: async () => running, recoverWaiting: async () => null,
     handle: async (event, options) => { calls += 1; assert.equal(options.fastPath, false); const body = JSON.parse(event.body);
       assert.match(body.triggerSource, /^scheduled-/); assert.equal(body.schedulerExecutionId, "execution-1"); return response; } } };
 }
@@ -22,6 +22,17 @@ test("scheduled entry dispatches the same slow collection core and records state
   const mock = mocks(); const result = await run({ body: "{}" }, "scheduled-primary", mock.deps);
   assert.equal(result.statusCode, 202); assert.equal(mock.calls, 1);
   assert.equal(mock.updates.at(-1).state, "dispatched"); assert.equal(mock.updates.at(-1).jobId, "job-1");
+});
+
+test("scheduled recovery reuses only today's collection checkpoint without creating another Job", async () => {
+  const mock = mocks(); let requested;
+  mock.deps.recoverWaiting = async options => { requested = options; return { jobId: 'frozen-current-target', schedulerExecutionId: 'prior-execution' }; };
+  const result = await run({ body: '{}' }, 'scheduled-recovery', mock.deps);
+  const expected = require('../netlify/functions/trend-series-cache').targetDataDate('9999-12-31', new Date());
+  assert.equal(requested.requiredCollectionTarget, expected); assert.equal(mock.calls, 0);
+  assert.equal(JSON.parse(result.body).jobId, 'frozen-current-target');
+  assert.equal(mock.updates.at(-1).resumedExecutionId, 'prior-execution');
+  assert.equal(mock.updates.at(-1).state, 'skipped');
 });
 
 test("recovery skips without external collection when today already completed", async () => {

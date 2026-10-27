@@ -1,4 +1,5 @@
 const { connectLambda, getStore } = require("@netlify/blobs");
+const { normalizeSearchAdObservation } = require("./search-ad-observation");
 
 const STORE_NAME = "today-early-signals";
 const KEY = "current-v1";
@@ -20,25 +21,24 @@ function buildEarlySignals(items, history, now = new Date().toISOString(), optio
     const youtubeCurrent = videos.filter((video) => nowMs - Date.parse(video.publishedAt) >= 0 && nowMs - Date.parse(video.publishedAt) < sixHours).length;
     const youtubePrevious = videos.filter((video) => nowMs - Date.parse(video.publishedAt) >= sixHours && nowMs - Date.parse(video.publishedAt) < sixHours * 2).length;
     const youtubeDelta = youtubeCurrent - youtubePrevious;
-    const search = item.searchAdEvidence || {}; const searchCurrent = Number(search.recentImpressions || 0);
-    const hasSearchPrevious = Number.isFinite(Number(search.previousImpressions)); const searchPrevious = hasSearchPrevious ? Number(search.previousImpressions) : null;
-    const searchDelta = hasSearchPrevious ? searchCurrent - searchPrevious : null;
-    const hasClickPrevious = Number.isFinite(Number(search.previousClicks)); const searchCurrentClicks = Number.isFinite(Number(search.recentClicks)) ? Number(search.recentClicks) : null;
-    const searchPreviousClicks = hasClickPrevious ? Number(search.previousClicks) : null;
-    const searchClickDelta = searchCurrentClicks !== null && searchPreviousClicks !== null ? searchCurrentClicks - searchPreviousClicks : null;
+    const search = normalizeSearchAdObservation(item.searchAdEvidence || {});
+    const searchDelta = search.delta;
     const firstSeenAt = item.discoveredAt || previousRecord.firstSeenAt || item.lastSeenAt || null;
     const firstSeenToday = firstSeenAt && kstDate(firstSeenAt) === kstDate(now);
     const searchObservedAt = search.observedAt || search.lastSeenAt || null;
     const searchObservationIsCurrent = !options.requireFreshSource || (Number.isFinite(Date.parse(searchObservedAt)) && kstDate(searchObservedAt) === kstDate(now));
-    const youtubeTemporal = youtubeCurrent > 0; const searchTemporal = searchObservationIsCurrent && sources.includes("searchad-new-query") && (firstSeenToday || searchDelta > 0);
+    const youtubeTemporal = youtubeCurrent > 0; const searchTemporal = searchObservationIsCurrent && sources.includes("searchad-new-query")
+      && (search.isNewlyObserved || firstSeenToday || searchDelta > 0);
     if (!youtubeTemporal && !searchTemporal) continue;
     const context = Boolean(item.relatedBrand && (item.relatedProductType || item.relatedProductLine));
     let score = 0; const reasons = [];
     if (firstSeenToday) { score += 20; reasons.push("오늘 처음 발견"); }
     if (youtubeCurrent > 0) { score += Math.min(30, youtubeCurrent * 10); reasons.push(`최근 6시간 YouTube ${youtubeCurrent}건`); }
     if (youtubeDelta > 0) { score += 10; reasons.push(`직전 6시간 대비 YouTube +${youtubeDelta}건`); }
-    if (searchTemporal) { score += 20; reasons.push("Search Ad 신규 유입"); }
-    if (searchObservationIsCurrent && searchDelta > 0) { score += Math.min(20, 5 + Math.round(Math.log10(searchDelta + 1) * 5)); reasons.push(`최근 수집 대비 Search Ad 노출 +${searchDelta}`); }
+    if (searchTemporal) { score += 20; reasons.push(search.isNewlyObserved || firstSeenToday
+      ? "Search Ad 신규 발견 · 저장 광고 관측 참고" : "Search Ad 저장 관측 변화 확인"); }
+    if (searchObservationIsCurrent && searchDelta > 0) { score += Math.min(20, 5 + Math.round(Math.log10(searchDelta + 1) * 5));
+      reasons.push(`이전 저장 관측 대비 Search Ad 노출 +${searchDelta} · 집계기간 미확인`); }
     const temporalSources = Number(youtubeTemporal) + Number(searchTemporal);
     if (temporalSources > 1) { score += 15; reasons.push("복수 source 동시 감지"); }
     if (context) { score += 15; reasons.push(`${item.relatedBrand} · ${item.relatedProductLine || item.relatedProductType} 문맥 확인`); }
@@ -50,9 +50,7 @@ function buildEarlySignals(items, history, now = new Date().toISOString(), optio
       relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
       productMatchScore: Number(item.productMatchScore || 0), relatedProduct: item.relatedProduct || "",
       comparisons: { youtube: videos.length ? { method: "recent_6h_vs_previous_6h", current: youtubeCurrent, previous: youtubePrevious, delta: youtubeDelta, deltaRate: ratio(youtubeDelta, youtubePrevious) } : null,
-        searchAd: searchObservationIsCurrent && sources.includes("searchad-new-query") ? { method: "latest_refresh_vs_previous_refresh", observedAt: searchObservedAt, observationWindow: search.observationWindow || "unspecified_api_default", current: searchCurrent, previous: searchPrevious,
-          delta: searchDelta, deltaRate: hasSearchPrevious ? ratio(searchDelta, searchPrevious) : null, currentClicks: searchCurrentClicks,
-          previousClicks: searchPreviousClicks, clickDelta: searchClickDelta } : null },
+        searchAd: searchObservationIsCurrent && sources.includes("searchad-new-query") ? search : null },
       previousNaverState: { everSurged: Boolean(previousRecord.everSurged), resultType: previousRecord.lastResultType || null,
         estimatedSurgeCount: previousRecord.lastEstimatedSurgeCount ?? null }, confirmation: null };
     const old = output.get(key); if (!old || signal.todayEarlySignalScore > old.todayEarlySignalScore) output.set(key, signal);
@@ -92,6 +90,23 @@ function confirmSignals(cache, traces, rows, latestDataDate) {
   const history = (cache?.history || []).map(update); const byKey = new Map(history.map((item) => [`${item.earlySignalDate}:${item.normalizedKeyword}`, item]));
   return { ...cache, history, items: (cache?.items || []).map((item) => byKey.get(`${item.earlySignalDate}:${item.normalizedKeyword}`) || item) };
 }
+function projectStoredSignal(signal) {
+  const raw = signal?.comparisons?.searchAd;
+  if (!raw) return signal;
+  const comparison = normalizeSearchAdObservation(raw, { firstSeenAt: signal.firstSeenAt });
+  const unverified = comparison.comparisonStatus === "unavailable" && (raw.previous != null || raw.previousClicks != null
+    || Number(raw.delta || 0) > 0 || Number(raw.clickDelta || 0) > 0);
+  const reasons = (signal.reasons || []).filter(reason => !(comparison.comparisonStatus === "unavailable"
+    && /Search Ad/.test(reason) && /노출|클릭.*증가|증가/.test(reason)))
+    .map(reason => reason === "Search Ad 신규 유입" ? "Search Ad 저장 광고 관측 참고 · 집계기간 미확인" : reason);
+  if (unverified) reasons.push("Search Ad 이전 관측 없음 · 비교 불가");
+  return { ...signal, comparisons: { ...signal.comparisons, searchAd: comparison }, reasons: [...new Set(reasons)],
+    ...(unverified ? { scoreVerificationStatus: "legacy_unverified_comparison",
+      scoreWarning: "기존 저장 점수 · 이전 Search Ad 비교 미검증(점수 재계산 안 됨)" } : {}) };
+}
+function projectCache(cache) {
+  return { ...cache, items: (cache.items || []).map(projectStoredSignal), history: (cache.history || []).map(projectStoredSignal) };
+}
 async function readCache() { return await store().get(KEY, { type: "json" }).catch(() => null) || { version: 1, items: [], history: [] }; }
 async function writeCache(value) { await store().setJSON(KEY, value); return value; }
-module.exports = { connect, readCache, writeCache, buildEarlySignals, mergeCache, confirmSignals, freshness, normalize, kstDate, STORE_NAME, KEY };
+module.exports = { connect, readCache, writeCache, buildEarlySignals, mergeCache, confirmSignals, freshness, normalize, kstDate, projectStoredSignal, projectCache, STORE_NAME, KEY };
