@@ -145,6 +145,11 @@ async function handle(event, { fastPath = true } = {}) {
       return json(200, { existing: true, ...metadata,
         message: "동일한 Background 작업이 실행 중입니다. 기존 진행 상태에 연결합니다." });
     }
+    if (mode === "instant") {
+      await require("./instant-dispatch").enqueueInitial(job.jobId);
+      return json(202, { existing: false, ...jobMetadata(job), dispatchState: "pending",
+        message: "분석 작업을 예약했습니다. 서버가 자동으로 수집·계산·게시를 이어갑니다." });
+    }
     const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
     dispatchAttempted = true;
     const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {

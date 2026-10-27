@@ -15,11 +15,13 @@ const ROOT = path.resolve(__dirname, "..");
 const SITE = "dc4e873a-5b98-40de-a2f8-9c36e9f7e8bc";
 const HEALTHY = "6a9a6ee0f88f8300080bc18f";
 const API = "https://api.netlify.com/api/v1";
+const EXPECTED_FUNCTION_COUNT = 32;
 const SCHEDULES = {
   "keyword-candidate-scheduled": "0 17 * * *",
   "market-discovery-scheduled": "0 */6 * * *",
   "trend-data-collection-recovery-scheduled": "0 23 * * *",
   "trend-data-collection-scheduled": "0 21 * * *",
+  "trend-instant-dispatch-scheduled": "*/2 * * * *",
 };
 const sha = (bytes, algorithm = "sha256") => crypto.createHash(algorithm).update(bytes).digest("hex");
 const json = file => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -58,20 +60,24 @@ function loadVerifiedArtifacts(dir) {
   assert.equal(evidence.version, "16.3.0");
   assert.equal(evidence.hostNode, "v22.23.3");
   assert.equal(evidence.symlinkCount, 0);
-  assert.equal(evidence.entryCount, 31);
+  assert.equal(evidence.entryCount, EXPECTED_FUNCTION_COUNT);
   assert.equal(report.node, "v22.23.3");
   assert.equal(report.ancestorModulesDisabled, true);
   assert.equal(report.workspaceModuleFallback, false);
-  assert.equal(report.zipEntryCount, 31);
-  assert.equal(manifest.functions.length, 31);
-  assert.equal(report.artifacts.length, 31);
+  assert.equal(report.zipEntryCount, EXPECTED_FUNCTION_COUNT);
+  assert.equal(manifest.functions.length, EXPECTED_FUNCTION_COUNT);
+  assert.equal(report.artifacts.length, EXPECTED_FUNCTION_COUNT);
   const imported = report.results.find(r => r.mode === "imports");
   const execution = report.results.find(r => r.mode === "execution");
-  assert.equal(imported?.imported, 31);
+  assert.equal(imported?.imported, EXPECTED_FUNCTION_COUNT);
+  assert.deepEqual(imported?.schedules, SCHEDULES);
   assert.equal(imported?.externalCalls, 0);
   for (const key of ["bootstrapExecuted", "nativeContext", "latestStatusSnapshotJobMatch"]) assert.equal(execution?.[key], true, key);
   assert.equal(execution?.sourceApiCalls, 0);
   assert.equal(execution?.productionCalls, 0);
+  assert.equal(execution?.scheduledDispatcherVerified, true);
+  assert.equal(execution?.scheduledDispatcherIdleWrites, 0);
+  assert.equal(execution?.scheduledDispatcherIdleSourceCalls, 0);
   assert.equal(execution?.canonicalPeriodRows, execution?.excelPeriodRows);
   assert.deepEqual(execution?.probePhases, [1, 2]);
   for (const key of ["duplicateBlocked", "staleBlocked", "publicationFailureProtected", "publicationRetrySucceeded",
@@ -207,7 +213,8 @@ async function waitReady(api, deployId) {
 function verifyRemote(deploy, plan, verified) {
   assert.equal(deploy.commit_ref, plan.commit, "Remote commit mismatch");
   const fns = deploy.available_functions || [];
-  assert.equal(fns.length, 31);
+  assert.equal(fns.length, EXPECTED_FUNCTION_COUNT);
+  assert.deepEqual(fns.map(fn => fn.n || fn.name).sort(), Object.keys(verified.functions).sort(), "Remote function registration mismatch");
   for (const fn of fns) {
     const name = fn.n || fn.name;
     assert.equal(fn.d || fn.sha || fn.code_sha, verified.functions[name], `Remote function hash mismatch: ${name}`);
@@ -227,7 +234,7 @@ async function main(argv = process.argv.slice(2)) {
     console.log(JSON.stringify({ mode: "plan", remoteWrites: 0, deploysCreated: 0, sourceApiCalls: 0,
       basePublishedId: plan.basePublishedId, commit: plan.commit, staticFiles: Object.keys(body.files).length,
       staticLocalUploadAllowlist: ["index.html", "netlify.toml", "_headers"], otherStaticFiles: "Remote published SHA references only; no local directory upload",
-      functions: 31, schedules: verified.schedules, runtime: "nodejs22.x", runtimeAPIVersion: 2,
+      functions: EXPECTED_FUNCTION_COUNT, schedules: verified.schedules, runtime: "nodejs22.x", runtimeAPIVersion: 2,
       inputDigest: plan.inputDigest, executionDigest: plan.executionDigest, payloadDigest: plan.payloadDigest,
       existingCandidateId: state?.deployId || null, draft: !args.production,
       publishRequiresSeparateCommand: !args.production,
@@ -280,12 +287,13 @@ async function main(argv = process.argv.slice(2)) {
   if (args.production) state.publishedAt = new Date().toISOString();
   state.permalink = deploy.links?.permalink || null; saveState(args.state, state);
   console.log(JSON.stringify({ candidateId: state.deployId, state: "ready", commit: args.commit, context: deploy.context,
-    publishedUnchanged: !args.production, functionsVerified: 31, schedulesVerified: 4, sourceApiCalls: 0,
+    publishedUnchanged: !args.production, functionsVerified: EXPECTED_FUNCTION_COUNT, schedulesVerified: Object.keys(SCHEDULES).length, sourceApiCalls: 0,
     functionInvocations: 0, publishPerformed: args.production, permalink: state.permalink,
     warning: "Ready/Published metadata is not a service health test. Check actual read-only Functions and restore the previous deploy immediately on failure." }, null, 2));
 }
 
-module.exports = { parseArgs, loadVerifiedArtifacts, client, makePlan, verifyRemote, ensureCandidate, needsManifestUpload, main };
+module.exports = { parseArgs, loadVerifiedArtifacts, client, makePlan, verifyRemote, ensureCandidate, needsManifestUpload, main,
+  EXPECTED_FUNCTION_COUNT, SCHEDULES };
 if (require.main === module) main().catch(error => {
   console.error(`Verified-artifact deployment stopped: ${String(error.message).slice(0, 600)}`);
   process.exitCode = 1;

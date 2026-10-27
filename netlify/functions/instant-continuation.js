@@ -128,7 +128,7 @@ async function writeState(lease, value, options = {}) {
     throw fail("INSTANT_STAGE_REGRESSION", "Instant continuation cannot repeat an earlier completed stage.");
   if (previous?.stage === state.stage && Number(state.cursor || 0) < Number(previous.cursor || 0))
     throw fail("INSTANT_CURSOR_REGRESSION", "Instant current-stage progress cannot move behind its saved cursor.");
-  state.updatedAt = value.updatedAt || new Date(nowMs(options)).toISOString();
+  state.updatedAt = new Date(nowMs(options)).toISOString();
   const ref = await writeArtifact(lease, "state", state, options);
   const cursors = Object.fromEntries(CURSORS.map(key => [key, state[key]]));
   return writeOwnedInstantJob(lease, { ...cursors, instantStage: state.stage, instantStageCursor: stageCursor(state),

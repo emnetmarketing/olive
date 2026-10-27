@@ -17,14 +17,23 @@ async function claimInstantWorker(jobId, options = {}) {
     const job = entry?.data; const now = clock(options);
     const ticketProvided = options.continuationTicket != null;
     const dispatch = job?.continuationDispatch;
+    if (dispatch?.attemptsExhausted || dispatch?.state === "blocked")
+      return { claimed: false, reason: "continuation-dispatch-blocked", job };
+    if (job?.state === "publication_failed" && dispatch?.state === "entered")
+      return { claimed: false, reason: "publication-requires-explicit-resume", job };
     const matchingTicket = ticketProvided && typeof options.continuationTicket === "string" && Boolean(options.continuationTicket)
       && dispatch?.ticket === options.continuationTicket;
+    if (dispatch?.ticket && !ticketProvided) return { claimed: false, reason: "continuation-ticket-required", job };
     if (ticketProvided && !matchingTicket) return { claimed: false, reason: "stale-continuation-delivery", job };
-    const checkpointRedelivery = matchingTicket && dispatch.enteredAt && Boolean(job?.instantStateKey)
+    const initialInputBoundary = Boolean(job?.instantInputsKey && job?.instantInputsHash)
+      && !job?.instantStateKey && !Number(job?.instantStateRevision || 0) && !Number(job?.searchTrendApiCallCount || 0)
+      && !Number(job?.calculationCursor || 0);
+    const checkpointRedelivery = matchingTicket && dispatch.enteredAt && Boolean(job?.instantStateKey || initialInputBoundary)
       && !active(job?.instantWorker, now);
     if (matchingTicket && dispatch.enteredAt && !checkpointRedelivery)
       return { claimed: false, reason: "continuation-already-entered", job };
     const resumeDelivered = job?.state === "interrupted" && job.resumable === true && Boolean(job.instantStateKey)
+      && (!job.errorCode || job.errorCode === "INSTANT_DISPATCH_FAILED")
       && matchingTicket && (!dispatch.enteredAt || checkpointRedelivery);
     if (!job || job.mode !== "instant" || !["running", "publishing", "publication_failed"].includes(job.state) && !resumeDelivered)
       return { claimed: false, reason: "not-runnable", job };

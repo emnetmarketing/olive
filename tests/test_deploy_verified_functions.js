@@ -11,6 +11,7 @@ const schedules = [
   { name: "market-discovery-scheduled", cron: "0 */6 * * *" },
   { name: "trend-data-collection-recovery-scheduled", cron: "0 23 * * *" },
   { name: "trend-data-collection-scheduled", cron: "0 21 * * *" },
+  { name: "trend-instant-dispatch-scheduled", cron: "*/2 * * * *" },
 ];
 const verified = {
   functions: { "fixture-background": "b".repeat(64) }, functionsConfig: {}, schedules,
@@ -92,7 +93,7 @@ test("ready CREATE still needs manifest PUT with commit_ref before verification"
 });
 
 test("remote actual compact function metadata validates exact ZIP digests", () => {
-  const functions = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`fixture-${i}`, i.toString(16).padStart(64, "0")]));
+  const functions = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`fixture-${i}`, i.toString(16).padStart(64, "0")]));
   const remote = { commit_ref: commit, function_schedules: schedules,
     available_functions: Object.entries(functions).map(([n, d]) => ({ n, d, bd: { runtimeAPIVersion: 2 }, r: "nodejs22.x", im: "stream" })) };
   verifyRemote(remote, { commit }, { functions });

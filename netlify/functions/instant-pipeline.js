@@ -13,6 +13,7 @@ const { digest } = require("./period-publication");
 const { publishInstant } = require("./instant-publication");
 const { calculateMarketConfidence } = require("./market-confidence");
 const scheduler = require("./trend-scheduler-execution-cache");
+const dispatch = require("./instant-dispatch");
 const PART_SIZE = 250;
 const SAFE_MS = 4 * 60 * 1000;
 const COLLECTION_MS = 3 * 60 * 1000;
@@ -89,7 +90,7 @@ async function prepare(job, lease, core) {
       const cached = series.lookup(cache.entries, candidate.keyword, "search", candidate.category, job.queryStartDate, job.endDate, now);
       const freshness = policy.classify(cached.record, cached, frozenJob, now);
       const compatible = freshness.reusable;
-      const data = compatible ? cached.record.rawRatioSeries.filter(p => p.period >= job.queryStartDate && p.period <= job.endDate) : null;
+      const data = compatible ? cached.record.rawRatioSeries.filter(p => p.period >= job.queryStartDate && p.period <= frozenJob.targetDataDate) : null;
       const shopping = series.lookup(cache.entries, candidate.keyword, "shopping", candidate.category, job.queryStartDate, job.endDate, now);
       candidate.candidateTier = tiers.isDueForCollection(candidate, prior.get(candidate.keyword), cached.record, now).tier;
       states[freshness.state] = (states[freshness.state] || 0) + 1;
@@ -143,8 +144,13 @@ async function saveSeries(lease, updates) {
       const entries = new Map(Object.entries(entry?.data?.entries || {}));
       for (const update of values) {
         const cached = entries.get(series.normalizedKeyword(update.keyword));
-        const old = update.source === "shopping" ? cached?.shopping?.[update.category] : cached?.search;
-        if (!old || Date.parse(old.fetchedAt || "") <= Date.parse(update.fetchedAt)) series.upsert(entries, update);
+        // A delayed, frozen Job must not replace a newer automatic window.
+        // Keep its entire response in the existing exact-window collection.
+        const historical = update.source === "search" && cached?.search?.requestEndDate > update.endDate;
+        const old = update.source === "shopping" ? cached?.shopping?.[update.category]
+          : historical ? cached?.searchWindows?.[series.windowKey(update.startDate, update.endDate)] : cached?.search;
+        if (!old || Date.parse(old.fetchedAt || "") <= Date.parse(update.fetchedAt))
+          series.upsert(entries, historical ? { ...update, cacheScope: "historical" } : update);
       }
       success = Boolean((await store.setJSON(blobKey, { version: series.CACHE_VERSION, shard, updatedAt: new Date().toISOString(), entries: Object.fromEntries(entries) },
         entry?.etag ? { onlyIfMatch: entry.etag } : { onlyIfNew: true }))?.modified);
@@ -172,6 +178,28 @@ async function readSeriesStrict(candidates, job, now) {
   return { entries, manifest: await store.get(series.MANIFEST_KEY, { type: "json" }) };
 }
 
+// Secondary current views obey the same generation order as the main snapshot.
+// A resumed old Job still owns its immutable results, but cannot roll these
+// shared views back after a newer analysis has published them.
+async function writeCurrentProjection(lease, job, blobKey, value) {
+  const store = getCompatibleStore({ name: "trend-analysis", consistency: "strong" });
+  const generation = Date.parse(job.createdAt);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await worker.assertInstantWorker(lease);
+    const entry = await store.getWithMetadata(blobKey, { type: "json" });
+    const previous = entry?.data;
+    const previousJob = previous?.jobId && previous.jobId !== job.jobId
+      ? await store.get(`jobs/${previous.jobId}`, { type: "json" }) : null;
+    const previousGeneration = Number(previous?.generation || 0)
+      || Date.parse(previousJob?.createdAt || previous?.updatedAt || previous?.completedAt || "") || 0;
+    if (previous?.jobId !== job.jobId && previousGeneration > generation) return { skippedNewer: true };
+    await worker.assertInstantWorker(lease);
+    if ((await store.setJSON(blobKey, { ...value, jobId: job.jobId, generation },
+      entry?.etag ? { onlyIfMatch: entry.etag } : { onlyIfNew: true }))?.modified) return { stored: true };
+  }
+  throw error("INSTANT_PROJECTION_CONFLICT", "Current analysis view changed concurrently; saved calculation is preserved.");
+}
+
 async function run(original, context = {}, delivery = {}) {
   const background = require("./trend-analysis-background");
   const core = background._test, calculation = background.calculation;
@@ -195,15 +223,15 @@ async function run(original, context = {}, delivery = {}) {
     const ticket = crypto.randomUUID(), requestedAt = new Date().toISOString();
     job = await worker.releaseInstantWorker(lease, { continuationCount: Number(job.continuationCount || 0) + 1,
       continuationRequestedAt: requestedAt, resumable: true, lastInvocation: completedRun,
-      continuationDispatch: { ticket, state: "pending", requestedAt, number: Number(job.continuationCount || 0) + 1 } });
-    log("instant-continuation-requested", { phase: state.stage, cursor: state.cursor, ticket });
-    const response = await fetch(`${String(process.env.URL || "").replace(/\/$/, "")}/.netlify/functions/trend-analysis-background`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId, continuationTicket: ticket }), signal: AbortSignal.timeout(30000) });
-    if (!response.ok && response.status !== 202) throw error("INSTANT_DISPATCH_FAILED", `Continuation request failed: HTTP ${response.status}`);
-    log("instant-continuation-accepted", { httpStatus: response.status });
+      continuationDispatch: { ticket, state: "pending", requestedAt, readyAt: requestedAt,
+        checkpointRevision: job.instantStateRevision, number: Number(job.continuationCount || 0) + 1 } });
+    log("instant-continuation-pending", { phase: state.stage, cursor: state.cursor, ticket });
   };
   log("instant-invocation-entered");
   try {
+    // Register before doing work, not after checkpoint/release. An invocation
+    // killed between those writes remains discoverable by an independent tick.
+    await dispatch.registerJob(job.jobId);
     if (["publishing", "publication_failed"].includes(job.state) && Array.isArray(job.results)) {
       job = await publishInstant(job, { lease }); log("instant-publication-completed", { rows: job.results.length, hash: digest(job.results) });
       if (job.schedulerExecutionId) await scheduler.updateById(job.schedulerExecutionId, { state: "completed", stage: "completed", jobId: job.jobId,
@@ -231,7 +259,10 @@ async function run(original, context = {}, delivery = {}) {
       // Inputs were committed immediately before the first state CAS. No source
       // dispatch is possible before that state, so only this initial boundary
       // can be recovered from the already frozen (not current) inputs.
-      state = initialState(job, input); await next(); return;
+      state = initialState(job, input);
+      await patch({ targetDataDate: input.targetDataDate, orderedCandidateHash: input.orderedCandidateHash,
+        productVersionHash: input.productHash, calculationVersion: input.calculationVersion });
+      await next(); return;
     }
     const durableMetrics = (await quota.readUsage()).jobs?.[job.jobId]?.metricsByType || {};
     for (const type of Object.keys(state.apiMetrics)) for (const metric of METRICS)
@@ -283,10 +314,6 @@ async function run(original, context = {}, delivery = {}) {
       await worker.releaseInstantWorker(lease, { state: publication ? "publication_failed" : "interrupted", resumable: Boolean(owned.instantStateKey || publication),
         errors: [failure.message], failedAt: new Date().toISOString(), errorCode: failure.code || "INSTANT_PIPELINE_FAILED",
         message: publication ? "계산 결과 보존 · 게시 재시도 필요" : "작업 중단 · 저장된 checkpoint 보존" });
-    } else if (failure.code === "INSTANT_DISPATCH_FAILED" || failure.name === "TimeoutError" || failure.name === "TypeError") {
-      const takeover = await worker.claimInstantWorker(job.jobId, { owner: `${invocationId}-dispatch-check` });
-      if (takeover.claimed) await worker.releaseInstantWorker(takeover.lease, { state: "interrupted", resumable: true,
-        errorCode: "INSTANT_DISPATCH_FAILED", errors: [failure.message], message: "다음 실행 연결 실패 · checkpoint 보존" });
     }
   } finally { await worker.releaseInstantWorker(lease).catch(() => null); log("instant-invocation-exited"); }
 }
@@ -325,7 +352,11 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
       if (!touched.has(item.partIndex)) touched.set(item.partIndex, await artifacts.readArtifact(state.parts[item.partIndex]));
       const entry = touched.get(item.partIndex)[item.offset], result = responses[index];
       if (result?.success) {
-        entry.data = result.series; entry.sourceRecord = { fetchedAt: result.fetchedAt, requestStartDate: job.queryStartDate, requestEndDate: job.endDate };
+        // The provider may now offer dates after this old Job's frozen target.
+        // Preserve the full response in cache/receipt; calculation stops at the
+        // original target date, without splicing normalized response windows.
+        entry.data = result.series.filter(p => p.period >= job.queryStartDate && p.period <= input.targetDataDate);
+        entry.sourceRecord = { fetchedAt: result.fetchedAt, requestStartDate: job.queryStartDate, requestEndDate: job.endDate };
         entry.freshness = { state: result.series.some(p => p.period === input.targetDataDate) ? "target-confirmed" : result.series.length ? "confirmed-no-target" : "empty-response",
           shouldFetch: false, targetDataDate: input.targetDataDate };
         Object.assign(entry.trace, { searchTrendStatus: "pending", cacheHit: false, trendFetchedAt: result.fetchedAt, dataFreshness: "fresh-fetch", trendWaitReason: null, exclusionReason: null });
@@ -350,7 +381,10 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
       for (const item of state.inflight.items) {
         const shard = series.shardFor(series.normalizedKeyword(item.keyword));
         if (!readShards.has(shard)) readShards.set(shard, await store.get(`shards/v1/${shard}`, { type: "json" }));
-        const record = readShards.get(shard)?.entries?.[series.normalizedKeyword(item.keyword)]?.search;
+        const cached = readShards.get(shard)?.entries?.[series.normalizedKeyword(item.keyword)];
+        const record = [cached?.search, cached?.searchWindows?.[series.windowKey(job.queryStartDate, job.endDate)]]
+          .filter(r => r?.requestStartDate === job.queryStartDate && r?.requestEndDate === job.endDate)
+          .sort((a, b) => Date.parse(b.fetchedAt) - Date.parse(a.fetchedAt))[0];
         const observed = record?.requestStartDate === job.queryStartDate && record?.requestEndDate === job.endDate
           && Date.parse(record.fetchedAt) >= Date.parse(state.inflight.startedAt);
         responses.push(observed ? { success: true, series: record.rawRatioSeries, fetchedAt: record.fetchedAt } : { code: "REQUEST_OUTCOME_UNKNOWN" });
@@ -657,9 +691,7 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
   }
   frozenHistory.records.clear(); previousHistory.records.length = 0;
   await worker.assertInstantWorker(lease);
-  const latestHistory = await history.readSurgeHistory({ sequential: true });
-  history.upsertInstantHistory(latestHistory.records, observations, job.jobId, job.createdAt);
-  result.historyManifest = await history.writeSurgeHistory(latestHistory.records, new Date().toISOString(), { sequential: true });
+  result.historyManifest = await require("./instant-history").mergeInstantHistory(lease, observations);
   state.result = await artifacts.writeArtifact(lease, "history-results", result);
   state.cursor = 1; state.finalizeCursor = 1;
   log("instant-history-finalized", { rows: rows.length });
@@ -685,9 +717,9 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
   const latestDataDate = sourceFreshness.actualDataDate;
   const pending = input.totalCount - sourceFreshness.cacheAvailableCount;
   const completedAt = new Date().toISOString();
-  await analysis.writeDiagnosticIndex({ version: 1, jobId: job.jobId, mode: "instant", startDate: job.startDate, endDate: job.endDate,
+  await writeCurrentProjection(lease, job, analysis.DIAGNOSTIC_INDEX_KEY, { version: 1, jobId: job.jobId, mode: "instant", startDate: job.startDate, endDate: job.endDate,
     latestDataDate, completedAt, items: traces });
-  if (!pending) await analysis.store().setJSON("signals/current", { updatedAt: completedAt, mode: "instant", items: calculated.map(e => ({
+  if (!pending) await writeCurrentProjection(lease, job, "signals/current", { updatedAt: completedAt, mode: "instant", items: calculated.map(e => ({
     keyword: e.candidate.keyword, estimatedSurgeCount: Math.round(e.metrics.surgeCount), endLift: Math.round(e.metrics.endLift),
     peakLift: Math.round(e.metrics.peakLift), latestDataDate: e.metrics.latestPeriod })) });
   const metrics = state.apiMetrics;
@@ -732,4 +764,4 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
   log("instant-final-result-saved", { rows: rows.length, hash: final.resultsHash, actualDataDate: latestDataDate });
 }
 
-module.exports = { run, prepare, funnelFor, saveSeries, combine, collect, calculate, enrich, finalize, PART_SIZE, SAFE_MS, COLLECTION_MS, MAX_INVOCATIONS };
+module.exports = { run, prepare, funnelFor, saveSeries, writeCurrentProjection, combine, collect, calculate, enrich, finalize, PART_SIZE, SAFE_MS, COLLECTION_MS, MAX_INVOCATIONS };

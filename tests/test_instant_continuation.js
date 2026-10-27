@@ -117,6 +117,19 @@ test("duplicate delivery cannot claim a live Instant worker", async () => {
   assert.equal((await f.store.get(`jobs/${f.job.jobId}`)).invocationCount, 1);
 });
 
+test("late duplicate cannot bypass a failed publication; explicit adopted pending delivery may resume", async () => {
+  const f = await fixture();
+  await worker.releaseInstantWorker(f.lease, { state: "publication_failed", instantStateKey: "saved-state",
+    continuationDispatch: { ticket: "publication-ticket", state: "entered", enteredAt: new Date(f.options.now()).toISOString() } }, f.options);
+  const delayed = await worker.claimInstantWorker(f.job.jobId, { ...f.options, continuationTicket: "publication-ticket" });
+  assert.equal(delayed.claimed, false); assert.equal(delayed.reason, "publication-requires-explicit-resume");
+  const saved = await f.store.get(`jobs/${f.job.jobId}`);
+  await f.store.setJSON(`jobs/${f.job.jobId}`, { ...saved, continuationDispatch: { ...saved.continuationDispatch,
+    state: "pending", adoptedAt: new Date(f.options.now()).toISOString() } });
+  const resumed = await worker.claimInstantWorker(f.job.jobId, { ...f.options, continuationTicket: "publication-ticket" });
+  assert.equal(resumed.claimed, true); assert.equal(resumed.job.state, "publication_failed");
+});
+
 test("accepted but delayed continuation can resume its matching interrupted pending dispatch", async () => {
   const f = await fixture(); await continuation.writeState(f.lease, { stage: "numeric", calculationCursor: 250 }, f.options);
   await worker.releaseInstantWorker(f.lease, { state: "interrupted", resumable: true,
@@ -172,6 +185,24 @@ test("expired worker cannot write state, shards or replace the new fenced cursor
   assert.equal((await f.store.get(`jobs/${f.job.jobId}`)).calculationCursor, 500);
 });
 
+test("a delayed matching delivery cannot automatically revive an explicit calculation failure", async () => {
+  const f = await fixture();
+  await continuation.writeState(f.lease, { stage: "numeric", cursor: 250, calculationCursor: 250 }, f.options);
+  await worker.releaseInstantWorker(f.lease, { state: "interrupted", resumable: true, errorCode: "INSTANT_INPUT_INCOMPATIBLE",
+    continuationDispatch: { ticket: "queued-before-failure", state: "entered", enteredAt: new Date(f.options.now()).toISOString() } }, f.options);
+  const claimed = await worker.claimInstantWorker(f.job.jobId, { ...f.options, continuationTicket: "queued-before-failure" });
+  assert.equal(claimed.claimed, false); assert.equal(claimed.reason, "not-runnable");
+  assert.equal((await f.store.get(`jobs/${f.job.jobId}`)).calculationCursor, 250);
+});
+
+test("delayed 202 delivery cannot bypass the bounded dispatcher attempt limit", async () => {
+  const f = await fixture();
+  await continuation.writeState(f.lease, { stage: "numeric", cursor: 250, calculationCursor: 250 }, f.options);
+  await worker.releaseInstantWorker(f.lease, { continuationDispatch: { ticket: "exhausted-ticket", state: "blocked", attemptsExhausted: true } }, f.options);
+  const claimed = await worker.claimInstantWorker(f.job.jobId, { ...f.options, continuationTicket: "exhausted-ticket" });
+  assert.equal(claimed.claimed, false); assert.equal(claimed.reason, "continuation-dispatch-blocked");
+});
+
 test("cursor, stage, immutable scope and continuation counter cannot regress", async () => {
   const f = await fixture(); await continuation.writeState(f.lease, { stage: "ratio", calculationCursor: 5000, ratioCursor: 10 }, f.options);
   await assert.rejects(continuation.writeState(f.lease, { stage: "ratio", calculationCursor: 4999 }, f.options), { code: "INSTANT_CURSOR_REGRESSION" });
@@ -198,6 +229,14 @@ test("generic stage cursor cannot regress but may reset on a forward stage trans
   const saved = await continuation.writeState(f.lease, { stage: "numeric", cursor: 0 }, f.options);
   const state = await continuation.readState(saved, f.options);
   assert.equal(state.cursor, 0); assert.equal(state.collectionCursor, 250); assert.equal(saved.instantStageCursor, 0);
+});
+
+test("checkpoint timestamp records the latest successful save instead of retaining the initial timestamp", async () => {
+  const f = await fixture();
+  const first = await continuation.writeState(f.lease, { stage: "numeric", cursor: 250, calculationCursor: 250 }, f.options);
+  const state = await continuation.readState(first, f.options); f.advance(1000);
+  const second = await continuation.writeState(f.lease, { ...state, cursor: 500, calculationCursor: 500 }, f.options);
+  assert.equal(Date.parse(second.checkpointUpdatedAt) - Date.parse(first.checkpointUpdatedAt), 1000);
 });
 
 test("legacy jobs freeze target date and calculation version once, then prevent mutation", async () => {

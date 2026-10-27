@@ -38,17 +38,18 @@ function runtime(overrides = {}) {
 }
 
 function startFixture(existing = null) {
-  const acquisitions = [], jobs = new Map();
+  const acquisitions = [], queued = [], jobs = new Map();
   const rt = runtime({
     "trend-analysis-cache.js": { connect() {}, acquireJob: async input => {
       acquisitions.push(input); return { existing: Boolean(existing), job: existing || { ...input, jobId: "new-instant" } };
     }, writeJob: async (id, data) => jobs.set(id, data), readJob: async id => jobs.get(id), readCurrentJob: async () => null },
+    "instant-dispatch.js": { enqueueInitial: async id => { queued.push(id); } },
     "trend-api-quota.js": { connect() {} }, "signal-snapshot-cache.js": { connect() {}, readLatest: async () => null },
     "keyword-candidate-cache.js": { readCandidateCache: async () => ({ candidates: [{ keyword: "fixture" }] }) },
     "search-ad-cache.js": { readCache: async () => ({ items: [{ product: "fixture" }] }) },
     "operating-settings-cache.js": { readOperatingSettings: async () => ({ surgeThreshold: 300, matchThreshold: 40 }) }
   });
-  return { ...rt, acquisitions, start: rt.load("trend-analysis-start.js") };
+  return { ...rt, acquisitions, queued, start: rt.load("trend-analysis-start.js") };
 }
 function fakeNetwork(t, responder) {
   const original = global.fetch, previousId = process.env.NAVER_CLIENT_ID, previousSecret = process.env.NAVER_CLIENT_SECRET;
@@ -66,7 +67,7 @@ test("search-only scope is accepted only for explicit Instant Slow Path and surv
   const response = await fixture.start.handle({ httpMethod: "POST", body: JSON.stringify({ mode: "instant", collectionScope: SCOPE }) }, { fastPath: false });
   assert.equal(response.statusCode, 202); assert.equal(fixture.acquisitions[0].collectionScope, SCOPE);
   assert.equal(JSON.parse(response.body).collectionScope, SCOPE);
-  assert.equal(JSON.parse(calls[0].options.body).job.collectionScope, SCOPE);
+  assert.deepEqual(fixture.queued, ["new-instant"]); assert.equal(calls.length, 0);
   assert.equal(fixture.acquisitions[0].historicalCollection, false);
 });
 
@@ -136,6 +137,41 @@ test("cached News is cloned from completed Instant only, never fabricated from P
   rows[0].news.items[0].title = "local"; assert.equal(previous.results[0].news.items[0].title, "saved");
 });
 
+test("resuming an older frozen window preserves newer automatic cache and other historical responses", async () => {
+  const rt = runtime(), store = rt.getStore("trend-analysis"), series = rt.load("trend-series-cache.js");
+  const job = { jobId: "old-window-resume", mode: "instant", state: "running", createdAt: "2026-10-16T13:00:00Z" };
+  await store.setJSON(`jobs/${job.jobId}`, job);
+  const { lease } = await rt.load("instant-worker.js").claimInstantWorker(job.jobId);
+  const entries = new Map(), keyword = "fixture";
+  series.upsert(entries, { keyword, source: "search", startDate: "2026-09-27", endDate: "2026-10-27",
+    series: [{ period: "2026-10-26", ratio: 91 }], fetchedAt: "2026-10-27T00:00:00Z" });
+  series.upsert(entries, { keyword, source: "search", startDate: "2026-08-01", endDate: "2026-08-31",
+    series: [], fetchedAt: "2026-09-01T00:00:00Z", cacheScope: "historical" });
+  const original = clone(entries.get(keyword)), shard = series.shardFor(keyword);
+  const cache = rt.getStore("trend-series-cache");
+  await cache.setJSON(`shards/v1/${shard}`, { entries: Object.fromEntries(entries) });
+  await rt.load("instant-pipeline.js").saveSeries(lease, [{ keyword, source: "search", startDate: "2026-09-16", endDate: "2026-10-16",
+    series: [{ period: "2026-10-15", ratio: 70 }], fetchedAt: "2026-10-27T03:00:00Z" }]);
+  const saved = (await cache.get(`shards/v1/${shard}`)).entries[keyword];
+  assert.deepEqual(saved.search, original.search);
+  assert.deepEqual(saved.searchWindows["2026-08-01_2026-08-31"], original.searchWindows["2026-08-01_2026-08-31"]);
+  assert.deepEqual(saved.searchWindows["2026-09-16_2026-10-16"].rawRatioSeries, [{ period: "2026-10-15", ratio: 70 }]);
+});
+
+test("an older resumed Job cannot roll shared diagnostic or candidate signal views back", async () => {
+  const rt = runtime(), store = rt.getStore("trend-analysis");
+  const job = { jobId: "older", mode: "instant", state: "running", createdAt: "2026-10-16T13:00:00Z" };
+  await store.setJSON("jobs/older", job);
+  await store.setJSON("jobs/newer", { ...job, jobId: "newer", createdAt: "2026-10-27T00:00:00Z" });
+  const { lease } = await rt.load("instant-worker.js").claimInstantWorker(job.jobId);
+  for (const key of ["signals/current", "diagnostics/latest-v1"]) {
+    const previous = { jobId: "newer", items: [{ keyword: "keep-new" }] };
+    await store.setJSON(key, previous);
+    assert.deepEqual(await rt.load("instant-pipeline.js").writeCurrentProjection(lease, job, key, { items: [] }), { skippedNewer: true });
+    assert.deepEqual(await store.get(key), previous);
+  }
+});
+
 function backgroundFixture({ scope = SCOPE, cachedShopping = true, cachedNews = true } = {}) {
   const seriesCache = require("../netlify/functions/trend-series-cache");
   let candidateReads = 0;
@@ -174,6 +210,7 @@ function backgroundFixture({ scope = SCOPE, cachedShopping = true, cachedNews = 
 }
 
 async function runBackground(t, options) {
+  const optionsForRun = options;
   const fixture = backgroundFixture(options), store = fixture.getStore("trend-analysis");
   const seriesStore = fixture.getStore("trend-series-cache"), grouped = new Map();
   for (const [keyword, entry] of fixture.entries) {
@@ -189,12 +226,13 @@ async function runBackground(t, options) {
   await fixture.getStore("trend-signal-snapshots").setJSON("latest-valid-v1/period", { jobId: "preserved-period439", resultCount: 439 });
   await store.setJSON(`jobs/${fixture.job.jobId}`, fixture.job);
   const queue = [], previousUrl = process.env.URL;
-  let lostDispatchResponse = false;
+  let lostDispatchResponse = false, dispatcherActive = false;
   const loseOneDispatchResponse = Boolean(options?.lostDispatchResponseOnce);
   process.env.URL = "https://instant-fixture.invalid";
   const calls = fakeNetwork(t, async (url, options) => {
     const route = new URL(url).pathname;
     if (route === "/.netlify/functions/trend-analysis-background") {
+      assert.equal(dispatcherActive, true, "Worker must never invoke itself");
       assert.equal(new URL(url).origin, process.env.URL);
       const body = JSON.parse(options.body); assert.equal(body.jobId, fixture.job.jobId);
       queue.push(body);
@@ -205,7 +243,8 @@ async function runBackground(t, options) {
       return { ok: true, status: 202 };
     }
     if (route === "/search-trend/v1/search") return { ok: true, status: 200, headers: { get() { return null; } },
-      json: async () => ({ results: JSON.parse(options.body).keywordGroups.map(group => ({ title: group.groupName, data: fixture.series })) }) };
+      json: async () => ({ results: JSON.parse(options.body).keywordGroups.map(group => ({ title: group.groupName,
+        data: optionsForRun?.providerHasLaterDay ? [...fixture.series, { period: "2026-10-16", ratio: 99 }] : fixture.series })) }) };
     if (route === "/shopping/v1/category/keywords" && !fixture.job.collectionScope) return { ok: true, status: 200, headers: { get() { return null; } },
       json: async () => ({ results: JSON.parse(options.body).keyword.map(group => ({ title: group.name, data: fixture.shopping })) }) };
     if (route === "/search/v1/news" && !fixture.job.collectionScope) { const value = fixture.news(new URL(url).searchParams.get("query"));
@@ -220,6 +259,9 @@ async function runBackground(t, options) {
       assert.ok(invocationCount < 128, "Instant continuation must be bounded");
       await fixture.load("trend-analysis-background.js").handler({ body: JSON.stringify(queue.shift()) },
         { awsRequestId: `${fixture.job.jobId}-request-${++invocationCount}` });
+      dispatcherActive = true;
+      try { await fixture.load("instant-dispatch.js").tick({ store, baseURL: process.env.URL, requestId: `cron-${invocationCount}` }); }
+      finally { dispatcherActive = false; }
       await options?.afterInvocation?.({ fixture, store, seriesStore, queue, invocationCount });
     }
   } finally { if (previousUrl === undefined) delete process.env.URL; else process.env.URL = previousUrl; }
@@ -246,6 +288,19 @@ test("actual restricted Instant worker fetches only Search Trend and reuses cach
   assert.equal(fixture.earlyWrites, 0); assert.equal(fixture.earlyConfirms, 0);
   for (const row of result.results) { assert.equal(row.shoppingRise, 20); assert.deepEqual(row.news, fixture.news(row.keyword)); assert.ok(row.newsCacheOrigin); }
   assert.equal(savedKeywords.length, 3);
+});
+
+test("late recovery preserves full original-window responses but calculates only through the frozen target", async t => {
+  const { fixture, result } = await runBackground(t, { providerHasLaterDay: true });
+  assert.equal(result.targetDataDate, "2026-10-15");
+  assert.equal(result.latestDataDate, "2026-10-15");
+  assert.ok(result.results.every(row => row.latestDataDate <= "2026-10-15"));
+  for (const keyword of fixture.keywords) {
+    const shard = fixture.seriesCache.shardFor(keyword);
+    const stored = (await fixture.getStore("trend-series-cache").get(`shards/v1/${shard}`)).entries[keyword].search;
+    assert.equal(stored.requestEndDate, "2026-10-16");
+    assert.equal(stored.rawRatioSeries.at(-1).period, "2026-10-16");
+  }
 });
 
 test("restricted worker does not request missing Shopping or News, and ordinary provider behavior remains intact", async t => {
@@ -295,7 +350,7 @@ test("saved source receipt resumes cache storage without a second provider reque
       // Simulated authorized resume changes only the in-memory Job status. No
       // cache, receipt or cursor is discarded and no source request is replayed.
       await store.setJSON(`jobs/${fixture.job.jobId}`, { ...job, state: "running" });
-      queue.push({ jobId: fixture.job.jobId }); resumed = true;
+      queue.push({ jobId: fixture.job.jobId, continuationTicket: job.continuationDispatch?.ticket }); resumed = true;
     }
   } });
   assert.equal(injected && resumed && receiptSeen, true);
@@ -319,7 +374,7 @@ test("enrichment resumes from saved cursor and restores counters written before 
       assert.equal(state.stage, "enrichment"); assert.equal(state.enrichmentPhase, "news");
       assert.equal(job.apiMetrics.news.calls, 1); assert.equal(state.apiMetrics.news.calls, 0);
       await store.setJSON(`jobs/${fixture.job.jobId}`, { ...job, state: "running" });
-      queue.push({ jobId: fixture.job.jobId }); resumed = true;
+      queue.push({ jobId: fixture.job.jobId, continuationTicket: job.continuationDispatch?.ticket }); resumed = true;
     }
   } });
   assert.equal(injected && resumed, true);
@@ -329,13 +384,13 @@ test("enrichment resumes from saved cursor and restores counters written before 
   assert.equal(run.result.shoppingInsightApiCallCount, 1);
 });
 
-test("late queued continuation with its ticket resumes after lost acceptance response; unticketed interruption cannot", async t => {
+test("independent dispatch response loss preserves the ticket; unsolicited worker cannot bypass the ticket", async t => {
   let checked = false;
   const run = await runBackground(t, { lostDispatchResponseOnce: true,
     afterInvocation: async ({ fixture, store, queue, invocationCount }) => {
       if (invocationCount !== 1) return;
       const before = await store.get(`jobs/${fixture.job.jobId}`);
-      assert.equal(before.state, "interrupted"); assert.equal(before.resumable, true);
+      assert.equal(before.state, "running"); assert.equal(before.resumable, true);
       assert.ok(queue[0].continuationTicket); assert.equal(queue[0].continuationTicket, before.continuationDispatch.ticket);
       await fixture.load("trend-analysis-background.js").handler({ body: JSON.stringify({ jobId: fixture.job.jobId }) },
         { awsRequestId: "unexpected-unticketed-retry" });

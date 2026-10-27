@@ -14,6 +14,14 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const digest = value => hash(JSON.stringify(canonical(value)));
 const within = (root, file) => file === root || file.startsWith(root + path.sep);
+const EXPECTED_FUNCTION_COUNT = 32;
+const EXPECTED_SCHEDULES = {
+  "keyword-candidate-scheduled": "0 17 * * *",
+  "market-discovery-scheduled": "0 */6 * * *",
+  "trend-data-collection-recovery-scheduled": "0 23 * * *",
+  "trend-data-collection-scheduled": "0 21 * * *",
+  "trend-instant-dispatch-scheduled": "*/2 * * * *",
+};
 
 function zipEntries(bytes) {
   let end = bytes.length - 22;
@@ -135,13 +143,27 @@ async function childMain(base, mode) {
     return {...result,json:()=>JSON.parse(result.bytes.toString("utf8"))};
   }
   if (mode === "imports") {
+    const schedules = {};
     for (const [name,relative] of Object.entries(directories)) {
       await load(name);
       const module = await import(pathToFileURL(path.join(base,relative,"netlify/entries",`${name}.mjs`)).href);
       assert.equal(typeof module.default,"function");
+      if (module.config?.schedule) schedules[name] = module.config.schedule;
     }
-    assert.equal(calls.length,0); console.log(JSON.stringify({mode,imported:loaded.size,externalCalls:0})); return;
+    assert.equal(loaded.size,EXPECTED_FUNCTION_COUNT);
+    assert.deepEqual(schedules,EXPECTED_SCHEDULES);
+    assert.equal(calls.length,0); console.log(JSON.stringify({mode,imported:loaded.size,schedules,externalCalls:0})); return;
   }
+  // Exercise the actual packaged scheduled entry, native bootstrap and SDK.
+  // No registry exists: an idle tick must be one strong read and no writes,
+  // provider calls, worker dispatches, or synthetic analysis creation.
+  const beforeIdleCalls = calls.length, beforeIdleWrites = writes.length, beforeIdleDispatches = pending.length;
+  const idle = await invoke("trend-instant-dispatch-scheduled","POST",{}, {next_run:"2026-10-27T00:02:00.000Z"});
+  assert.equal(idle.statusCode,200); assert.equal(idle.json().status,"idle");
+  assert.equal(idle.json().dispatched,false);
+  const idleCalls = calls.slice(beforeIdleCalls);
+  assert.equal(idleCalls.length,1); assert.equal(idleCalls[0].method,"GET"); assert.equal(idleCalls[0].strong,true);
+  assert.equal(writes.length,beforeIdleWrites); assert.equal(pending.length,beforeIdleDispatches);
   const {instant,morning,target}=sources;
   for (const job of [instant,morning]) {
     seed("trend-analysis",`jobs/${job.jobId}`,job); seed("trend-analysis",`last-success/${job.mode}`,{jobId:job.jobId});
@@ -185,6 +207,7 @@ async function childMain(base, mode) {
   assert.equal((await invoke("trend-analysis-latest","GET",{mode:"instant"})).json().results.length,59);
   console.log(JSON.stringify({mode,bootstrapExecuted:true,nativeContext:true,legacyInstantRows:59,legacyMorningPeriodRows:439,canonicalPeriodRows:439,
     latestStatusSnapshotJobMatch:true,excelPeriodRows:439,excelJobId:exported.json().periodJobId,probePhases:phases,probeReport:report.report,
+    scheduledDispatcherVerified:true,scheduledDispatcherIdleWrites:0,scheduledDispatcherIdleSourceCalls:0,
     sdkVersions:[...new Set(report.invocations.map(value=>value.sdkVersion))],fixtureBlobReads:calls.filter(x=>x.method==="GET").length,
     fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results)}));
 }
@@ -197,6 +220,7 @@ async function main() {
   const only=process.argv.find(value=>value.startsWith("--only="))?.slice(7);
   const negative=process.argv.includes("--expect-missing-sdk");
   const names=fs.readdirSync(archives).filter(name=>name.endsWith(".zip")&&(!only||name===`${only}.zip`)); const directories={},evidence=[];
+  if(!only && !negative)assert.equal(names.length,EXPECTED_FUNCTION_COUNT,"Final artifact gate requires all 32 native endpoints");
   for(const name of names){const route=name.slice(0,-4);directories[route]=route;
     const archive=path.join(archives,name);const normalizedLinks=extractArchive(archive,path.join(base,route));
     evidence.push({name:route,sha256:hash(fs.readFileSync(archive)),normalizedLinks});}

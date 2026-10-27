@@ -20,6 +20,9 @@
 [functions."trend-data-collection-recovery-scheduled"]
   schedule = "0 23 * * *"
 
+[functions."trend-instant-dispatch-scheduled"]
+  schedule = "*/2 * * * *"
+
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]

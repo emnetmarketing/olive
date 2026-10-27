@@ -102,7 +102,8 @@ test("all official native adapters preserve each legacy route's JSON, query, aut
 
 test("native schedules retain the existing UTC registrations including 06:00 KST and 08:00 KST recovery", async () => {
   const expected = { "keyword-candidate-scheduled": "0 17 * * *", "market-discovery-scheduled": "0 */6 * * *",
-    "trend-data-collection-scheduled": "0 21 * * *", "trend-data-collection-recovery-scheduled": "0 23 * * *" };
+    "trend-data-collection-scheduled": "0 21 * * *", "trend-data-collection-recovery-scheduled": "0 23 * * *",
+    "trend-instant-dispatch-scheduled": "*/2 * * * *" };
   const toml = fs.readFileSync(path.join(root, "netlify.toml"), "utf8");
   for (const [name, schedule] of Object.entries(expected)) {
     const native = await import(pathToFileURL(path.join(entriesDirectory, `${name}.mjs`)).href);
