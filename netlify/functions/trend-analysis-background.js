@@ -196,7 +196,7 @@ function reuseCachedNews(rows, previousInstant) {
   }
   return reused;
 }
-async function api(path, { method = "GET", params, body, metrics, onMetrics, collectionPolicy } = {}) {
+async function api(path, { method = "GET", params, body, metrics, onMetrics, beforeDispatch, collectionPolicy } = {}) {
   // Enforce before credentials, usage reservation and dispatch: a scoped Job
   // cannot spend another provider's quota even if an enrichment branch regresses.
   assertProviderAllowed(path, collectionPolicy);
@@ -218,6 +218,10 @@ async function api(path, { method = "GET", params, body, metrics, onMetrics, col
         throw error;
       }
     }
+    // A batch may reserve its cumulative attempts together. Recheck the
+    // Job-scoped expiry immediately before each individual transport starts;
+    // response accounting after expiry is a different, still permitted action.
+    if (beforeDispatch) await beforeDispatch();
     const response = await fetch(url, { method, headers: {
       "X-NCP-APIGW-API-KEY-ID": id, "X-NCP-APIGW-API-KEY": secret,
       ...(body ? { "Content-Type": "application/json" } : {})

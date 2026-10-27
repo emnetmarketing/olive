@@ -237,6 +237,7 @@ async function run(original, context = {}, delivery = {}) {
     await dispatch.registerJob(job.jobId);
     if (["publishing", "publication_failed"].includes(job.state) && Array.isArray(job.results)) {
       job = await publishInstant(job, { lease }); log("instant-publication-completed", { rows: job.results.length, hash: digest(job.results) });
+      await quota.closeEmergencyGrant(job.jobId, { reason: "published" });
       if (job.schedulerExecutionId) await scheduler.updateById(job.schedulerExecutionId, { state: "completed", stage: "completed", jobId: job.jobId,
         completedAt: job.completedAt, latestDataDate: job.latestDataDate, trendCoveragePct: job.trendCoveragePct, searchTrendApiCallCount: job.searchTrendApiCallCount });
       return;
@@ -251,7 +252,8 @@ async function run(original, context = {}, delivery = {}) {
       await next(); return;
     }
     if (input.calculationVersion !== history.CALCULATION_VERSION || input.startDate !== job.startDate || input.endDate !== job.endDate
-      || input.queryStartDate !== job.queryStartDate || input.surgeThreshold !== job.surgeThreshold || input.matchThreshold !== job.matchThreshold)
+      || input.queryStartDate !== job.queryStartDate || input.targetDataDate !== job.targetDataDate
+      || input.surgeThreshold !== job.surgeThreshold || input.matchThreshold !== job.matchThreshold)
       throw error("INSTANT_INPUT_INCOMPATIBLE", "Frozen input version/window/settings do not match.");
     state = await artifacts.readState(job);
     if (!state) {
@@ -318,12 +320,18 @@ async function run(original, context = {}, delivery = {}) {
       await worker.releaseInstantWorker(lease, { state: publication ? "publication_failed" : "interrupted", resumable: Boolean(owned.instantStateKey || publication),
         errors: [failure.message], failedAt: new Date().toISOString(), errorCode: failure.code || "INSTANT_PIPELINE_FAILED",
         message: publication ? "계산 결과 보존 · 게시 재시도 필요" : "작업 중단 · 저장된 checkpoint 보존" });
+      await quota.closeEmergencyGrant(job.jobId, { reason: publication ? "publication_failed" : "interrupted" });
     }
   } finally { await worker.releaseInstantWorker(lease).catch(() => null); log("instant-invocation-exited"); }
 }
 
 async function collect({ job, lease, input, state, core, started, save, patch, log }) {
   const usage = await quota.readUsage();
+  // The approval lives only in the server quota ledger. No request flag or
+  // client-supplied allowance can select this path or create an entitlement.
+  const emergency = quota.emergencyStatus(usage, job);
+  const emergencyJob = emergency.exists ? job : null;
+  if (emergencyJob) state.emergencyBudget = emergency;
   const currentJobMetrics = usage.jobs?.[job.jobId]?.metricsByType || {};
   for (const type of Object.keys(state.apiMetrics)) for (const metric of METRICS)
     state.apiMetrics[type][metric] = Math.max(state.apiMetrics[type][metric] || 0, currentJobMetrics[type]?.[metric] || 0);
@@ -344,11 +352,24 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
       const cumulative = Object.fromEntries(METRICS.map(m => [m, Math.max(0, metrics[m] - base.searchTrend[m])]));
       cumulative.exhausted = metrics.exhausted;
       await quota.recordUsageBatch({ searchTrend: cumulative }, { jobId: job.jobId, invocationId,
-        source: "automatic", cumulative: true, jobBaseline: base, enforceBudget: { bootstrap: state.budgetMode === "bootstrap", historical: false } });
+        source: "automatic", cumulative: true, jobBaseline: base, enforceBudget: {
+          bootstrap: state.budgetMode === "bootstrap", historical: false, ...(emergencyJob ? { emergencyJob } : {}) } });
       await patch({ apiMetrics: structuredClone(state.apiMetrics), searchTrendApiCallCount: metrics.calls,
         searchTrendHttp200Count: metrics.http200, searchTrendHttp429Count: metrics.http429, searchTrendHttpOtherCount: metrics.httpOther });
     });
     metricQueue = promise.catch(() => null); return promise;
+  };
+  const applyProbe = responses => {
+    if (!state.inflight?.emergencyProbe || state.emergencyProbe) return;
+    const successful = responses.filter(r => r.success);
+    const confirmed = successful.filter(r => r.series.some(p => p.period === input.targetDataDate)).length;
+    state.emergencyProbe = { checkedAt: new Date().toISOString(), targetDataDate: input.targetDataDate,
+      keywordCount: responses.length, successfulKeywords: successful.length, targetConfirmedKeywords: confirmed,
+      lastResponseDate: successful.flatMap(r => r.series.map(p => p.period)).sort().at(-1) || null };
+    // A small probe cannot establish availability for every keyword. It only
+    // authorizes continuing this already approved, bounded collection.
+    if (!confirmed) state.collectionStopReason = "emergency-probe-target-unconfirmed";
+    log("instant-emergency-probe-saved", state.emergencyProbe);
   };
   const updateParts = async (items, responses) => {
     const touched = new Map();
@@ -377,6 +398,7 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
     const receipt = state.inflight.receipt ? await artifacts.readArtifact(state.inflight.receipt) : null;
     if (receipt) {
       await saveSeries(lease, receipt.updates); await updateParts(state.inflight.items, receipt.responses);
+      applyProbe(receipt.responses);
       state.responsesSaved += receipt.updates.length;
       state.trendCollectedAt = receipt.updates.map(u => u.fetchedAt).concat(state.trendCollectedAt || []).sort().at(-1) || null;
     } else {
@@ -394,31 +416,50 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
         responses.push(observed ? { success: true, series: record.rawRatioSeries, fetchedAt: record.fetchedAt } : { code: "REQUEST_OUTCOME_UNKNOWN" });
       }
       await updateParts(state.inflight.items, responses);
+      applyProbe(responses);
       state.responsesSaved += responses.filter(r => r.success).length;
       state.trendCollectedAt = responses.filter(r => r.success).map(r => r.fetchedAt).concat(state.trendCollectedAt || []).sort().at(-1) || null;
     }
     metrics.keywords = Math.max(metrics.keywords, state.responsesSaved); await record();
     state.inflight = null; await save();
   }
-  while (state.cursor < input.queue.length && !job.fastPath) {
+  while (state.cursor < input.queue.length && !job.fastPath && !state.collectionStopReason) {
     if (Date.now() - started >= COLLECTION_MS) break;
-    const status = quota.statusFor(await quota.readUsage(), "searchTrend", 0, new Date(), { bootstrap: state.budgetMode === "bootstrap" });
-    if (status.exhausted || !status.remaining) { state.budgetLimited = true; state.providerLimited = status.exhausted; break; }
-    const items = input.queue.slice(state.cursor, state.cursor + Math.min(25, status.remaining * 5));
+    const liveUsage = await quota.readUsage();
+    const status = emergencyJob ? quota.emergencyStatus(liveUsage, emergencyJob)
+      : quota.statusFor(liveUsage, "searchTrend", 0, new Date(), { bootstrap: state.budgetMode === "bootstrap" });
+    if (emergencyJob) state.emergencyBudget = status;
+    if (status.exhausted || !status.remaining) {
+      state.budgetLimited = true; state.providerLimited = status.exhausted;
+      if (emergencyJob) state.collectionStopReason = status.reason || "emergency-budget-exhausted";
+      break;
+    }
+    const probe = Boolean(emergencyJob && !state.emergencyProbe);
+    const items = input.queue.slice(state.cursor, state.cursor + Math.min(probe ? 5 : 25, status.remaining * 5));
     const requestBatches = chunks(items, 5);
-    state.inflight = { startedAt: new Date().toISOString(), items };
+    state.inflight = { startedAt: new Date().toISOString(), items, ...(probe ? { emergencyProbe: true } : {}) };
     state.cursor += items.length; await save(); // conservative at-most-once intent
     const settled = await Promise.allSettled(requestBatches.map(batch => core.api("/search-trend/v1/search", {
       method: "POST", body: { startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date",
         keywordGroups: batch.map(c => ({ groupName: c.keyword, keywords: [c.keyword] })) },
-      metrics, onMetrics: record, collectionPolicy: job })));
+      metrics, onMetrics: record, collectionPolicy: job,
+      ...(emergencyJob ? { beforeDispatch: async () => {
+        await worker.assertInstantWorker(lease);
+        const live = await quota.readUsage(), permission = quota.emergencyStatus(live, emergencyJob);
+        // remaining may be zero because this very request was just reserved.
+        // Do not reserve it twice or confuse it with a post-response update.
+        if (!permission.eligible || live.exhausted?.searchTrend
+          || Date.now() >= Date.parse(permission.expiresAt))
+          throw error("EMERGENCY_DISPATCH_STOPPED", "Job-only source permission expired or closed before dispatch.");
+      } } : {}) })));
     const fetchedAt = new Date().toISOString(), updates = [], responses = [];
     for (const [index, response] of settled.entries()) {
       if (response.status === "rejected" && /^(INSTANT_|QUOTA_PERSIST|QUOTA_WRITE)/.test(response.reason?.code || "")) throw response.reason;
       const returned = response.status === "fulfilled" ? new Map((response.value.results || []).map(r => [key(r.title), r.data || []])) : null;
       for (const item of requestBatches[index]) {
         if (!returned || !returned.has(key(item.keyword))) {
-          responses.push({ code: response.reason?.code || "MISSING_RESPONSE_GROUP", budget: response.reason?.code === "QUOTA_BUDGET_EXHAUSTED" }); continue;
+          responses.push({ code: response.reason?.code || "MISSING_RESPONSE_GROUP", budget:
+            ["QUOTA_BUDGET_EXHAUSTED", "EMERGENCY_DISPATCH_STOPPED"].includes(response.reason?.code) }); continue;
         }
         const data = returned.get(key(item.keyword));
         responses.push({ success: true, series: data, fetchedAt });
@@ -428,6 +469,7 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
     state.inflight.receipt = await artifacts.writeArtifact(lease, `source-receipt-${state.cursor}`, { updates, responses });
     await save();
     await saveSeries(lease, updates); await updateParts(items, responses);
+    applyProbe(responses);
     metrics.keywords = Math.max(metrics.keywords, state.responsesSaved + updates.length); await record();
     state.responsesSaved += updates.length; state.trendCollectedAt = updates.length ? fetchedAt : state.trendCollectedAt;
     state.inflight = null; await save();
@@ -438,10 +480,17 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
     if (metrics.exhausted) { state.providerLimited = true; break; }
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
-  if (state.cursor >= input.queue.length || job.fastPath || state.budgetLimited || state.providerLimited) {
+  if (state.cursor >= input.queue.length || job.fastPath || state.budgetLimited || state.providerLimited || state.collectionStopReason) {
+    if (emergencyJob) {
+      state.emergencyBudget = quota.emergencyStatus(await quota.readUsage(), emergencyJob);
+      await quota.closeEmergencyGrant(job.jobId, { reason: state.collectionStopReason || (state.providerLimited ? "provider-limited" : "collection-finished") });
+    }
     state.unqueried = Math.max(0, input.queue.length - state.cursor);
     state.collectionCursor = state.cursor; state.stage = "numeric"; state.cursor = 0;
-    await patch({ currentStage: "calculation-checkpoint", message: "수집 응답 저장 완료 · 계산 구간 시작", progress: 74 });
+    await patch({ currentStage: "calculation-checkpoint", message: state.collectionStopReason
+      ? `추가 원천 조회 중단 (${state.collectionStopReason}) · 확보된 데이터로 계산` : "수집 응답 저장 완료 · 계산 구간 시작", progress: 74,
+      ...(emergencyJob ? { emergencyBudget: state.emergencyBudget, emergencyProbe: state.emergencyProbe || null,
+        collectionStopReason: state.collectionStopReason || null } : {}) });
   }
 }
 
@@ -746,6 +795,8 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
     cacheHitCount: result.cache.hits, freshFetchCount: result.cache.freshFetchCandidates, cacheMissCount: result.cache.misses,
     cacheWindowUnavailableCount: result.cache.windowUnavailable, trendCollectedAt: state.trendCollectedAt || null,
     budgetMode: state.budgetMode, apiMetrics: metrics, reusedNewsCount: result.reusedNewsCount || 0,
+    ...(state.emergencyBudget ? { emergencyBudget: state.emergencyBudget, emergencyProbe: state.emergencyProbe || null,
+      collectionStopReason: state.collectionStopReason || null } : {}),
     durationMs: Date.now() - Date.parse(job.createdAt), resultsHash: digest(rows),
     searchTrendApiCallCount: metrics.searchTrend.calls, searchTrendHttp200Count: metrics.searchTrend.http200,
     searchTrendHttp429Count: metrics.searchTrend.http429, searchTrendHttpOtherCount: metrics.searchTrend.httpOther,
