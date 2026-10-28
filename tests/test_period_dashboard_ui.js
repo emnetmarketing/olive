@@ -16,7 +16,7 @@ test("period dashboard exposes every requested existing result field", () => {
   for (const label of ["순위", "키워드", "NAVER 추정 급등량", "상승률", "기간 신뢰도", "기간 신뢰 근거", "상품·브랜드", "YouTube 기간 변화", "Search Ad 기간 변화", "데이터 상태", "NAVER 기준일"])
     assert.match(html, new RegExp(label));
   assert.match(html, /row\.estimatedSurgeCount/);
-  assert.match(html, /row\.peakRelativeLiftPct/);
+  assert.match(html, /ResultGrowthPresentation\.growthView\(row\)/);
   assert.match(html, /row\.periodMarketConfidenceScore \?\? row\.marketConfidenceScore/);
   assert.match(html, /row\.periodMarketConfidenceReasons \|\| row\.marketConfidenceReasons/);
 });
@@ -37,7 +37,8 @@ test("missing Period evidence is not rendered as zero", () => {
   assert.match(html, /source\.availability === "no_data"\) return '<span class="muted">데이터 없음/);
   assert.match(html, /source\.delta == null \? "비교 불가"/);
   assert.match(html, /row\.estimatedSurgeCount == null \? "계산 불가"/);
-  assert.match(html, /row\.peakRelativeLiftPct == null \? "비교 불가"/);
+  const { growthView } = require("../shared/result-growth-presentation");
+  assert.match(growthView({ peakRelativeLiftPct: null }).rateLabel, /비교 불가/);
 });
 
 test("selected dates must exactly match the displayed Period Job", () => {

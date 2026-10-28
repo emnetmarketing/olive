@@ -2,7 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { verifyDisplay } = require("../scripts/verify-deployed-period-display.cjs");
+const { verifyDisplay: verifySuppliedDisplay } = require("../scripts/verify-deployed-period-display.cjs");
+const growthScript = fs.readFileSync("shared/result-growth-presentation.js", "utf8");
+const verifyDisplay = options => verifySuppliedDisplay({ growthScript, ...options });
 const html = fs.readFileSync(path.join(__dirname, "../index.html"), "utf8");
 
 function fixture(count = 439) {
@@ -51,7 +53,7 @@ test("saved Instant response remains unchanged and result generation chooses the
 });
 
 test("optional saved workbook comparison checks existing summary, period metadata and row values without inventing embedded Job ID", async () => {
-  const period = fixture(12);
+  const period = require("../netlify/functions/result-quality-projection").projectJob(fixture(12));
   const { toBuffer } = require("../netlify/functions/unified-excel.js");
   const excel = await toBuffer({ generatedAt: "2026-10-16T10:00:00Z", instantJob: { results: [] }, periodJob: period, periodRequest: period });
   const report = await verifyDisplay({ html, period, excel });

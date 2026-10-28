@@ -1,6 +1,9 @@
 const ExcelJS = require("exceljs");
 const { projectStoredSignal } = require("./today-early-signal-cache");
 const { projectStoredResultConfidence, projectStoredPeriodResult } = require("./search-ad-observation");
+const { growthView } = require("../../shared/result-growth-presentation");
+const { projectResult } = require("./result-quality-projection");
+const { projectBrandContext } = require("./brand-context");
 
 const gradeLabels = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
 const strengthLabels = { strong: "강한 신호", rising: "상승 신호", watch: "관찰 신호" };
@@ -10,23 +13,28 @@ const percent = (value) => value == null || value === "" ? null : Number(value) 
 const sourceList = (row) => row.discoverySource || row.sources || [];
 
 function resultRow(row) {
+  row = projectResult(row);
+  const growth = growthView(row);
   const signal = row.relatedSignal || {}; const match = row.match || {}; const item = match.item || {};
+  const unverified = row.resultType === "unverified_context_signal";
+  const product = item.product || signal.referenceProducts?.[0]?.product || "", brand = signal.relatedBrand || item.brand || "";
   const early = row.earlyMarketEvidence || {};
   const display = projectStoredResultConfidence(row), ad = display.observation;
   return {
     keyword: row.keyword, latestDataDate: asDate(row.latestDataDate), estimatedSurgeCount: Number(row.estimatedSurgeCount || 0),
-    relativeLift: percent(row.peakRelativeLiftPct), baseline: Number(row.estimatedBaseline ?? row.peakBaseline ?? 0),
+    relativeLift: percent(growth.value), baseline: growth.baseline, relativeLiftStatus: growth.statusLabel,
     peakDailyLift: Number(row.peakDailyLift || 0), peakDate: asDate(row.peakDate || row.peakDailyDate), resultType: row.resultType || "",
     confidenceScore: row.marketConfidenceScore == null ? null : Number(row.marketConfidenceScore),
-    confidenceGrade: gradeLabels[row.marketConfidenceGrade] || "", confidenceReasons: text([...display.reasons, display.scoreWarning].filter(Boolean)),
-    matchScore: Number(match.score || 0) / 100, product: item.product || signal.referenceProducts?.[0]?.product || "",
-    brand: signal.relatedBrand || item.brand || "", productContext: signal.relatedProductContext || signal.relatedProductLine || signal.relatedProductType || "",
+    confidenceGrade: gradeLabels[row.marketConfidenceGrade] || "", confidenceReasons: text([...display.reasons, display.scoreWarning, row.qualityProjection?.displayWarning].filter(Boolean)),
+    matchScore: Number(match.score || 0) / 100, product: unverified && product ? `기존 비교 후보(미검증): ${product}` : product,
+    brand: unverified && brand ? `기존 비교 후보 브랜드(미검증): ${brand}` : brand, productContext: signal.relatedProductContext || signal.relatedProductLine || signal.relatedProductType || "",
     youtubeEvidence: early.comparisons?.youtube ? JSON.stringify(early.comparisons.youtube) : "",
     searchAdEvidence: row.searchAdNewQuery ? "신규 발견 · 저장 광고 관측 참고 · 집계기간 미확인"
       : ad.comparisonStatus === "comparable" ? `이전 저장 관측 대비 노출 Δ ${ad.delta ?? "비교 불가"} / 클릭 Δ ${ad.clickDelta ?? "비교 불가"} · 집계기간 미확인`
         : display.unverifiedIncrease || Number(row.searchAdImpressionDelta || 0) || ad.current != null ? "저장 광고 관측 · 이전 관측 비교 불가 · 집계기간 미확인" : "",
     shoppingRise: row.shoppingRise == null ? null : Number(row.shoppingRise), newsEvidence: row.news?.total ? `${row.news.total}건` : "",
-    discoverySource: text(sourceList(row))
+    discoverySource: text(sourceList(row)), qualityContext: row.qualityProjection?.displayWarning || "",
+    referenceCountScope: signal.countScope === "stored_references_only" ? `저장 참고 상품 ${Number(signal.verifiedReferenceCount || 0)}건 · 전체 수 미재집계` : ""
   };
 }
 
@@ -36,8 +44,10 @@ function earlyRow(row) {
   const searchAdChange = !ad ? "" : ad.comparisonStatus === "unavailable" || ad.previous == null
     ? `저장 광고 관측 ${ad.current ?? "데이터 없음"} · 이전 관측 없음 / 비교 불가 · 집계기간 미확인`
     : `저장 광고 관측 현재 ${ad.current ?? "데이터 없음"} / 이전 ${ad.previous} / Δ ${ad.delta ?? "비교 불가"} · 집계기간 미확인`;
-  return { keyword: row.keyword, strength: strengthLabels[row.strength] || row.strength || "", score: Number(row.todayEarlySignalScore || 0),
-    detectedAt: asDate(row.detectedAt), reasons: text([...(row.reasons || []), row.scoreWarning].filter(Boolean)), productBrand: text([row.relatedBrand, row.relatedProductLine || row.relatedProductType, row.relatedProduct].filter(Boolean)),
+  return { keyword: row.keyword, strength: strengthLabels[row.strength] || row.strength || "", score: row.todayEarlySignalScore == null ? null : Number(row.todayEarlySignalScore),
+    detectedAt: asDate(row.detectedAt), reasons: text([...(row.reasons || []), row.scoreWarning].filter(Boolean)),
+    productBrand: text([row.relatedBrand, row.brandContextStatus === "unverified" ? `${row.relatedExpression || "일반 표현"} · 브랜드 미확인` : null,
+      row.relatedProductLine || row.relatedProductType, row.relatedProduct].filter(Boolean)),
     sources: text(row.sources), youtubeChange: yt ? `현재 ${yt.current} / 이전 ${yt.previous} / Δ ${yt.delta}` : "",
     searchAdChange,
     previousNaver: row.previousNaverState ? text([row.previousNaverState.resultType, row.previousNaverState.estimatedSurgeCount]) : "",
@@ -45,8 +55,10 @@ function earlyRow(row) {
 }
 
 function discoveryRow(row) {
+  row = projectBrandContext(row);
   return { rank: Number(row.rank || 0), keyword: row.keyword, sources: text(row.discoverySource), discoveredAt: asDate(row.discoveredAt),
-    lastSeenAt: asDate(row.lastSeenAt), confidence: Number(row.sourceConfidence || 0), brand: row.relatedBrand || "",
+    lastSeenAt: asDate(row.lastSeenAt), confidence: row.sourceConfidence == null ? null : Number(row.sourceConfidence), brand: row.relatedBrand || "",
+    confidenceStatus: row.sourceConfidenceQuality?.warning || "", brandStatus: row.brandContextStatus === "unverified" ? `${row.relatedExpression || "일반 표현"} · 브랜드 미확인` : "",
     productContext: row.relatedProductLine || row.relatedProductType || "", monthlySearchStatus: row.monthlySearchStatus || "",
     monthlyTotalSearches: row.monthlyTotalSearches == null ? null : Number(row.monthlyTotalSearches), marketDiscoveryRank: Number(row.marketDiscoveryRank || 0),
     protectedSlot: row.selectedForProtectedSlot ? "Y" : "N", trendStatus: row.trendStatus || "" };
@@ -54,11 +66,12 @@ function discoveryRow(row) {
 
 const resultColumns = [
   ["keyword", "키워드", 24], ["latestDataDate", "NAVER 데이터 기준일", 16, "yyyy-mm-dd"], ["estimatedSurgeCount", "estimatedSurgeCount", 18, "#,##0"],
-  ["relativeLift", "상대 상승률", 13, "0.00%"], ["baseline", "baseline", 13, "#,##0"], ["peakDailyLift", "peakDailyLift", 15, "#,##0.00"],
+  ["relativeLift", "상대 상승률", 13, "0.00%"], ["baseline", "상승률 원본 baseline", 20, "General"], ["peakDailyLift", "peakDailyLift", 15, "#,##0.00"],
   ["peakDate", "Peak 날짜", 13, "yyyy-mm-dd"], ["resultType", "resultType", 24], ["confidenceScore", "종합 신뢰도 점수", 16, "0"],
   ["confidenceGrade", "종합 신뢰도 등급", 16], ["confidenceReasons", "핵심 신뢰 근거", 42], ["matchScore", "상품 매칭률", 13, "0%"],
   ["product", "대표 상품", 40], ["brand", "브랜드", 18], ["productContext", "제품라인/성분/제품군", 28], ["youtubeEvidence", "YouTube 근거", 30],
-  ["searchAdEvidence", "Search Ad 근거", 24], ["shoppingRise", "Shopping Rise", 15, "0.00"], ["newsEvidence", "News 근거", 16], ["discoverySource", "discovery source", 28]
+  ["searchAdEvidence", "Search Ad 근거", 24], ["shoppingRise", "Shopping Rise", 15, "0.00"], ["newsEvidence", "News 근거", 16], ["discoverySource", "discovery source", 28],
+  ["relativeLiftStatus", "상승률 비교 상태", 42], ["qualityContext", "상품·브랜드 근거 상태", 48], ["referenceCountScope", "관련 상품 수 확인 범위", 42]
 ];
 
 const periodResultColumns = [
@@ -68,25 +81,32 @@ const periodResultColumns = [
   ["youtubeCurrent", "YouTube 기간 current", 20, "0"], ["youtubePrevious", "YouTube 이전 비교값", 20, "0"], ["youtubeDelta", "YouTube delta", 16, "0"],
   ["searchAdNew", "Search Ad 기간 신규 여부", 23], ["searchAdImpressionDelta", "Search Ad 노출 delta", 22, "0"], ["searchAdClickDelta", "Search Ad 클릭 delta", 20, "0"],
   ["matchScore", "상품 매칭", 14, "0%"], ["productBrand", "상품/브랜드", 36], ["productContext", "브랜드/제품 문맥", 30], ["dataStatus", "데이터 부족 상태", 42],
-  ["latestDataDate", "NAVER 데이터 기준일", 18, "yyyy-mm-dd"], ["resultType", "resultType", 24]
+  ["latestDataDate", "NAVER 데이터 기준일", 18, "yyyy-mm-dd"], ["resultType", "resultType", 24],
+  ["relativeLiftStatus", "상승률 비교 상태", 42], ["baseline", "상승률 원본 baseline", 20, "General"],
+  ["qualityContext", "상품·브랜드 근거 상태", 48], ["referenceCountScope", "관련 상품 수 확인 범위", 42]
 ];
 
 function periodResultRow(row, request) {
+  row = projectResult(row);
+  const growth = growthView(row);
   const evidence = row.periodMarketEvidence || {}; const youtube = evidence.youtube || {};
   const display = projectStoredPeriodResult(row), search = display.searchAd || {};
   const match = row.match || {}; const signal = row.relatedSignal || {};
+  const productBrand = text([match.item?.product, match.item?.brand || signal.relatedBrand].filter(Boolean));
   return { startDate: asDate(request?.startDate), endDate: asDate(request?.endDate), keyword: row.keyword,
-    estimatedSurgeCount: row.estimatedSurgeCount == null ? null : Number(row.estimatedSurgeCount), relativeLift: percent(row.peakRelativeLiftPct),
+    estimatedSurgeCount: row.estimatedSurgeCount == null ? null : Number(row.estimatedSurgeCount), relativeLift: percent(growth.value),
+    relativeLiftStatus: growth.statusLabel, baseline: growth.baseline,
     confidenceScore: row.periodMarketConfidenceScore == null ? null : Number(row.periodMarketConfidenceScore),
-    confidenceGrade: gradeLabels[row.periodMarketConfidenceGrade] || "", confidenceReasons: text([...display.reasons, display.scoreWarning].filter(Boolean)),
+    confidenceGrade: gradeLabels[row.periodMarketConfidenceGrade] || "", confidenceReasons: text([...display.reasons, display.scoreWarning, row.qualityProjection?.displayWarning].filter(Boolean)),
     youtubeCurrent: youtube.current ?? null, youtubePrevious: youtube.previous ?? null, youtubeDelta: youtube.delta ?? null,
     searchAdNew: search.newQuery == null ? "" : search.newQuery ? "Y" : "N", searchAdImpressionDelta: search.delta ?? null,
     searchAdClickDelta: search.clickDelta ?? null, matchScore: Number(match.score || 0) / 100,
-    productBrand: text([match.item?.product, match.item?.brand || signal.relatedBrand].filter(Boolean)),
+    productBrand: row.resultType === "unverified_context_signal" && productBrand ? `기존 비교 후보(미검증): ${productBrand}` : productBrand,
     productContext: signal.relatedProductContext || signal.relatedProductLine || signal.relatedProductType || "",
     dataStatus: text([evidence.dataGaps?.length ? text(evidence.dataGaps) : evidence.dataAvailability === "available" ? "기간 보조 데이터 확인" : "기간 보조 데이터 없음",
       display.searchAd ? `Search Ad 저장 관측 · 집계기간 미확인${search.comparisonStatus !== "comparable" ? " · 이전 관측 비교 불가" : ""}` : null].filter(Boolean)),
-    latestDataDate: asDate(row.latestDataDate), resultType: row.resultType || "" };
+    latestDataDate: asDate(row.latestDataDate), resultType: row.resultType || "", qualityContext: row.qualityProjection?.displayWarning || "",
+    referenceCountScope: signal.countScope === "stored_references_only" ? `저장 참고 상품 ${Number(signal.verifiedReferenceCount || 0)}건 · 전체 수 미재집계` : "" };
 }
 
 function addSheet(workbook, name, columns, rows) {
@@ -130,7 +150,7 @@ function addPeriodSheet(workbook, job, request) {
 
 async function buildWorkbook(data) {
   const workbook = new ExcelJS.Workbook(); workbook.creator = "네쇼검 트렌드 모니터"; workbook.created = new Date();
-  const instant = data.instantJob || {}; const results = instant.results || []; const early = data.early?.items || []; const discoveries = data.discoveries || [];
+  const instant = data.instantJob || {}; const results = (instant.results || []).map(projectResult); const early = data.early?.items || []; const discoveries = data.discoveries || [];
   const summaryRows = [
     { item: "파일 생성 시각", value: asDate(data.generatedAt) }, { item: "오늘 급상승 신호 기준일", value: asDate(data.early?.signalDate) },
     { item: "오늘 신호 마지막 갱신 시각", value: asDate(data.early?.generatedAt) }, { item: "NAVER 최신 데이터 기준일", value: asDate(instant.latestDataDate) },
@@ -143,7 +163,7 @@ async function buildWorkbook(data) {
     { item: "상품 일치율 기준", value: Number(instant.matchThreshold || 0) / 100 }, { item: "오늘 급상승 신호 건수", value: early.length },
     { item: "어제 급등 전체 결과 건수", value: results.length }, { item: "상품 직접 매칭 건수", value: results.filter((r) => r.resultType === "product_match").length },
     { item: "브랜드/카테고리 건수", value: results.filter((r) => r.resultType === "brand_or_category_signal").length },
-    { item: "기타 관련 급등 건수", value: results.filter((r) => r.resultType === "domain_related_signal").length }, { item: "최근 발견 키워드 건수", value: discoveries.length },
+    { item: "기타 관련 급등 건수", value: results.filter((r) => ["domain_related_signal", "unverified_context_signal"].includes(r.resultType)).length }, { item: "최근 발견 키워드 건수", value: discoveries.length },
     { item: "선택 분석 시작일", value: data.periodRequest?.startDate || data.periodJob?.startDate || "" },
     { item: "선택 분석 종료일", value: data.periodRequest?.endDate || data.periodJob?.endDate || "" },
     { item: "선택 기간 coverage", value: Number(data.periodJob?.trendCoveragePct || 0) / 100 },
@@ -163,11 +183,11 @@ async function buildWorkbook(data) {
   addSheet(workbook, "02_어제 급등 확인", resultColumns, results.map(resultRow));
   addSheet(workbook, "03_상품 직접 매칭", resultColumns, results.filter((r) => r.resultType === "product_match").map(resultRow));
   addSheet(workbook, "04_브랜드_카테고리", resultColumns, results.filter((r) => r.resultType === "brand_or_category_signal").map(resultRow));
-  addSheet(workbook, "05_기타 관련 급등", resultColumns, results.filter((r) => r.resultType === "domain_related_signal").map(resultRow));
+  addSheet(workbook, "05_기타 관련 급등", resultColumns, results.filter((r) => ["domain_related_signal", "unverified_context_signal"].includes(r.resultType)).map(resultRow));
   addSheet(workbook, "06_최근 발견 키워드", [["rank", "순위", 8, "0"], ["keyword", "키워드", 24], ["sources", "발견 소스", 24],
     ["discoveredAt", "최초 발견", 20, "yyyy-mm-dd hh:mm"], ["lastSeenAt", "마지막 발견", 20, "yyyy-mm-dd hh:mm"], ["confidence", "sourceConfidence", 17, "0"],
     ["brand", "관련 브랜드", 18], ["productContext", "제품군/제품라인", 24], ["monthlySearchStatus", "월간검색량 상태", 18],
-    ["monthlyTotalSearches", "월간검색량", 14, "#,##0"], ["marketDiscoveryRank", "후보 순위", 12, "0"], ["protectedSlot", "500 보호 슬롯", 14], ["trendStatus", "Trend 상태", 20]], discoveries.map(discoveryRow));
+    ["monthlyTotalSearches", "월간검색량", 14, "#,##0"], ["marketDiscoveryRank", "후보 순위", 12, "0"], ["protectedSlot", "500 보호 슬롯", 14], ["trendStatus", "Trend 상태", 20], ["confidenceStatus", "출처 신뢰도 확인 상태", 48], ["brandStatus", "브랜드 확인 상태", 36]], discoveries.map(discoveryRow));
   if (data.periodJob?.jobId || (data.periodRequest?.startDate && data.periodRequest?.endDate)) addPeriodSheet(workbook, data.periodJob, data.periodRequest);
   return workbook;
 }

@@ -1787,6 +1787,7 @@
     </div>
   </div>
 
+  <script src="/shared/result-growth-presentation.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
@@ -2535,9 +2536,10 @@
     }
 
     function periodConfidenceSummary(row) {
-      const score = row.periodMarketConfidenceScore ?? row.marketConfidenceScore;
-      const grade = row.periodMarketConfidenceGrade || row.marketConfidenceGrade;
-      if (score == null) return '<span class="muted">이전 결과에는 미계산</span>';
+      const score = row.qualityProjection && row.periodMarketConfidenceScore === null ? null : row.periodMarketConfidenceScore ?? row.marketConfidenceScore;
+      const grade = score == null ? null : row.periodMarketConfidenceGrade || row.marketConfidenceGrade;
+      if (score == null) return row.qualityProjection?.displayWarning
+        ? `<span class="muted">신뢰도 점수 확인 불가 · ${escapeHtml(row.qualityProjection.displayWarning)}</span>` : '<span class="muted">이전 결과에는 미계산</span>';
       const grades = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
       return `<span class="pill">${Number(score)}/100 · ${escapeHtml(grades[grade] || "참고")}</span>`;
     }
@@ -2549,17 +2551,19 @@
       const names = [...new Set([product, brand, context].filter(Boolean))];
       if (!names.length) return '<span class="muted">확인된 연결 없음</span>';
       const score = row.match?.score == null ? "" : ` · 매칭 ${Number(row.match.score)}%`;
-      return `<strong>${escapeHtml(names.join(" · "))}</strong><br><small class="muted">${escapeHtml(score.replace(/^ · /, ""))}</small>`;
+      const scope = row.match?.identificationScope === "ingredient_concentration" ? " · 성분+농도 관련 상품 · 브랜드/단일 상품 확정 아님" : "";
+      const candidateLabel = row.resultType === "unverified_context_signal" ? "기존 비교 후보(미검증): " : "";
+      return `<strong>${escapeHtml(candidateLabel + names.join(" · "))}</strong><br><small class="muted">${escapeHtml(score.replace(/^ · /, "") + scope)}</small>`;
     }
 
     function periodResultRow(row, index) {
       const surge = row.estimatedSurgeCount == null ? "계산 불가" : `+${Number(row.estimatedSurgeCount).toLocaleString("ko-KR")}`;
-      const rise = row.peakRelativeLiftPct == null ? "비교 불가" : `+${Number(row.peakRelativeLiftPct).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%`;
+      const growth = ResultGrowthPresentation.growthView(row), rise = growth.rateLabel;
       const display = storedPeriodConfidenceDisplay(row), reasons = display.reasons;
       return `<tr data-period-keyword="${escapeHtml(String(row.keyword || "").toLowerCase())}">
         <td>${index + 1}</td><td><strong>${escapeHtml(row.keyword)}</strong><br><small class="muted">${surgeSignalSummary(row)}</small></td>
-        <td><span class="period-metric">${escapeHtml(surge)}</span></td><td><span class="period-metric">${escapeHtml(rise)}</span></td>
-        <td>${periodConfidenceSummary(row)}</td><td>${reasons.length ? escapeHtml(reasons.slice(0, 5).join(" · ")) : '<span class="muted">확인된 기간 신뢰 근거 없음</span>'}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}</td>
+        <td><span class="period-metric">${escapeHtml(surge)}</span></td><td><span class="period-metric">${escapeHtml(rise)}</span>${growth.roundedToZero ? `<br><small>원본 기준 ${escapeHtml(growth.baselineLabel)}</small>` : ""}</td>
+        <td>${periodConfidenceSummary(row)}</td><td>${reasons.length ? escapeHtml(reasons.slice(0, 5).join(" · ")) : '<span class="muted">확인된 기간 신뢰 근거 없음</span>'}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}${row.qualityProjection?.displayWarning ? `<br><small class="muted">${escapeHtml(row.qualityProjection.displayWarning)}</small>` : ""}</td>
         <td>${periodRelationSummary(row)}</td><td>${periodSourceEvidence(row.periodMarketEvidence?.youtube, "YouTube")}</td>
         <td>${periodSourceEvidence(display.searchAd, "Search Ad")}</td><td>${escapeHtml(periodDataStatus(row.periodMarketEvidence))}</td>
         <td>${escapeHtml(row.latestDataDate || state.currentPeriodAnalysisJob?.latestDataDate || "-")}</td></tr>`;
@@ -3126,13 +3130,19 @@
           <td>${Number(item.rank)}</td><td><strong>${escapeHtml(item.keyword)}</strong></td>
           <td>${escapeHtml((item.discoverySource || []).join(" + ") || "-")}</td>
           <td>${item.discoveredAt ? formatHistoryDate(item.discoveredAt) : "-"}<br><small>${item.lastSeenAt ? formatHistoryDate(item.lastSeenAt) : "-"}</small></td>
-          <td>${Number(item.sourceConfidence || 0)}</td><td>${escapeHtml([item.relatedBrand, item.relatedProductLine || item.relatedProductType].filter(Boolean).join(" · ") || "-")}</td>
+          <td title="${escapeHtml(item.sourceConfidenceQuality?.warning || '')}">${item.sourceConfidence == null ? '확인 불가' : Number(item.sourceConfidence)}</td><td>${escapeHtml(earlyBrandContextSummary(item))}</td>
           <td>${item.monthlyTotalSearches == null ? escapeHtml(item.monthlySearchStatus || "ratio-only") : Number(item.monthlyTotalSearches).toLocaleString("ko-KR")}</td>
           <td>${item.selectedForProtectedSlot ? `#${Number(item.protectedSlotRank)}` : "-"}</td>
           <td>${escapeHtml(TREND_STATUS_LABELS[item.trendStatus] || item.trendStatus || "Trend 미조회")}${item.trendFetchedAt ? `<br><small>${formatHistoryDate(item.trendFetchedAt)}</small>` : ""}</td>
         </tr>`).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
       } catch (error) { $("marketDiscoveryNewBody").innerHTML = `<tr><td colspan="9" class="muted">신규 후보 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
     }
+    function earlyBrandContextSummary(item) {
+      const context = [item.relatedProductLine || item.relatedProductType].filter(Boolean);
+      if (item.brandContextStatus === "unverified") return [item.relatedExpression, ...context, "일반 표현 · 브랜드 미확인"].filter(Boolean).join(" · ");
+      return [item.relatedBrand, ...context].filter(Boolean).join(" · ") || "-";
+    }
+
     async function loadTodayEarlySignals() {
       try {
         const response = await fetch("/.netlify/functions/today-early-signals", { cache: "no-store" });
@@ -3141,9 +3151,9 @@
         const labels = { strong: "🔥 강한 신호", rising: "↑ 상승 신호", watch: "• 관찰 신호" };
         $("todayEarlySignalBody").innerHTML = (payload.items || []).length ? payload.items.map((item) => `<tr>
           <td><strong>${escapeHtml(item.keyword)}</strong></td><td>${escapeHtml(labels[item.strength] || "• 관찰 신호")}</td>
-          <td><strong>${Number(item.todayEarlySignalScore || 0)}</strong>${item.scoreWarning ? `<br><small class="muted">${escapeHtml(item.scoreWarning)}</small>` : ""}</td><td>${item.detectedAt ? formatHistoryDate(item.detectedAt) : "-"}</td>
+          <td><strong>${item.todayEarlySignalScore == null ? "점수 확인 불가" : Number(item.todayEarlySignalScore)}</strong>${item.scoreWarning ? `<br><small class="muted">${escapeHtml(item.scoreWarning)}</small>` : ""}</td><td>${item.detectedAt ? formatHistoryDate(item.detectedAt) : "-"}</td>
           <td>${escapeHtml((item.reasons || []).join(" · ") || "-")}</td>
-          <td>${escapeHtml([item.relatedBrand, item.relatedProductLine || item.relatedProductType].filter(Boolean).join(" · ") || "-")}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
+          <td>${escapeHtml(earlyBrandContextSummary(item))}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
           <td>${escapeHtml((item.sources || []).join(" + ") || "-")}</td>
           <td>${item.previousNaverState?.everSurged ? `이전 상승 · +${Number(item.previousNaverState.estimatedSurgeCount || 0).toLocaleString("ko-KR")}` : "확인 전"}</td>
         </tr>`).join("") : '<tr><td colspan="8" class="muted">표시된 기준일에 저장된 급상승 신호가 없습니다. 데이터 없음은 시장 신호가 없다는 뜻이 아닙니다.</td></tr>';
@@ -3182,16 +3192,16 @@
 
       const lowIntensitySignals = results.filter((row) => row.resultType === "low_intensity_early_signal");
       const ratioOnlySignals = results.filter((row) => row.resultType === "ratio_only_market_signal");
-      const productResults = results.filter((row) => !["brand_or_category_signal", "low_intensity_early_signal", "ratio_only_market_signal"].includes(row.resultType));
+      const productResults = results.filter((row) => !["brand_or_category_signal", "low_intensity_early_signal", "ratio_only_market_signal", "unverified_context_signal"].includes(row.resultType));
       const brandSignals = results.filter((row) => row.resultType === "brand_or_category_signal");
-      const domainSignals = results.filter((row) => row.resultType === "domain_related_signal");
+      const domainSignals = results.filter((row) => ["domain_related_signal", "unverified_context_signal"].includes(row.resultType));
       const directResults = productResults.filter((row) => row.resultType !== "domain_related_signal");
       const body = $("resultBody");
       if (!directResults.length) {
         body.innerHTML = '<tr><td colspan="11" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
       } else body.innerHTML = directResults.map((row) => {
         const source = sourceSummary(row);
-        const item = row.match.item;
+        const item = row.match?.item || {};
         return `
           <tr>
             <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
@@ -3201,6 +3211,7 @@
             <td>${source}</td>
             <td>
               <strong>${escapeHtml(item.product || item.brand || "-")}</strong><br>
+              ${row.match?.identificationScope === "ingredient_concentration" ? '<small class="muted">성분+농도 관련 상품 · 브랜드/단일 상품 확정 아님</small><br>' : ""}
               <span class="muted">${escapeHtml(item.account || "계정 미지정")} · ${escapeHtml(item.campaign || "-")} · ${escapeHtml(item.adGroup || "-")}</span>
             </td>
             <td>${(row.match.additionalMatches || []).length
@@ -3223,7 +3234,7 @@
       const body = $("ratioOnlySignalBody");
       if (!results.length) { body.innerHTML = '<tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr>'; return; }
       body.innerHTML = results.map((row) => { const signal = row.relatedSignal || {}; const refs = (signal.referenceProducts || []).slice(0, 3).map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
-        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${Number(row.ratioBaseline || 0).toFixed(2)}</td><td>+${Number(row.relativeRatioLift || 0).toFixed(2)}%</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
+        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${escapeHtml(ResultGrowthPresentation.growthView(row).baselineLabel)}</td><td>${escapeHtml(ResultGrowthPresentation.growthView(row).rateLabel)}</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
       }).join("");
     }
 
@@ -3249,7 +3260,7 @@
           <td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td>
           <td>${escapeHtml(row.peakDate || row.peakDailyDate || "-")}</td>
           <td><strong>+${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</strong></td>
-          <td>+${Number(row.peakRelativeLiftPct || 0).toFixed(2)}%</td>
+          <td>${escapeHtml(ResultGrowthPresentation.growthView(row).rateLabel)}</td>
           <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
           <td>${escapeHtml(signal.relatedProductContext || "-")}</td>
           <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
@@ -3270,13 +3281,16 @@
         const signal = row.relatedSignal || {};
         const references = (signal.referenceProducts || []).slice(0, 3)
           .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
+        const unverifiedCandidates = row.resultType === "unverified_context_signal"
+          ? [...new Set([row.match?.item, ...(row.match?.additionalMatches || []).map(entry => entry.item)]
+            .map(item => item?.product || item?.brand).filter(Boolean))].slice(0, 3) : [];
         return `<tr>
           <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
           <td><strong>+${Number(row.lift || row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</strong></td>
-          <td>${escapeHtml(signal.signalType === "brand" ? "브랜드 급등" : signal.signalType === "ingredient" ? "성분 관련" : signal.signalType === "product_line" ? "제품/제품라인 관련" : "제품군/카테고리 관련")}</td>
+          <td>${escapeHtml(row.resultType === "unverified_context_signal" ? "브랜드 미확인 참고 신호" : signal.signalType === "brand" ? "브랜드 급등" : signal.signalType === "ingredient" ? "성분 관련" : signal.signalType === "product_line" ? "제품/제품라인 관련" : "제품군/카테고리 관련")}</td>
           <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
-          <td>${Number(signal.relatedProductCount || 0).toLocaleString("ko-KR")}건</td>
-          <td>${references || '<span class="muted">없음</span>'}</td>
+          <td>${signal.countScope === "stored_references_only" ? `저장 참고 상품 ${Number(signal.verifiedReferenceCount || 0).toLocaleString("ko-KR")}건 · 전체 수 미재집계` : signal.relatedProductCount == null ? "확인 불가" : `${Number(signal.relatedProductCount).toLocaleString("ko-KR")}건`}</td>
+          <td>${unverifiedCandidates.length ? `<span class="muted">기존 비교 후보(미검증)</span><br>${unverifiedCandidates.map(escapeHtml).join("<br>")}` : references || '<span class="muted">없음</span>'}</td>
           <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
           <td><strong>${escapeHtml(signal.judgment || row.match?.judgment || "관련 신호")}</strong></td>
           <td>${escapeHtml(signal.reason || row.match?.reason || "-")}</td>
@@ -3289,9 +3303,9 @@
       const absolute = Boolean(row.absoluteSurgePassed);
       const relative = Boolean(row.relativeSurgePassed);
       const label = absolute && relative ? "절대·상대 급등" : relative ? "상대 관심도 급등" : "절대 급등";
-      if (row.lowIntensityEarlySignal) return `<span class="pill">저강도 선행 신호</span><span class="muted"> · 평소 대비 +${Math.round(Number(row.peakRelativeLiftPct || 0)).toLocaleString("ko-KR")}% · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</span>`;
-      const detail = relative && Number.isFinite(Number(row.peakRelativeLiftPct))
-        ? ` · 평소 대비 +${Math.round(Number(row.peakRelativeLiftPct)).toLocaleString("ko-KR")}% · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}` : "";
+      const growth = ResultGrowthPresentation.growthView(row);
+      if (row.lowIntensityEarlySignal) return `<span class="pill">저강도 선행 신호</span><span class="muted"> · 평소 대비 ${escapeHtml(growth.rateLabel)} · 검색량 약 +${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</span>`;
+      const detail = ` · 상승률 ${growth.rateLabel}${growth.roundedToZero ? ` · 원본 기준 ${growth.baselineLabel}` : ""}`;
       return `<span class="pill">${escapeHtml(label)}</span><span class="muted">${escapeHtml(detail)}</span>`;
     }
 
@@ -3335,10 +3349,11 @@
     }
 
     function marketConfidenceSummary(row) {
-      if (row.marketConfidenceScore == null) return '<span class="muted">종합 신뢰도: 이전 결과에는 미계산</span>';
+      if (row.marketConfidenceScore == null) return row.qualityProjection?.displayWarning
+        ? `<span class="muted">종합 신뢰도 점수 확인 불가 · ${escapeHtml(row.qualityProjection.displayWarning)}</span>` : '<span class="muted">종합 신뢰도: 이전 결과에는 미계산</span>';
       const grades = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
       const display = storedInstantConfidenceDisplay(row), reasons = display.reasons.slice(0, 5).join(" · ");
-      return `<span class="pill">종합 신뢰도 ${Number(row.marketConfidenceScore)}/100 · ${escapeHtml(grades[row.marketConfidenceGrade] || "참고")}</span>${reasons ? `<br><small class="muted">${escapeHtml(reasons)}</small>` : ""}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}`;
+      return `<span class="pill">종합 신뢰도 ${Number(row.marketConfidenceScore)}/100 · ${escapeHtml(grades[row.marketConfidenceGrade] || "참고")}</span>${reasons ? `<br><small class="muted">${escapeHtml(reasons)}</small>` : ""}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}${row.qualityProjection?.displayWarning ? `<br><small class="muted">${escapeHtml(row.qualityProjection.displayWarning)}</small>` : ""}`;
     }
 
     function periodSourceEvidence(source, label) {
@@ -3520,18 +3535,18 @@
           row.estimatedPeak,
           row.yesterday,
           row.lift,
-          row.peakRelativeLiftPct === null || row.peakRelativeLiftPct === undefined ? "" : `${Number(row.peakRelativeLiftPct).toFixed(2)}%`,
+          ResultGrowthPresentation.growthView(row).rateLabel,
           Math.round(Number(row.peakEstimatedSearches || 0)),
-          Math.round(Number(row.peakBaseline || 0)),
+          ResultGrowthPresentation.growthView(row).baseline ?? "",
           row.peakDate || "",
           row.ratioPeak ?? "",
           row.ratioBaseline ?? "",
           row.relativeRatioLift === null || row.relativeRatioLift === undefined ? "" : `${Number(row.relativeRatioLift).toFixed(2)}%`,
           signal.relatedBrand || item.brand || "",
           signal.relatedProductContext || "",
-          Number(signal.relatedProductCount || 0),
+          signal.relatedProductCount == null ? "전체 수 미재집계" : Number(signal.relatedProductCount),
           (signal.referenceProducts || []).map((entry) => entry.product || entry.brand || "").join(" / "),
-          row.riseRate === null ? "" : `${Math.round(row.riseRate)}%`,
+          ResultGrowthPresentation.growthView(row).status === "zero-baseline" ? "비교 불가 · 기준값 0" : row.riseRate == null ? "비교 불가" : `${Number(row.riseRate).toLocaleString("ko-KR", { maximumFractionDigits: 2 })}%`,
           sourceSummaryText(row),
           item.account || "계정 미지정",
           item.brand || "",
@@ -3645,10 +3660,10 @@
         today: Number(row.today || 0),
         yesterday: Number(row.yesterday || 0),
         lift: Number(row.today || 0) - Number(row.yesterday || 0),
-        rate: Number(row.yesterday || 0) > 0 ? ((Number(row.today || 0) - Number(row.yesterday || 0)) / Number(row.yesterday || 0)) * 100 : 100,
+        growth: ResultGrowthPresentation.growthView(row),
         marketConfidenceScore: row.marketConfidenceScore, marketConfidenceGrade: row.marketConfidenceGrade,
         marketConfidenceReasons: row.marketConfidenceReasons || [], latestDataDate: row.latestDataDate,
-        searchAdObservation: row.searchAdObservation, earlyMarketEvidence: row.earlyMarketEvidence
+        searchAdObservation: row.searchAdObservation, earlyMarketEvidence: row.earlyMarketEvidence, qualityProjection: row.qualityProjection
       })).sort((a, b) => b.lift - a.lift).slice(0, 10);
 
       if (!topRows.length) {
@@ -3663,14 +3678,14 @@
           <div class="trend-row">
             <div class="trend-name">
               ${escapeHtml(row.keyword)}
-              <span class="trend-sub">추정 기준 ${row.yesterday.toLocaleString("ko-KR")} → 추정 최신/최대 ${row.today.toLocaleString("ko-KR")}</span>
+              <span class="trend-sub">상승률 원본 기준 ${escapeHtml(row.growth.baselineLabel)} → 추정 최신/최대 ${row.today.toLocaleString("ko-KR")}${row.growth.roundedToZero ? " · 정수 표시 시 기준값 0으로 반올림" : ""}</span>
               <span class="trend-sub">${marketConfidenceSummary(row)}</span>
               <span class="trend-sub">${instantRowDateSummary(row)}</span>
             </div>
             <div class="trend-track" aria-label="${escapeHtml(row.keyword)} 증가량">
               <div class="trend-fill" style="width:${width}%"></div>
             </div>
-            <div class="trend-value">추정 +${row.lift.toLocaleString("ko-KR")} · ${Math.round(row.rate).toLocaleString("ko-KR")}%</div>
+            <div class="trend-value">추정 +${row.lift.toLocaleString("ko-KR")} · ${escapeHtml(row.growth.rateLabel)}</div>
           </div>
         `;
       }).join("");

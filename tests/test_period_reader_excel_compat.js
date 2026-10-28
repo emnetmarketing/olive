@@ -52,7 +52,7 @@ function fixtureRuntime(t) {
     if (modules.has(absolute)) return modules.get(absolute).exports;
     const module = { exports: {} }; modules.set(absolute, module);
     const wrapper = vm.runInThisContext(`(function(require,module,exports,__filename,__dirname){${fs.readFileSync(absolute, "utf8")}\n})`, { filename: absolute });
-    const localRequire = id => id.startsWith("./") ? load(id.endsWith(".js") ? id.slice(2) : `${id.slice(2)}.js`) : require(id);
+    const localRequire = id => id.startsWith("./") ? load(id.endsWith(".js") ? id.slice(2) : `${id.slice(2)}.js`) : require(id.startsWith(".") ? path.resolve(path.dirname(absolute), id) : id);
     wrapper(localRequire, module, module.exports, absolute, path.dirname(absolute));
     return module.exports;
   }
@@ -134,7 +134,7 @@ function uiRuntime(runtime, fixtures) {
     return nodes.get(id);
   };
   node("collectionStart").value = fixtures.period.startDate; node("collectionEnd").value = fixtures.period.endDate;
-  const context = vm.createContext({
+  const context = vm.createContext({ ResultGrowthPresentation: require("../shared/result-growth-presentation"),
     state: { currentAnalysisJob: fixtures.instant, currentPeriodAnalysisJob: null, periodResultQuery: "", marketDiscoveryRows: [] },
     $: node, escapeHtml: value => String(value ?? ""), formatHistoryDate: value => value,
     surgeSignalSummary: () => "", periodSourceEvidence: source => source?.availability === "no_data" ? "데이터 없음" : "기간 근거",
@@ -176,7 +176,11 @@ for (const format of ["legacy", "canonical"]) {
     const digest = runtime.load("period-publication.js").digest;
     assert.equal(exact.state, "completed"); assert.equal(exact.jobId, snapshot.jobId);
     assert.equal(exact.queryStartDate, fixtures.period.queryStartDate);
-    assert.equal(digest(exact.results), digest(fixtures.period.results));
+    const projected = runtime.load("result-quality-projection.js").projectJob(fixtures.period);
+    assert.equal(digest(exact.results), digest(projected.results));
+    assert.equal(exact.qualityProjection.sourceResultsHash, projected.qualityProjection.sourceResultsHash);
+    assert.deepEqual(exact.results.map(row => [row.keyword, row.estimatedSurgeCount, row.peakRelativeLiftPct, row.latestDataDate]),
+      fixtures.period.results.map(row => [row.keyword, row.estimatedSurgeCount, row.peakRelativeLiftPct, row.latestDataDate]));
     assert.deepEqual(snapshot.items.map(row => row.keyword), exact.results.map(row => row.keyword));
     assert.equal(runtime.writes.length, 0, "all result API reads must remain read-only");
     const ui = uiRuntime(runtime, fixtures);
@@ -201,7 +205,8 @@ for (const format of ["legacy", "canonical"]) {
       surge: sheet.getCell(i + 12, 4).value, rise: sheet.getCell(i + 12, 5).value,
       confidence: sheet.getCell(i + 12, 6).value, grade: sheet.getCell(i + 12, 7).value }));
     assert.equal(digest(excelRows), digest(exact.results.map(row => ({ keyword: row.keyword, surge: row.estimatedSurgeCount,
-      rise: row.peakRelativeLiftPct / 100, confidence: row.periodMarketConfidenceScore, grade: "보통" }))));
+      rise: row.peakRelativeLiftPct / 100, confidence: row.periodMarketConfidenceScore,
+      grade: ({ very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" })[row.periodMarketConfidenceGrade] || "" }))));
     const summaryRows = []; workbook.getWorksheet("00_요약").eachRow(row => summaryRows.push(row.values));
     assert.ok(summaryRows.some(row => row[1] === "선택 기간 결과 건수" && row[2] === 365));
     const history = JSON.parse(runtime.records.get("analysis-downloads/shared-history/v1").bytes.toString());

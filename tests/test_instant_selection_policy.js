@@ -124,7 +124,7 @@ test("fresher published observations may supersede later-created old data, with 
 function uiRuntime(responses = {}) {
   const requests = [], displayed = [], errors = [], nodes = new Map();
   const $ = id => { if (!nodes.has(id)) nodes.set(id, { innerHTML: "", textContent: "", style: {}, classList: { toggle() {} } }); return nodes.get(id); };
-  const context = vm.createContext({ state: { currentAnalysisJob: { targetDataDate: "2026-10-26" } }, $, console,
+  const context = vm.createContext({ ResultGrowthPresentation: require("../shared/result-growth-presentation"), state: { currentAnalysisJob: { targetDataDate: "2026-10-26" } }, $, console,
     fetch: async route => { requests.push(route); assert.ok(Object.hasOwn(responses, route), "Unexpected request: " + route); return new Response(JSON.stringify(responses[route])); },
     displayCompletedAnalysis: value => displayed.push(value), showApiErrors: error => errors.push(error),
     marketConfidenceSummary: () => "confidence", surgeSignalSummary: () => "surge", sourceSummary: () => "sources", formatSurgeHistory: () => "history" });

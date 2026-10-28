@@ -25,6 +25,7 @@ function load(legacy = false) {
     fetch() { networkCalls += 1; throw new Error("External API forbidden in formatter regression"); },
     require(name) {
       if (name === "./search-ad-observation") return require("../netlify/functions/search-ad-observation");
+      if (name === "./brand-context") return require("../netlify/functions/brand-context");
       assert.equal(name, "@netlify/blobs");
       return { connectLambda() { storageCalls += 1; throw new Error("Storage access forbidden"); },
         getStore() { storageCalls += 1; throw new Error("Storage access forbidden"); } };
@@ -37,6 +38,7 @@ function fixture(now) {
   const ago = hours => new Date(Date.parse(now) - hours * 3600000).toISOString();
   const base = { keyword: "테스트쿠션", normalizedKeyword: "테스트쿠션", discoverySource: ["youtube"],
     discoveredAt: ago(1), lastSeenAt: now, relatedBrand: "테스트", relatedProductType: "쿠션",
+    brandEvidence: { verified: true, source: "explicit-product-brand", label: "테스트" },
     youtubeEvidence: [{ publishedAt: ago(1) }] };
   return {
     items: [base,

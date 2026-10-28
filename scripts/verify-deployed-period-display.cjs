@@ -89,7 +89,7 @@ function verifyExcel(bytes, job) {
     periodAndWindowMatch: true, valuesAndOrderMatch: true, sha256: sha(bytes) };
 }
 
-async function verifyDisplay({ html, period, instant, status, snapshot, partial, excel, provenance = "unspecified local saved inputs" }) {
+async function verifyDisplay({ html, period, instant, status, snapshot, partial, excel, growthScript, provenance = "unspecified local saved inputs" }) {
   assert.equal(period.mode, "period"); assert.equal(period.state, "completed");
   assert.ok(period.jobId && period.startDate && period.endDate && Array.isArray(period.results));
   if (period.resultCount != null) assert.equal(period.resultCount, period.results.length);
@@ -136,6 +136,10 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
       throw new Error(`Unapproved offline UI route ${method} ${url.pathname}`);
     }
   }, { codeGeneration: { strings: false, wasm: false } });
+  if (html.includes("ResultGrowthPresentation.growthView(")) {
+    assert.ok(growthScript, "Supply the same deployed /shared/result-growth-presentation.js asset; do not substitute a different source version");
+    vm.runInContext(growthScript, context, { filename: "supplied-result-growth-presentation.js" });
+  }
   const functions = ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "surgeSignalSummary", "periodSelectionMatchesJob",
     ...(html.includes("function storedPeriodConfidenceDisplay(") ? ["storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay"] : []),
     "periodConfidenceSummary", "periodRelationSummary", "periodSourceEvidence", "periodDataStatus", "periodResultRow",
@@ -160,9 +164,12 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
     const cells = renderedRows[i]; assert.equal(cells.length, 11);
     assert.equal(cells[0], String(i + 1)); assert.ok(cells[1].startsWith(String(row.keyword || "")));
     assert.equal(cells[2], row.estimatedSurgeCount == null ? "계산 불가" : `+${Number(row.estimatedSurgeCount).toLocaleString("ko-KR")}`);
-    assert.equal(cells[3], row.peakRelativeLiftPct == null ? "비교 불가" : `+${Number(row.peakRelativeLiftPct).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%`);
-    const confidence = row.periodMarketConfidenceScore ?? row.marketConfidenceScore;
-    assert.ok(cells[4].includes(confidence == null ? "미계산" : `${Number(confidence)}/100`));
+    if (context.ResultGrowthPresentation) {
+      const growth = context.ResultGrowthPresentation.growthView(row);
+      assert.equal(cells[3], growth.rateLabel + (growth.roundedToZero ? `원본 기준 ${growth.baselineLabel}` : ""));
+    } else assert.equal(cells[3], row.peakRelativeLiftPct == null ? "비교 불가" : `+${Number(row.peakRelativeLiftPct).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%`);
+    const confidence = row.qualityProjection && row.periodMarketConfidenceScore === null ? null : row.periodMarketConfidenceScore ?? row.marketConfidenceScore;
+    assert.ok(cells[4].includes(confidence == null ? row.qualityProjection?.displayWarning ? "확인 불가" : "미계산" : `${Number(confidence)}/100`));
     const displayReasons = context.storedPeriodConfidenceDisplay ? context.storedPeriodConfidenceDisplay(row).reasons
       : row.periodMarketConfidenceReasons || row.marketConfidenceReasons || [];
     for (const reason of displayReasons.slice(0, 5)) assert.ok(cells[5].includes(reason));
@@ -192,7 +199,7 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
   assert.equal(digest(context.state.currentAnalysisJob), instantBefore);
   return {
     verificationKind: "Actual supplied HTML functions plus saved API responses, executed offline in a minimal DOM; NOT a logged-in browser visual test",
-    provenance, htmlSha256: sha(html), jobId: period.jobId, selectedPeriod: [period.startDate, period.endDate],
+    provenance, htmlSha256: sha(html), growthScriptSha256: growthScript ? sha(growthScript) : null, jobId: period.jobId, selectedPeriod: [period.startDate, period.endDate],
     requiredWindow: [period.queryStartDate, period.endDate], resultCount: period.results.length, rowsDigest: digest(period.results),
     actualDataRange: [period.actualDataStartDate || null, period.actualDataEndDate || period.latestDataDate || null],
     metadata: originalMeta, top10OrderMatches: true, allRowsOrderMatches: true, numericAndEvidenceValuesMatch: true,
@@ -216,7 +223,8 @@ async function main() {
   const options = Object.fromEntries(flags.map(flag => { const index = flag.indexOf("="); assert.ok(index > 2); return [flag.slice(2, index), flag.slice(index + 1)]; }));
   const report = await verifyDisplay({ html: fs.readFileSync(htmlPath, "utf8").replace(/^\uFEFF/, ""), period: readJson(periodPath),
     ...Object.fromEntries(["instant", "status", "snapshot", "partial"].filter(name => options[name]).map(name => [name, readJson(options[name])])),
-    excel: options.excel ? fs.readFileSync(options.excel) : undefined, provenance: options.provenance || "saved responses supplied by caller; provenance must be confirmed separately" });
+    excel: options.excel ? fs.readFileSync(options.excel) : undefined, growthScript: options["growth-script"] ? fs.readFileSync(options["growth-script"], "utf8") : undefined,
+    provenance: options.provenance || "saved responses supplied by caller; provenance must be confirmed separately" });
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ report: path.resolve(reportPath), jobId: report.jobId, resultCount: report.resultCount,
     rowsDigest: report.rowsDigest, networkRequests: 0, loggedInBrowserVisualVerification: false }));

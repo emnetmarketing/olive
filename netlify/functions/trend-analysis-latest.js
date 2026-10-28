@@ -1,4 +1,5 @@
 const { connect, readLastSuccess, readLastPartial } = require("./trend-analysis-cache");
+const { projectJob } = require("./result-quality-projection");
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 
 exports.handler = async (event) => {
@@ -10,7 +11,7 @@ exports.handler = async (event) => {
     const resultKind = String(event.queryStringParameters?.result || "full");
     const job = resultKind === "partial" ? await readLastPartial(mode) : await readLastSuccess(mode);
     if (!job) return json(404, { error: "No completed analysis result has been saved yet." });
-    return json(200, job);
+    return json(200, projectJob(job));
   } catch (error) {
     return json(500, { error: error.message || "Failed to read the last successful analysis." });
   }

@@ -41,7 +41,7 @@ test("draft is default and Production requires explicit true", () => {
   assert.throws(() => parseArgs(["plan", "--commit", commit, "--production", "yes"]), /must be true or false/);
 });
 
-test("plan retains remote static SHA only and permits exactly three local files", async () => {
+test("plan retains remote static SHA only and permits explicit UI/helper files", async () => {
   const calls = [];
   const api = async route => {
     calls.push(route);
@@ -54,7 +54,7 @@ test("plan retains remote static SHA only and permits exactly three local files"
   assert.equal(body.files["existing.txt"], "d".repeat(40));
   assert.equal(body.draft, false);
   assert.equal(body.branch, "main");
-  assert.deepEqual([...uploadFiles.values()].map(file => file.name).sort(), ["_headers", "index.html", "netlify.toml"]);
+  assert.deepEqual([...uploadFiles.values()].map(file => file.name).sort(), ["_headers", "index.html", "netlify.toml", "shared/result-growth-presentation.js"]);
   assert.equal(plan.basePublishedId, healthy);
   assert.equal(calls.length, 2);
   await assert.rejects(makePlan(args, async () => ({ published_deploy: { id: "changed" } }), verified, null), /Published deploy changed/);

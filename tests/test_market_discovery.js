@@ -100,12 +100,13 @@ test("generic ambiguous words are not inferred as verified brands", () => {
     { product: "비타 비타민 세럼", adGroupId: "x1" },
     { product: "비타 비타민 크림", adGroupId: "x2" },
   ], index);
-  assert.equal(match?.signals?.brandMatch, false);
+  assert.notEqual(match?.signals?.brandMatch, true);
 });
 
 test("unavailable strong market evidence uses ratio-only slot without fabricated volume", () => {
   const market = [{ keyword: "헤라블랙쿠션", discoverySource: ["product-cache", "youtube"], discoveredAt: "2026-08-25T00:00:00.000Z",
-    sourceConfidence: 90, relatedBrand: "헤라", relatedProductType: "쿠션", monthlySearchStatus: "keywordtool-unavailable" }];
+    sourceConfidence: 90, sourceConfidenceQuality: { version: 1, status: "current_scored_evidence" },
+    relatedBrand: "헤라", relatedProductType: "쿠션", monthlySearchStatus: "keywordtool-unavailable" }];
   const selected = analysis.selectWithMarketDiscovery([], market, new Map(), 5000, 500);
   assert.equal(selected.selected.length, 0);
   assert.equal(selected.ratioOnly.length, 1);
@@ -116,7 +117,8 @@ test("qualified ratio-only signals retain a bounded lane when numeric market can
   const numeric = Array.from({ length: 600 }, (_, i) => ({ keyword: `수치후보${i}`, discoverySource: ["product-cache"],
     sourceConfidence: 80, relatedBrand: `브랜드${i}`, relatedProductType: "크림", monthlySearchStatus: "available", monthlyTotalSearches: 1000 + i }));
   const ratio = Array.from({ length: 200 }, (_, i) => ({ keyword: `비율후보${i}`, discoverySource: ["product-cache", "youtube"],
-    sourceConfidence: 90, relatedBrand: `비율브랜드${i}`, relatedProductType: "쿠션", monthlySearchStatus: "keywordtool-unavailable" }));
+    sourceConfidence: 90, sourceConfidenceQuality: { version: 1, status: "current_scored_evidence" },
+    relatedBrand: `비율브랜드${i}`, relatedProductType: "쿠션", monthlySearchStatus: "keywordtool-unavailable" }));
   const selected = analysis.selectWithMarketDiscovery([], [...numeric, ...ratio], new Map(), 5000, 500);
   assert.equal(selected.diagnostics.marketSelected, 500);
   assert.equal(selected.diagnostics.marketNumeric, 350);
@@ -136,7 +138,8 @@ test("keywordtool backfill protects source diversity before generic backlog", ()
   const items = [
     ...Array.from({ length: 500 }, (_, i) => ({ ...common, keyword: `일반${i}`, normalizedKeyword: `일반${i}`, discoverySource: ["product-cache"] })),
     { ...common, keyword: "유튜브후보", normalizedKeyword: "유튜브후보", discoverySource: ["youtube"], sourceConfidence: 80 },
-    { ...common, keyword: "브랜드크림", normalizedKeyword: "브랜드크림", discoverySource: ["product-cache"], relatedBrand: "브랜드", relatedProductType: "크림" },
+    { ...common, keyword: "브랜드크림", normalizedKeyword: "브랜드크림", discoverySource: ["product-cache"], relatedBrand: "브랜드", relatedProductType: "크림",
+      brandEvidence: { verified: true, source: "explicit-product-brand", label: "브랜드" } },
     { ...common, keyword: "신규유입", normalizedKeyword: "신규유입", discoverySource: ["searchad-new-query"] },
   ];
   const selected = refresh.prioritizedKeywordtoolBackfill(items, 50);

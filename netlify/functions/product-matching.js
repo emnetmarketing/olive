@@ -2,8 +2,16 @@ const PRODUCT_TYPES = new Set(["크림", "세럼", "앰플", "에센스", "토�
 const VERIFIED_CONTEXT_PRODUCT_TYPES = new Set([...PRODUCT_TYPES, "립밤", "파우더"]);
 const INGREDIENTS = new Set(["나이아신아마이드", "레티놀", "비타민c", "비타민씨", "pdrn", "히알루론산", "콜라겐", "마그네슘", "유산균", "프로바이오틱스", "프리바이오틱스", "글루타치온", "병풀", "시카", "세라마이드", "판테놀", "비오틴", "아연", "철분", "루테인", "밀크씨슬", "오메가3", "단백질", "베르베린"]);
 const GENERIC_WORDS = new Set(["효과", "효능", "추천", "사용법", "가격", "후기", "기획", "세트", "증정", "단독", "공식", "제품", "상품", "케어", "데일리", "프리미엄", "더블"]);
+// Compounds are recognized by semantic word boundaries, never by an arbitrary
+// interior substring. These are reusable product/body/form words, not a query
+// blacklist (e.g. a two-syllable suffix inside an unrelated word is not proof).
+const COMPOUND_WORDS = new Set([...PRODUCT_TYPES, ...INGREDIENTS, ...GENERIC_WORDS,
+  "네일", "아트", "젤", "팁", "리무버", "밤", "풋", "앤", "패치", "오일", "워터", "핸드", "바디", "헤어",
+  "스킨", "블러", "파우더", "선", "미스트", "손톱", "발톱", "영양", "보습", "수분", "톤업", "틴트", "글로스", "글로우", "브러시", "브러쉬"]);
 
 function compact(value) { return String(value || "").toLocaleLowerCase("ko-KR").replace(/[^0-9a-z가-힣]/g, ""); }
+const COMPOUND_LOOKUP = new Set([...COMPOUND_WORDS].map(compact).filter(Boolean));
+const COMPOUND_PARTS = [...COMPOUND_LOOKUP];
 function matchTokens(value) {
   return String(value || "").toLocaleLowerCase("ko-KR")
     .replace(/([가-힣a-z])([0-9])/g, "$1 $2").replace(/([0-9])([가-힣a-z])/g, "$1 $2")
@@ -47,7 +55,53 @@ function auxiliarySimilarity(left, right) {
 }
 function intersects(left, right) { return [...left].filter((token) => right.has(token)); }
 
-function evaluateMatch(keyword, item) {
+function segmentedProductWords(value) {
+  if (!value) return true;
+  const reached = new Set([0]);
+  for (let at = 0; at < value.length; at++) if (reached.has(at)) {
+    for (const token of COMPOUND_PARTS) if (value.startsWith(token, at)) reached.add(at + token.length);
+  }
+  return reached.has(value.length);
+}
+function hasEvidenceTerm(value, term) {
+  const needle = compact(term);
+  if (!needle) return false;
+  const words = compoundTokens(value);
+  if (words.some(word => compact(word) === needle)) return true;
+  if (adjacentCompounds(words).some(word => compact(word.value) === needle)) return true;
+  // Only known vocabulary supports splitting a joined token. Arbitrary brand
+  // or product-line fragments still require exact token/adjacent-token proof.
+  if (!COMPOUND_LOOKUP.has(needle)) return false;
+  return words.some(word => {
+    const text = compact(word);
+    for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1))
+      if (segmentedProductWords(text.slice(0, at)) && segmentedProductWords(text.slice(at + needle.length))) return true;
+    return false;
+  });
+}
+function buildVerifiedBrandCatalog(items) {
+  const brands = new Map();
+  for (const item of items || []) {
+    const value = compact(item?.brand);
+    if (!value) continue;
+    if (!brands.has(value)) brands.set(value, { value, label: String(item.brand), source: "explicit", verified: true });
+  }
+  return brands;
+}
+function brandEvidence(item, index) {
+  const explicit = compact(item?.brand);
+  if (explicit)
+    return { value: explicit, label: String(item.brand), source: "explicit", verified: true };
+  const first = String(item?.product || "").trim().split(/\s+/)[0] || "", value = compact(first);
+  const catalog = index?.verifiedBrands || index;
+  if (catalog instanceof Map && catalog.has(value))
+    return { value, label: catalog.get(value)?.label || first, source: "catalog-confirmed", verified: true };
+  if (!value || PRODUCT_TYPES.has(value) || INGREDIENTS.has(value) || GENERIC_WORDS.has(value))
+    return { value: "", label: "", source: "none", verified: false };
+  return { value, label: first, source: "inferred-prefix", verified: false };
+}
+
+function evaluateMatch(keyword, item, index) {
   const product = String(item.product || ""); const brand = String(item.brand || "");
   const queryTokens = new Set(matchTokens(keyword)); const productTokens = new Set(matchTokens(`${brand} ${product}`));
   const explicitBrandTokens = matchTokens(brand);
@@ -63,7 +117,9 @@ function evaluateMatch(keyword, item) {
     ? firstProductToken : "";
   const brandTokens = new Set(explicitBrandTokens.length ? explicitBrandTokens : (compactPrefixBrand ? [...queryTokens] : (inferredBrandToken ? [inferredBrandToken] : [])));
   const brandCompact = compact(brand || (compactPrefixBrand ? keyword : inferredBrandToken));
-  const brandMatch = Boolean(brandCompact && compact(keyword).includes(brandCompact));
+  const evidence = brandEvidence(item, index);
+  const brandMatch = Boolean(evidence.verified && evidence.value
+    && (queryTokens.has(evidence.value) || compactQuery.startsWith(evidence.value)));
   const matchedTokens = intersects(queryTokens, productTokens);
   const ingredientTokens = new Set([...queryTokens].filter((token) => INGREDIENTS.has(token)));
   const productIngredientTokens = new Set([...productTokens].filter((token) => INGREDIENTS.has(token)));
@@ -114,7 +170,8 @@ function evaluateMatch(keyword, item) {
   else score = Math.min(rawScore, 99);
   score = Math.max(0, Math.round(score));
 
-  const signals = { brandMatch, inferredBrandMatch: Boolean(inferredBrandToken || compactPrefixBrand), productLineMatch, productNameMatch, ingredientMatch, concentrationMatch,
+  const signals = { brandMatch, brandVerified: evidence.verified, brandEvidenceSource: evidence.source, brandEvidenceValue: evidence.value,
+    inferredBrandMatch: Boolean(!evidence.verified && (inferredBrandToken || compactPrefixBrand)), productLineMatch, productNameMatch, ingredientMatch, concentrationMatch,
     productTypeMatch, specMatch, tokenCoverage: Math.round(tokenCoverage * 100), genericOnlyMatch,
     matchedTokens, productLineMatches, ingredientMatches, concentrationMatches: numberMatches, typeMatches, specMatches,
     levenshteinSimilarity: Math.round(charSimilarity) };
@@ -127,6 +184,7 @@ function evaluateMatch(keyword, item) {
   if (productLineMatch && !brandMatch) reasons.push("제품라인 일치");
   if (specMatch && !concentrationMatch) reasons.push("규격·모델 특징 일치");
   if (genericOnlyMatch && productTypeMatch) reasons.push("제품군만 일치 / 특정 상품 식별력 낮음");
+  if (signals.inferredBrandMatch) reasons.push("상품명 접두어 유사 / 브랜드 미검증");
   if (!reasons.length && matchedTokens.length) reasons.push(`핵심 토큰 ${matchedTokens.join(", ")} 일치`);
   if (brandMatch && productLineMatch && (productNameMatch || specMatch)) judgment = "매우 강한 매칭";
   else if ((ingredientMatch && concentrationMatch) || (brandMatch && productLineMatch) || (productNameMatch && identifyingMatches.size >= 2)) judgment = "강한 매칭";
@@ -140,26 +198,13 @@ function evaluateMatch(keyword, item) {
 function buildProductIndex(items) {
   const index = new Map();
   const brandPositions = new Map();
-  const inferredBrandStats = new Map();
-  items.forEach((item) => {
-    if (compact(item.brand)) return;
-    const brand = compact(matchTokens(item.product)[0] || "");
-    if (brand.length < 2 || PRODUCT_TYPES.has(brand) || INGREDIENTS.has(brand) || GENERIC_WORDS.has(brand)) return;
-    const stats = inferredBrandStats.get(brand) || { products: 0, adGroups: new Set(), productTypes: new Set() };
-    stats.products += 1;
-    if (item.adGroupId) stats.adGroups.add(String(item.adGroupId));
-    for (const token of matchTokens(item.product)) if (PRODUCT_TYPES.has(token)) stats.productTypes.add(token);
-    inferredBrandStats.set(brand, stats);
-  });
+  index.verifiedBrands = buildVerifiedBrandCatalog(items);
   items.forEach((item, position) => { for (const token of indexKeys(`${item.brand || ""} ${item.product || ""}`)) {
     if (!index.has(token)) index.set(token, []); if (index.get(token).length < 500) index.get(token).push(position);
   }
-    const explicitBrand = compact(item.brand);
-    const inferredBrand = compact(matchTokens(item.product)[0] || "");
-    const stats = inferredBrandStats.get(inferredBrand);
-    const inferredVerified = stats && stats.products >= 2 && (stats.adGroups.size >= 2 || stats.productTypes.size >= 2);
-    const brand = explicitBrand || (inferredVerified ? inferredBrand : "");
-    if (brand.length >= 2 && !PRODUCT_TYPES.has(brand) && !INGREDIENTS.has(brand) && !GENERIC_WORDS.has(brand)) {
+    const evidence = brandEvidence(item, index);
+    const brand = evidence.verified ? evidence.value : "";
+    if (brand) {
       if (!brandPositions.has(brand)) brandPositions.set(brand, []);
       brandPositions.get(brand).push(position);
     }
@@ -184,9 +229,10 @@ function detectVerifiedBrandProductContext(keyword, item, index) {
     .sort((left, right) => right.length - left.length);
   const productType = productTypes.find((type) => suffix === type) || "";
   if (!productType) return null;
-  const itemBrand = compact(item?.brand) || compact(matchTokens(item?.product)[0] || "");
+  const evidence = brandEvidence(item, index);
+  const itemBrand = evidence.verified ? evidence.value : "";
   const product = compact(item?.product);
-  if (itemBrand !== brand || !product.includes(productType)) return null;
+  if (itemBrand !== brand || !hasEvidenceTerm(item?.product, productType)) return null;
   return { brand, productType, normalizedParts: [brand, productType] };
 }
 function findBestMatch(keyword, items, index) {
@@ -197,12 +243,13 @@ function findBestMatch(keyword, items, index) {
     positionScores.set(position, Number(positionScores.get(position) || 0) + 1000);
   }
   const shortlist = [...positionScores].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 500).map(([position]) => items[position]);
-  let evaluated = shortlist.map((item, order) => ({ item, candidate: item.product, order, ...evaluateMatch(keyword, item) }))
+  let evaluated = shortlist.map((item, order) => ({ item, candidate: item.product, order, ...evaluateMatch(keyword, item, index) }))
     .sort((a, b) => b.score - a.score || a.order - b.order);
   if (!evaluated.length) return null;
   if (queryBrand) {
     const sameBrand = evaluated.filter((entry) => {
-      const itemBrand = compact(entry.item?.brand) || compact(matchTokens(entry.item?.product)[0] || "");
+      const evidence = brandEvidence(entry.item, index);
+      const itemBrand = evidence.verified ? evidence.value : "";
       return itemBrand === queryBrand;
     });
     if (sameBrand.length) evaluated = sameBrand;
@@ -232,4 +279,4 @@ function findBestMatch(keyword, items, index) {
 }
 
 module.exports = { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, indexKeys, auxiliarySimilarity, evaluateMatch, buildProductIndex,
-  detectQueryBrand, detectVerifiedBrandProductContext, findBestMatch };
+  detectQueryBrand, detectVerifiedBrandProductContext, findBestMatch, hasEvidenceTerm, brandEvidence, buildVerifiedBrandCatalog };

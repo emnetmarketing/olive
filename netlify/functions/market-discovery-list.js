@@ -2,6 +2,7 @@ const { connect, readCache } = require("./market-discovery-cache");
 const { connect: connectTrend, readCache: readTrendCache } = require("./trend-series-cache");
 const { readDiagnosticIndex } = require("./trend-analysis-cache");
 const { normalizedKeyword } = require("./market-discovery-core");
+const { projectBrandContext } = require('./brand-context');
 const { selectWithMarketDiscovery } = require("./trend-analysis-background")._test;
 
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
@@ -34,14 +35,17 @@ exports.handler = async (event) => {
     const protectedRanks = new Map(protectedItems.map((item, index) => [normalizedKeyword(item.keyword), index + 1]));
     const traces = new Map((diagnostic?.items || []).map((item) => [item.normalizedKeyword, item]));
     const rows = marketItems.filter((item) => inWindow(item, windowName)).sort((a, b) => discoverySortScore(b) - discoverySortScore(a)).slice(0, limit)
-      .map((item, index) => {
+      .map((storedItem, index) => {
+        const item = projectBrandContext(storedItem);
         const key = normalizedKeyword(item.keyword); const trendRecord = trend.entries.get(key)?.search || null; const trace = traces.get(key) || null;
         let trendStatus = trendRecord ? "completed" : protectedRanks.has(key) ? "pending" : "not-selected";
         if (trace?.searchTrendStatus === "pending-cache") trendStatus = trace.trendWaitReason || "fast_path_cache_wait";
         else if (trace?.searchTrendStatus === "valid" || trace?.searchTrendStatus === "empty") trendStatus = "completed";
         return { rank: index + 1, keyword: item.keyword, normalizedKeyword: key, discoverySource: item.discoverySource || [],
-          discoveredAt: item.discoveredAt || null, lastSeenAt: item.lastSeenAt || null, sourceConfidence: Number(item.sourceConfidence || 0),
+          discoveredAt: item.discoveredAt || null, lastSeenAt: item.lastSeenAt || null, sourceConfidence: item.sourceConfidence == null ? null : Number(item.sourceConfidence),
+          sourceConfidenceQuality: item.sourceConfidenceQuality || null,
           relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
+          relatedExpression: item.relatedExpression || '', brandContextStatus: item.brandContextStatus, brandEvidence: item.brandEvidence,
           monthlySearchStatus: item.monthlySearchStatus || "not-requested", monthlyTotalSearches: item.monthlyTotalSearches ?? null,
           marketDiscoveryRank: marketItems.findIndex((candidate) => candidate.normalizedKeyword === key) + 1,
           selectedForProtectedSlot: protectedRanks.has(key), protectedSlotRank: protectedRanks.get(key) || null,

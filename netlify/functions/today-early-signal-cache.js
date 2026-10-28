@@ -1,5 +1,6 @@
 const { connectLambda, getStore } = require("@netlify/blobs");
 const { normalizeSearchAdObservation } = require("./search-ad-observation");
+const { projectBrandContext, hasVerifiedBrand } = require('./brand-context');
 
 const STORE_NAME = "today-early-signals";
 const KEY = "current-v1";
@@ -14,7 +15,8 @@ function buildEarlySignals(items, history, now = new Date().toISOString(), optio
   const nowMs = Date.parse(now), sixHours = 6 * 3600000;
   const historyMap = new Map((history?.items || []).map((item) => [item.normalizedKeyword, item]));
   const output = new Map();
-  for (const item of items || []) {
+  for (const rawItem of items || []) {
+    const item = projectBrandContext(rawItem);
     const key = item.normalizedKeyword || normalize(item.keyword); if (!key) continue;
     const sources = [...new Set(item.discoverySource || [])]; const previousRecord = historyMap.get(key) || {};
     const videos = (item.youtubeEvidence || []).filter((video) => Number.isFinite(Date.parse(video.publishedAt)));
@@ -30,7 +32,7 @@ function buildEarlySignals(items, history, now = new Date().toISOString(), optio
     const youtubeTemporal = youtubeCurrent > 0; const searchTemporal = searchObservationIsCurrent && sources.includes("searchad-new-query")
       && (search.isNewlyObserved || firstSeenToday || searchDelta > 0);
     if (!youtubeTemporal && !searchTemporal) continue;
-    const context = Boolean(item.relatedBrand && (item.relatedProductType || item.relatedProductLine));
+    const context = Boolean(hasVerifiedBrand(item) && (item.relatedProductType || item.relatedProductLine));
     let score = 0; const reasons = [];
     if (firstSeenToday) { score += 20; reasons.push("오늘 처음 발견"); }
     if (youtubeCurrent > 0) { score += Math.min(30, youtubeCurrent * 10); reasons.push(`최근 6시간 YouTube ${youtubeCurrent}건`); }
@@ -48,6 +50,8 @@ function buildEarlySignals(items, history, now = new Date().toISOString(), optio
     const signal = { keyword: item.keyword, normalizedKeyword: key, earlySignalDate: kstDate(now), detectedAt: now, firstSeenAt, lastSeenAt: item.lastSeenAt || now,
       todayEarlySignalScore: score, strength: score >= 70 ? "strong" : score >= 45 ? "rising" : "watch", reasons, sources,
       relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
+      relatedExpression: item.relatedExpression || '', brandContextStatus: item.brandContextStatus, brandEvidence: item.brandEvidence,
+      qualityProjectionVersion: 1, brandContextPoints: context ? 15 : 0,
       productMatchScore: Number(item.productMatchScore || 0), relatedProduct: item.relatedProduct || "",
       comparisons: { youtube: videos.length ? { method: "recent_6h_vs_previous_6h", current: youtubeCurrent, previous: youtubePrevious, delta: youtubeDelta, deltaRate: ratio(youtubeDelta, youtubePrevious) } : null,
         searchAd: searchObservationIsCurrent && sources.includes("searchad-new-query") ? search : null },
@@ -90,7 +94,47 @@ function confirmSignals(cache, traces, rows, latestDataDate) {
   const history = (cache?.history || []).map(update); const byKey = new Map(history.map((item) => [`${item.earlySignalDate}:${item.normalizedKeyword}`, item]));
   return { ...cache, history, items: (cache?.items || []).map((item) => byKey.get(`${item.earlySignalDate}:${item.normalizedKeyword}`) || item) };
 }
+function projectStoredBrandSignal(signal) {
+  if (!signal || signal.qualityProjectionVersion >= 1) return signal;
+  const projected = projectBrandContext(signal);
+  const brandReasons = (signal.reasons || []).filter(reason => /문맥 확인$/.test(reason)
+    && String(reason).startsWith(`${signal.relatedBrand} · `));
+  if (projected.brandContextStatus !== 'unverified' || !brandReasons.length) return { ...projected, qualityProjectionVersion: 1 };
+  let score = signal.todayEarlySignalScore == null ? NaN : Number(signal.todayEarlySignalScore);
+  // Legacy uncapped scores contain a separately identifiable +15 context award.
+  // For capped scores, reconstruct the uncapped sum from the persisted scored
+  // reasons/observations, never from today's time or newly fetched data.
+  if (score >= 100) {
+    const yt = signal.comparisons?.youtube || {}, ad = signal.comparisons?.searchAd || {};
+    let uncapped = 0, known = true;
+    for (const reason of signal.reasons || []) {
+      if (brandReasons.includes(reason)) continue;
+      if (reason === '오늘 처음 발견') uncapped += 20;
+      else if (/^최근 6시간 YouTube/.test(reason)) {
+        const statedCount = String(reason).match(/^최근 6시간 YouTube (\d+)건$/)?.[1];
+        if (yt.current != null && Number.isInteger(Number(yt.current)) && Number(yt.current) > 0
+          && statedCount != null && Number(statedCount) === Number(yt.current)) uncapped += Math.min(30, Number(yt.current) * 10);
+        else known = false;
+      }
+      else if (/^직전 6시간 대비 YouTube/.test(reason)) uncapped += 10;
+      else if (/^Search Ad (신규|저장 관측 변화)/.test(reason)) uncapped += 20;
+      else if (/Search Ad 노출 \+/.test(reason) && Number(ad.delta) > 0) uncapped += Math.min(20, 5 + Math.round(Math.log10(Number(ad.delta) + 1) * 5));
+      else if (reason === '복수 source 동시 감지') uncapped += 15;
+      else if (/^상품 일치율/.test(reason)) uncapped += 10;
+      else if (reason === '이전 NAVER 상승 이력') uncapped += 5;
+      else known = false;
+    }
+    score = known ? Math.min(100, uncapped) : null;
+  } else score = Number.isFinite(score) ? Math.max(0, score - 15) : null;
+  return { ...projected, qualityProjectionVersion: 1, brandContextPoints: 0,
+    originalEarlySignalScore: signal.todayEarlySignalScore, todayEarlySignalScore: score,
+    strength: score == null ? 'unverified' : score >= 70 ? 'strong' : score >= 45 ? 'rising' : 'watch',
+    reasons: [...(signal.reasons || []).filter(reason => !brandReasons.includes(reason)),
+      `일반 표현 ${projected.relatedExpression} · 제품군 ${signal.relatedProductLine || signal.relatedProductType || '미확인'} · 브랜드 미확인`],
+    ...(score == null ? { scoreWarning: '브랜드 근거 미확인 · 기존 상한 점수의 정확한 분리 불가' } : {}) };
+}
 function projectStoredSignal(signal) {
+  signal = projectStoredBrandSignal(signal);
   const raw = signal?.comparisons?.searchAd;
   if (!raw) return signal;
   const comparison = normalizeSearchAdObservation(raw, { firstSeenAt: signal.firstSeenAt });
@@ -109,4 +153,4 @@ function projectCache(cache) {
 }
 async function readCache() { return await store().get(KEY, { type: "json" }).catch(() => null) || { version: 1, items: [], history: [] }; }
 async function writeCache(value) { await store().setJSON(KEY, value); return value; }
-module.exports = { connect, readCache, writeCache, buildEarlySignals, mergeCache, confirmSignals, freshness, normalize, kstDate, projectStoredSignal, projectCache, STORE_NAME, KEY };
+module.exports = { connect, readCache, writeCache, buildEarlySignals, mergeCache, confirmSignals, freshness, normalize, kstDate, projectStoredSignal, projectStoredBrandSignal, projectCache, STORE_NAME, KEY };

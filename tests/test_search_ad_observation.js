@@ -73,11 +73,12 @@ test("projection is idempotent and real comparisons need no legacy warning", () 
   assert.equal(projected.scoreWarning, undefined); assert.equal(projected.comparisons.searchAd.delta, 60);
   assert.deepEqual(projectStoredSignal(projected), projected);
 });
-test("Discovery merge sanitizes legacy observations without altering product fields", () => {
+test("Discovery merge sanitizes legacy observations and preserves unverified expression separately", () => {
   const old = market({ firstSeenAt: now, lastSeenAt: now, recentImpressions: 100, previousImpressions: 0 });
   const merged = mergeCandidates([old], [], now)[0];
   assert.equal(merged.searchAdEvidence.previousImpressions, null);
-  assert.equal(merged.relatedBrand, old.relatedBrand); assert.equal(old.searchAdEvidence.previousImpressions, 0);
+  assert.equal(merged.relatedBrand, ''); assert.equal(merged.relatedExpression, old.relatedBrand);
+  assert.equal(merged.brandContextStatus, 'unverified'); assert.equal(old.searchAdEvidence.previousImpressions, 0);
   assert.equal(sanitizeSearchAdEvidence(measured()).delta, 60);
 });
 test("confidence requires measured increase but leaves NAVER metrics and new-discovery credit unchanged", () => {

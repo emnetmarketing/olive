@@ -9,10 +9,11 @@ const fixture = {
   generatedAt: "2026-09-03T01:00:00Z",
   instantJob: { jobId: "instant-1", mode: "instant", latestDataDate: "2026-09-02", trendCoveragePct: 66.6,
     trendAvailableCount: 3330, analyzedCandidateCount: 5000, surgeThreshold: 300, matchThreshold: 40, results: [
-      { keyword: "상품키워드", resultType: "product_match", estimatedSurgeCount: 420, estimatedBaseline: 100, peakDailyLift: 420,
+      { keyword: "나이아신아마이드20", resultType: "product_match", estimatedSurgeCount: 420, estimatedBaseline: 100, peakDailyLift: 420,
         peakRelativeLiftPct: 120, peakDate: "2026-09-02", latestDataDate: "2026-09-02", marketConfidenceScore: 82,
-        marketConfidenceGrade: "strong", marketConfidenceReasons: ["NAVER 절대 급등 확인"], match: { score: 87, item: { product: "대표 상품", brand: "브랜드" } }, discoverySource: ["youtube", "product-cache"] },
-      { keyword: "브랜드키워드", resultType: "brand_or_category_signal", estimatedSurgeCount: 350, relatedSignal: { relatedBrand: "브랜드" } },
+        marketConfidenceGrade: "strong", marketConfidenceReasons: ["NAVER 절대 급등 확인"], match: { score: 87, item: { product: "주미소 나이아신아마이드 20% 세럼 40ml", brand: "" } }, discoverySource: ["youtube", "product-cache"] },
+      { keyword: "브랜드키워드", resultType: "brand_or_category_signal", estimatedSurgeCount: 350,
+        relatedSignal: { relatedBrand: "브랜드", referenceProducts: [{ product: "브랜드 세럼", brand: "브랜드" }] } },
       { keyword: "기타키워드", resultType: "domain_related_signal", estimatedSurgeCount: 310, relatedSignal: { relatedProductType: "세럼" } }
     ] },
   periodRequest: { startDate: "2026-08-30", endDate: "2026-09-01" },
@@ -39,15 +40,16 @@ test("period sheet is omitted when no period result exists", async () => {
 test("today instant and period rows remain in separate sheets", async () => {
   const book = await workbook();
   assert.equal(book.getWorksheet("01_오늘 급상승 신호").getCell("A2").value, "오늘키워드");
-  assert.equal(book.getWorksheet("02_어제 급등 확인").getCell("A2").value, "상품키워드");
+  assert.equal(book.getWorksheet("02_어제 급등 확인").getCell("A2").value, "나이아신아마이드20");
   assert.equal(book.getWorksheet("07_선택기간분석").getCell("C12").value, "기간키워드");
 });
 
 test("result type sheets use production enums", async () => {
   const book = await workbook();
-  assert.equal(book.getWorksheet("03_상품 직접 매칭").getCell("A2").value, "상품키워드");
+  assert.equal(book.getWorksheet("03_상품 직접 매칭").getCell("A2").value, "나이아신아마이드20");
   assert.equal(book.getWorksheet("04_브랜드_카테고리").getCell("A2").value, "브랜드키워드");
   assert.equal(book.getWorksheet("05_기타 관련 급등").getCell("A2").value, "기타키워드");
+  assert.equal(book.getWorksheet("05_기타 관련 급등").getCell("H2").value, "unverified_context_signal");
 });
 
 test("all sheets freeze the header and enable AutoFilter", async () => {

@@ -65,7 +65,7 @@ const protectedSelection = _test.selectAnalysisCandidates(protectionPool, protec
 assert.ok(protectedSelection.selected.some((item) => item.keyword === "protected-0"));
 
 const snpeProducts = Array.from({ length: 13 }, (_, index) => ({
-  product: `SNPE 교정 마사지 상품 ${index + 1}`, account: "account1", productId: `snpe-${index + 1}`
+  product: `SNPE 교정 마사지 상품 ${index + 1}`, brand: "SNPE", account: "account1", productId: `snpe-${index + 1}`
 }));
 const snpeIndex = _test.buildIndex(snpeProducts);
 const snpeMatch = _test.bestMatch("SNPE", snpeProducts, snpeIndex);
@@ -76,7 +76,7 @@ assert.equal(snpeSignal.relatedProductCount, 13);
 assert.equal(snpeSignal.judgment, "브랜드 급등");
 assert.equal(_test.buildBrandOrCategorySignal({ keyword: "크림", category: "beauty" }, _test.bestMatch("크림", snpeProducts, snpeIndex), snpeProducts), null);
 assert.equal(_test.classifySurgeResult({ keyword: "SNPE", category: "beauty" }, snpeMatch, snpeProducts, 40).resultType, "brand_or_category_signal");
-const lakaProducts = [{ product: "라카 퍼펙트 트윈 립 4.7g 10colors", account: "account1" }];
+const lakaProducts = [{ product: "라카 퍼펙트 트윈 립 4.7g 10colors", brand: "라카", account: "account1" }];
 const lakaMatch = _test.bestMatch("라카트윈립", lakaProducts, _test.buildIndex(lakaProducts));
 assert.equal(lakaMatch.score, 83);
 assert.equal(_test.classifySurgeResult({ keyword: "라카트윈립", category: "beauty" }, lakaMatch, lakaProducts, 40).resultType, "product_match");

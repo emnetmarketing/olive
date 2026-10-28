@@ -16,13 +16,14 @@ const { readHistory: readDiscoveryHistory, writeHistory: writeDiscoveryHistory, 
 const earlySignals = require("./today-early-signal-cache");
 const { calculateMarketConfidence } = require("./market-confidence");
 const { normalizeSearchAdObservation } = require("./search-ad-observation");
+const { hasVerifiedBrand, projectBrandContext } = require("./brand-context");
 const { buildPeriodMarketEvidence, calculatePeriodMarketConfidence } = require("./period-market-evidence");
 const schedulerExecutions = require("./trend-scheduler-execution-cache");
 const historicalContinuation = require("./historical-continuation");
 const { publishInstant, patchInstantPublication } = require("./instant-publication");
 const { claimInstantWorker, assertInstantWorker, writeOwnedInstantJob, releaseInstantWorker } = require("./instant-worker");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
-  detectVerifiedBrandProductContext } = require("./product-matching");
+  detectVerifiedBrandProductContext, hasEvidenceTerm, brandEvidence, buildVerifiedBrandCatalog } = require("./product-matching");
 const { readSurgeHistory, writeSurgeHistory, upsertInstantHistory, deriveSurgeState, historyProtectionSignal,
   normalizeKeyword, CALCULATION_VERSION } = require("./surge-history-cache");
 
@@ -47,32 +48,30 @@ const BUSINESS_DOMAIN_TERMS = [
 ];
 
 function productBrandToken(item) {
-  const explicit = compact(item?.brand);
-  if (explicit) return explicit;
-  const first = matchTokens(item?.product)[0] || "";
-  return PRODUCT_TYPES.has(first) || INGREDIENTS.has(first) ? "" : compact(first);
+  const evidence = brandEvidence(item);
+  return evidence.verified ? evidence.value : "";
 }
 
 function buildBrandOrCategorySignal(candidate, match, products) {
   if (!match?.signals || !["beauty", "health"].includes(candidate?.category)) return null;
   if (!match.signals.brandMatch || match.signals.genericOnlyMatch) return null;
-  const brandOnly = !match.signals.productLineMatch && !match.signals.productTypeMatch
-    && !match.signals.ingredientMatch && !match.signals.specMatch;
-  const brandToken = compact(match.item?.brand) || (brandOnly ? compact(candidate.keyword) : productBrandToken(match.item));
-  if (!brandToken || !compact(candidate.keyword).includes(brandToken)) return null;
-  const related = products.filter((item) => compact(item?.brand) === brandToken
-    || compact(item?.product).includes(brandToken));
+  const catalog = buildVerifiedBrandCatalog(products);
+  const evidence = brandEvidence(match.item, catalog);
+  const brandToken = evidence.verified ? evidence.value : "";
+  if (!brandToken || !(compact(candidate.keyword).startsWith(brandToken) || hasEvidenceTerm(candidate.keyword, brandToken))) return null;
+  const related = products.filter((item) => { const value = brandEvidence(item, catalog);
+    return value.verified && value.value === brandToken; });
   if (!related.length) return null;
   return {
     signalType: "brand",
-    relatedBrand: String(match.item?.brand || matchTokens(match.item?.product)[0] || candidate.keyword),
+    relatedBrand: evidence.label, brandVerified: true, brandEvidenceSource: evidence.source,
     relatedProductCount: related.length,
     referenceProducts: related.slice(0, 5).map((item) => ({
       product: item.product || item.brand || "", brand: item.brand || "", account: item.account || "",
       productId: item.productId || item.id || null, adGroupId: item.adGroupId || null, adId: item.adId || null,
     })),
     judgment: "브랜드 급등",
-    reason: `${String(match.item?.brand || matchTokens(match.item?.product)[0] || candidate.keyword)} 브랜드 관련 상품 ${related.length.toLocaleString("ko-KR")}건 존재 / 특정 상품 식별 근거 부족`,
+    reason: `${evidence.label} 브랜드 관련 상품 ${related.length.toLocaleString("ko-KR")}건 존재 / 특정 상품 식별 근거 부족`,
   };
 }
 
@@ -88,8 +87,7 @@ function buildDomainRelatedSignal(candidate, match, products) {
   const evidenceTokens = [...new Set([...(signals.ingredientMatches || []), ...(signals.productLineMatches || []), ...(signals.typeMatches || [])])];
   if (!evidenceTokens.length || (signals.genericOnlyMatch && signals.productTypeMatch && !signals.ingredientMatch && !signals.productLineMatch)) return null;
   const related = products.filter((item) => {
-    const value = compact(`${item.brand || ""} ${item.product || ""}`);
-    return evidenceTokens.some((token) => value.includes(compact(token)));
+    return evidenceTokens.some((token) => hasEvidenceTerm(`${item.brand || ""} ${item.product || ""}`, token));
   });
   if (!related.length || !hasBusinessDomainEvidence(candidate, match, related)) return null;
   const signalType = signals.ingredientMatch ? "ingredient" : signals.productLineMatch ? "product_line" : "category";
@@ -106,7 +104,7 @@ function classifySurgeResult(candidate, match, products, matchThreshold) {
   if (!match || !hasBusinessDomainEvidence(candidate, match)) return { resultType: null, reason: "unrelated_or_insufficient_domain_evidence" };
   const signals = match.signals || {};
   const queryHasDomainTerm = BUSINESS_DOMAIN_TERMS.some((term) => compact(candidate?.keyword).includes(compact(term)));
-  const verifiedMarketContext = Boolean(candidate?.marketDiscovery && candidate?.relatedBrand
+  const verifiedMarketContext = Boolean(candidate?.marketDiscovery && hasVerifiedBrand(candidate)
     && (candidate?.relatedProductType || candidate?.relatedProductLine));
   if (!queryHasDomainTerm && !signals.brandMatch && !signals.ingredientMatch && !verifiedMarketContext) {
     return { resultType: null, reason: "query_has_no_verified_business_context" };
@@ -137,8 +135,8 @@ function classifyLowIntensitySignal(candidate, match, products, productIndex, ma
   const context = detectVerifiedBrandProductContext(candidate.keyword, match.item, productIndex);
   if (!context) return null;
   const related = products.filter((item) => {
-    const itemBrand = compact(item?.brand) || compact(matchTokens(item?.product)[0] || "");
-    return itemBrand === context.brand && compact(item?.product).includes(context.productType);
+    const evidence = brandEvidence(item, productIndex);
+    return evidence.verified && evidence.value === context.brand && hasEvidenceTerm(item?.product, context.productType);
   });
   if (!related.length) return null;
   const brandLabel = String(match.item?.brand || matchTokens(match.item?.product)[0] || context.brand);
@@ -446,6 +444,7 @@ function selectAnalysisCandidates(candidates, priorSignals, limit = MAX_ACTIVE_C
 }
 
 function marketCandidateForAnalysis(item) {
+  const context = projectBrandContext(item);
   const type = String(item.relatedProductType || "");
   const health = ["유산균", "비타민", "영양제", "프로틴", "단백질", "콜라겐", "오메가3"].some((value) => type.includes(value));
   return { keyword: item.keyword, category: item.category || (health ? "health" : "beauty"), categoryEvidence: "market-discovery",
@@ -456,8 +455,12 @@ function marketCandidateForAnalysis(item) {
     confidenceImpressionDelta: normalizeSearchAdObservation(item.searchAdEvidence || {}).delta,
     monthlyPcSearches: item.monthlyPcSearches ?? null, monthlyMobileSearches: item.monthlyMobileSearches ?? null,
     monthlyTotalSearches: item.monthlyTotalSearches ?? null, monthlyVolumeStatus: item.monthlySearchStatus || "not-requested",
-    priorityScore: discoveryPriority(item), marketDiscovery: true, marketEvidence: item.evidence || [], sourceConfidence: item.sourceConfidence,
-    relatedBrand: item.relatedBrand || "", relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
+    priorityScore: discoveryPriority(context), marketDiscovery: true, marketEvidence: item.evidence || [], sourceConfidence: context.sourceConfidence,
+    sourceConfidenceQuality: context.sourceConfidenceQuality,
+    relatedBrand: context.relatedBrand || "", relatedExpression: context.relatedExpression || "",
+    brandEvidence: context.brandEvidence || null, brandContextStatus: context.brandContextStatus,
+    productEvidence: context.productEvidence || [],
+    relatedProductType: item.relatedProductType || "", relatedProductLine: item.relatedProductLine || "",
     todayEarlySignalScore: Number(item.todayEarlySignalScore || 0) };
 }
 

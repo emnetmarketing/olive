@@ -1,4 +1,5 @@
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens } = require("./product-matching");
+const { projectBrandContext, hasVerifiedBrand } = require('./brand-context');
 
 const YOUTUBE_SEEDS = Object.freeze([
   "올리브영", "뷰티", "메이크업", "헤어", "추천템", "신상", "신제품",
@@ -28,7 +29,7 @@ function productTypeIn(value) {
   const text = compact(value);
   return VERIFIED_TYPE_LOOKUP.find(({ key }) => text.includes(key))?.type || "";
 }
-function buildVerifiedBrands(products) {
+function buildProductPrefixes(products) {
   const records = new Map();
   for (const item of products || []) {
     const first = compact(item.brand) || compact(matchTokens(item.product)[0] || "");
@@ -42,9 +43,18 @@ function buildVerifiedBrands(products) {
   return new Map([...records].filter(([, record]) => record.products >= 2
     && (record.adgroups.size >= 2 || record.productTypes.size >= 2)));
 }
+function buildVerifiedBrands(products) {
+  const records = new Map();
+  for (const item of products || []) {
+    const token = compact(item.brand);
+    if (token) records.set(token, { token, label: String(item.brand), source: 'explicit-product-brand', verified: true });
+  }
+  return records;
+}
 function productCandidates(products, options = {}) {
   const brandProducts = options.brandProducts || products;
-  const brands = buildVerifiedBrands(brandProducts); const byBrand = new Map();
+  const verifiedBrands = buildVerifiedBrands(brandProducts);
+  const brands = buildProductPrefixes(brandProducts); const byBrand = new Map();
   for (const item of products || []) {
     const brand = compact(item.brand) || compact(matchTokens(item.product)[0] || "");
     if (!brands.has(brand)) continue;
@@ -52,8 +62,14 @@ function productCandidates(products, options = {}) {
   }
   const output = new Map(); const add = (keyword, evidence) => {
     const key = normalizedKeyword(keyword); if (key.length < 2 || key.length > 30) return;
+    const verified = verifiedBrands.has(compact(evidence.brand));
+    const context = { verified, source: verified ? 'explicit-product-brand' : 'lexical-expression', label: verified ? evidence.brand : null };
+    evidence = { ...evidence, brandVerified: verified, brandEvidenceSource: context.source,
+      expression: verified ? '' : evidence.brand, brand: verified ? evidence.brand : '' };
     if (!output.has(key)) output.set(key, { keyword: key, normalizedKeyword: key, relatedBrand: evidence.brand,
+      relatedExpression: evidence.expression, brandEvidence: context, brandContextStatus: verified ? 'verified' : evidence.expression ? 'unverified' : 'none',
       relatedProductType: evidence.productType || "", relatedProductLine: evidence.productLine || "",
+      sourceConfidenceQuality: { version: 1, status: 'current_scored_evidence', brandPoints: 0 },
       evidence: [evidence], productEvidence: [evidence], sourceConfidence: evidence.confidence });
   };
   for (const [brand, items] of byBrand) {
@@ -142,8 +158,12 @@ function youtubeCandidates(videos, products) {
     const videoCount = item.videos.size, channelCount = item.channels.size;
     const confidence = Math.min(100, 38 + item.titleHits * 14 + item.descriptionHits * 5 + Math.max(0, videoCount - 1) * 12
       + Math.max(0, channelCount - 1) * 12 + (verifiedBrands.has(item.relatedBrand) ? 12 : 0));
-    return { keyword: item.keyword, normalizedKeyword: item.normalizedKeyword, relatedBrand: item.relatedBrand,
+    const verified = verifiedBrands.has(item.relatedBrand);
+    return { keyword: item.keyword, normalizedKeyword: item.normalizedKeyword, relatedBrand: verified ? item.relatedBrand : '',
+      relatedExpression: verified ? '' : item.relatedBrand, brandContextStatus: verified ? 'verified' : 'unverified',
+      brandEvidence: { verified, source: verified ? 'explicit-product-brand' : 'lexical-expression', label: verified ? item.relatedBrand : null },
       relatedProductType: item.relatedProductType, relatedProductLine: item.relatedProductLine,
+      sourceConfidenceQuality: { version: 1, status: 'current_scored_evidence', brandPoints: verified ? 12 : 0 },
       sourceConfidence: confidence, youtubeEvidence: [...item.videos.values()].slice(0, 10),
       evidence: [{ source: "youtube", videoCount, channelCount, titleHits: item.titleHits, confidence }] };
   }).filter((item) => item.sourceConfidence >= 55).sort((a, b) => b.sourceConfidence - a.sourceConfidence);
@@ -151,25 +171,30 @@ function youtubeCandidates(videos, products) {
 function mergeCandidates(existing, incoming, now = new Date().toISOString()) {
   const { sanitizeSearchAdEvidence } = require("./search-ad-observation");
   const map = new Map((existing || []).map((item) => [item.normalizedKeyword || normalizedKeyword(item.keyword),
-    { ...item, searchAdEvidence: sanitizeSearchAdEvidence(item.searchAdEvidence) }]));
-  for (const item of incoming || []) {
+    { ...projectBrandContext(item), searchAdEvidence: sanitizeSearchAdEvidence(item.searchAdEvidence) }]));
+  for (const rawItem of incoming || []) {
+    const item = projectBrandContext(rawItem);
     const key = item.normalizedKeyword || normalizedKeyword(item.keyword); const previous = map.get(key);
     const sources = [...new Set([...(previous?.discoverySource || []), ...(item.discoverySource || []), ...(item.evidence || []).map((entry) => entry.source)].filter(Boolean))];
+    const legacyUnknown = [previous, item].some(value => value?.sourceConfidenceQuality?.status === 'unverified_legacy_brand_component');
     map.set(key, { ...previous, ...item, keyword: item.keyword || previous?.keyword || key, normalizedKeyword: key,
       discoverySource: sources, discoveredAt: previous?.discoveredAt || now, lastSeenAt: now,
       evidence: [...(previous?.evidence || []), ...(item.evidence || [])].slice(-20),
       youtubeEvidence: item.youtubeEvidence || previous?.youtubeEvidence || [],
       productEvidence: item.productEvidence || previous?.productEvidence || [],
       searchAdEvidence: sanitizeSearchAdEvidence(item.searchAdEvidence || previous?.searchAdEvidence),
-      sourceConfidence: Math.min(100, Math.max(Number(previous?.sourceConfidence || 0), Number(item.sourceConfidence || 0)) + Math.max(0, sources.length - 1) * 8),
+      sourceConfidence: legacyUnknown ? null : Math.min(100, Math.max(Number(previous?.sourceConfidence || 0), Number(item.sourceConfidence || 0)) + Math.max(0, sources.length - 1) * 8),
+      ...([previous, item].some(value => value?.sourceConfidenceQuality) ? { sourceConfidenceQuality: legacyUnknown
+        ? { version: 1, status: 'unverified_legacy_brand_component', warning: '기존 출처 신뢰도 · 추정 브랜드 가점의 정확한 분리 근거 부족(원점수 보존)' }
+        : { version: 1, status: 'merged_scored_evidence' } } : {}),
       monthlySearchStatus: previous?.monthlySearchStatus || "not-requested", monthlyTotalSearches: previous?.monthlyTotalSearches ?? null });
   }
-  return [...map.values()];
+  return [...map.values()].map(projectBrandContext);
 }
 function discoveryPriority(item, now = Date.now()) {
   const sources = item.discoverySource || []; const ageHours = Math.max(0, (now - Date.parse(item.discoveredAt || now)) / 3600000);
   return sources.length * 40 + Number(item.sourceConfidence || 0) + (ageHours <= 48 ? 25 : 0)
-    + (item.relatedBrand && (item.relatedProductType || item.relatedProductLine) ? 30 : 0)
+    + (hasVerifiedBrand(item) && (item.relatedProductType || item.relatedProductLine) ? 30 : 0)
     + (sources.includes("searchad-new-query") ? 25 : 0) + (item.monthlySearchStatus === "available" ? 15 : 0)
     + Math.log10(Number(item.monthlyTotalSearches || 0) + 1) * 3 + Math.log10(Number(item.searchAdEvidence?.recentImpressions || 0) + 1) * 2;
 }

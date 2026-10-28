@@ -20,12 +20,18 @@ assert.ok(brandLine.score >= 70);
 
 const inferredBrandOnly = evaluateMatch("라로슈포제", { brand: "", product: "라로슈포제 에빠끌라 AI" });
 assert.ok(inferredBrandOnly.score < 60);
-assert.equal(inferredBrandOnly.judgment, "브랜드 관련");
+assert.equal(inferredBrandOnly.signals.brandMatch, false);
+assert.equal(inferredBrandOnly.signals.brandVerified, false);
+assert.equal(inferredBrandOnly.signals.inferredBrandMatch, true);
+assert.match(inferredBrandOnly.reason, /브랜드 미검증/);
 const inferredBrandLine = evaluateMatch("라로슈포제 에빠끌라", { brand: "", product: "라로슈포제 에빠끌라 AI" });
-assert.ok(inferredBrandLine.score >= 70);
+assert.equal(inferredBrandLine.signals.brandMatch, false);
+assert.equal(inferredBrandLine.signals.productLineMatch, true);
+assert.ok(inferredBrandLine.score < brandLine.score);
 const numericBrandOnly = evaluateMatch("블랑101", { brand: "", product: "블랑101 고농축 세탁세제 1L" });
 assert.ok(numericBrandOnly.score < 60);
-assert.equal(numericBrandOnly.judgment, "브랜드 관련");
+assert.equal(numericBrandOnly.signals.brandMatch, false);
+assert.equal(numericBrandOnly.signals.brandVerified, false);
 
 const genericType = evaluateMatch("유산균", { brand: "종근당", product: "종근당 락토핏 유산균" });
 assert.equal(genericType.signals.productTypeMatch, true);
@@ -68,7 +74,8 @@ const uniqueMatch = findBestMatch("라로슈포제 에빠끌라 B5", uniquelyIde
 assert.equal(uniqueMatch.matchingCandidateCount, 1);
 assert.equal(uniqueMatch.uniqueIdentification, true);
 assert.equal(uniqueMatch.score, 100);
-const compoundProducts = [{ brand: "", product: "라카 퍼펙트 트윈 립 4.7g 10colors", account: "계정1" }];
+// This positive brand+line case supplies actual brand evidence, not a title guess.
+const compoundProducts = [{ brand: "라카", product: "라카 퍼펙트 트윈 립 4.7g 10colors", account: "계정1" }];
 const compoundMatch = findBestMatch("라카트윈립", compoundProducts, buildProductIndex(compoundProducts));
 assert.ok(compoundMatch);
 assert.equal(compoundMatch.signals.brandMatch, true);

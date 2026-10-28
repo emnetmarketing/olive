@@ -63,6 +63,21 @@ function extractArchive(archive, destination) {
   }
   return normalizedLinks;
 }
+function workbookCells(files, name) {
+  const decode = value => String(value || '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+  const strings = [...files.get('xl/sharedStrings.xml').matchAll(/<si>([\s\S]*?)<\/si>/g)]
+    .map(match => [...match[1].matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(text=>decode(text[1])).join(''));
+  const sheets = [...files.get('xl/workbook.xml').matchAll(/<sheet\b[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)];
+  const sheet = sheets.find(item=>decode(item[1])===name); assert.ok(sheet,name);
+  const relationships = [...files.get('xl/_rels/workbook.xml.rels').matchAll(/<Relationship\b([^>]+)\/?\s*>/g)];
+  const relation = relationships.find(item=>item[1].match(/\bId="([^"]+)"/)?.[1]===sheet[2]);
+  const target=relation?.[1].match(/\bTarget="([^"]+)"/)?.[1]; assert.ok(target);
+  const xml=files.get(target.startsWith('/')?target.slice(1):path.posix.normalize('xl/'+target));assert.ok(xml);
+  return new Map([...xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].map(match=>{
+    const address=match[1].match(/\br="([^"]+)"/)?.[1], value=match[2]?.match(/<v>(.*?)<\/v>/)?.[1];
+    return [address,value===undefined?null:/\bt="s"/.test(match[1])?strings[Number(value)]:Number(value)];
+  }));
+}
 function snapshot(job) {
   return { version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
     queryStartDate: job.queryStartDate, createdAt: job.createdAt, generatedAt: job.completedAt,
@@ -205,16 +220,89 @@ async function childMain(base, mode) {
   for(const key of ["publicationFailureProtected","publicationRetrySucceeded","normalWorkerClaimVerified","normalWorkerFrozenInputsVerified","normalWorkerCheckpointResumeVerified"])assert.equal(report.report[key],true,key);
   assert.ok(calls.some(call=>call.strong&&call.method==="GET"));assert.ok(calls.some(call=>call.strong&&call.method==="PUT"));
   assert.equal((await invoke("trend-analysis-latest","GET",{mode:"instant"})).json().results.length,59);
+  let quality = null;
+  const qualityFile = path.join(base, 'quality-fixtures.json');
+  if (fs.existsSync(qualityFile)) {
+    const captured = JSON.parse(fs.readFileSync(qualityFile, 'utf8'));
+    const beforeWrites = writes.length;
+    const qInstant = captured.instant, qPeriod = captured.period;
+    seed('trend-analysis', `jobs/${qInstant.jobId}`, qInstant);
+    seed('trend-analysis', 'last-success/instant', { jobId: qInstant.jobId });
+    seed('trend-signal-snapshots', 'latest-valid-v1/instant', { jobId: qInstant.jobId });
+    seed('trend-signal-snapshots', `snapshots/${qInstant.jobId}`, captured.snapshot || snapshot(qInstant));
+    const qBody = { ...qPeriod, state: 'calculated', publicationState: 'prepared' }, qSnapshot = snapshot(qPeriod);
+    const qCommit = { ...commit, jobId: qPeriod.jobId, generation: Date.parse(qPeriod.createdAt),
+      bodyHash: digest(qBody), snapshotHash: digest(qSnapshot), startDate: qPeriod.startDate, endDate: qPeriod.endDate, queryStartDate: qPeriod.queryStartDate };
+    seed('trend-period-publications', qCommit.bodyKey, qBody); seed('trend-period-publications', qCommit.snapshotKey, qSnapshot);
+    seed('trend-period-publications', 'latest-v1', qCommit); seed('trend-period-publications', `published-jobs/${qPeriod.jobId}`, qCommit);
+    seed('today-early-signals', 'current-v1', captured.today);
+    const reads = {};
+    for (const [key, endpoint, query] of [['instant','trend-analysis-latest',{mode:'instant'}], ['period','trend-analysis-latest',{mode:'period'}],
+      ['status','trend-analysis-status',{jobId:qInstant.jobId}], ['snapshot','signal-snapshot-latest',{mode:'instant'}], ['early','today-early-signals',{}]]) {
+      const response = await invoke(endpoint, 'GET', query); assert.equal(response.statusCode, 200, key); reads[key] = response.json();
+    }
+    for (const [name, original] of [['instant', qInstant], ['period', qPeriod]]) {
+      assert.equal(reads[name].jobId, original.jobId); assert.equal(reads[name].results.length, original.results.length);
+      assert.deepEqual(reads[name].results.map(r=>[r.keyword,r.estimatedSurgeCount,r.peakBaseline,r.latestDataDate,r.trendSeries]),
+        original.results.map(r=>[r.keyword,r.estimatedSurgeCount,r.peakBaseline,r.latestDataDate,r.trendSeries]), 'Source/order/date unchanged');
+      const nail = reads[name].results.find(row=>row.keyword==='네일');
+      assert.ok(nail); assert.ok(nail.relatedSignal.referenceProducts.length > 0);
+      assert.ok(nail.relatedSignal.referenceProducts.every(item=>!item.product.includes('스네일')));
+      const zero = reads[name].results.find(row=>row.keyword==='나이아신아마이드20');
+      assert.equal(zero.peakBaseline,0); assert.equal(zero.peakRelativeLiftPct,null); assert.equal(zero.riseRate,null);
+    }
+    assert.equal(reads.snapshot.jobId, reads.instant.jobId);
+    assert.deepEqual(reads.snapshot.items.map(row=>[row.keyword,row.resultType,row.marketConfidenceScore,row.qualityProjection?.projectedResultHash]),
+      reads.instant.results.map(row=>[row.keyword,row.resultType,row.marketConfidenceScore,row.qualityProjection?.projectedResultHash]),
+      'Compact snapshot and full result share the same quality values');
+    assert.deepEqual(reads.status.results, reads.instant.results);
+    for (const key of ['아이유산균','맛있는영양제','워터선크림']) {
+      const row = reads.early.items.find(item=>item.keyword===key); assert.ok(row,key);
+      assert.equal(row.relatedBrand,''); assert.equal(row.todayEarlySignalScore,40); assert.equal(row.brandContextStatus,'unverified');
+    }
+    assert.equal(writes.length,beforeWrites,'Quality GETs never mutate source/pointers');
+    const download = await invoke('download-history','POST',{}, {downloadType:'unified_results',periodJobId:qPeriod.jobId,
+      periodStartDate:qPeriod.startDate,periodEndDate:qPeriod.endDate});
+    assert.equal(download.statusCode,201); assert.equal(download.json().sourceJobId,qInstant.jobId); assert.equal(download.json().periodJobId,qPeriod.jobId);
+    const entries=new Map(zipEntries(Buffer.from(download.json().contentBase64,'base64')).map(entry=>[entry.name,entry.bytes.toString('utf8')]));
+    assert.match(entries.get('xl/sharedStrings.xml'), /비교 불가 · 기준값 0/);
+    assert.match(entries.get('xl/sharedStrings.xml'), /브랜드 미확인/);
+    const instantCells=workbookCells(entries,'02_어제 급등 확인'), periodCells=workbookCells(entries,'07_선택기간분석'),earlyCells=workbookCells(entries,'01_오늘 급상승 신호');
+    reads.instant.results.forEach((row,index)=>{
+      const line=index+2;assert.equal(instantCells.get(`A${line}`),row.keyword);
+      assert.equal(instantCells.get(`C${line}`),Number(row.estimatedSurgeCount || 0)); // Existing Instant export numeric convention, including ratio-only rows.
+      assert.equal(instantCells.get(`I${line}`)??null,row.marketConfidenceScore??null);
+      assert.equal(instantCells.get(`L${line}`),Number(row.match?.score||0)/100);
+      if(row.peakBaseline===0)assert.equal(instantCells.get(`D${line}`)??null,null);
+    });
+    reads.period.results.forEach((row,index)=>{
+      const line=index+12;assert.equal(periodCells.get(`C${line}`),row.keyword);
+      assert.equal(periodCells.get(`D${line}`)??null,row.estimatedSurgeCount??null);
+      assert.equal(periodCells.get(`F${line}`)??null,row.periodMarketConfidenceScore??null);
+      if(row.peakBaseline===0)assert.equal(periodCells.get(`E${line}`)??null,null);
+    });
+    reads.early.items.forEach((row,index)=>{
+      assert.equal(earlyCells.get(`A${index+2}`),row.keyword);assert.equal(earlyCells.get(`C${index+2}`)??null,row.todayEarlySignalScore??null);
+    });
+    // The resulting workbook is a local fixture download, not a Production history write.
+    fs.writeFileSync(path.join(base,'quality-fixture.xlsx'),Buffer.from(download.json().contentBase64,'base64'));
+    fs.writeFileSync(path.join(base,'quality-api.json'),JSON.stringify(reads));
+    quality={instantJob:qInstant.jobId,instantRows:reads.instant.results.length,periodJob:qPeriod.jobId,periodRows:reads.period.results.length,
+      earlyRows:reads.early.count,nailReferences:reads.instant.results.find(row=>row.keyword==='네일').relatedSignal.referenceProducts.map(item=>item.product),
+      sourceSeriesDatesAmountsOrderPreserved:true,readWrites:0,apiStatusSnapshotIdentical:true,excelSameJobs:true,zeroBaselineComparable:false,
+      genericBrandContextPointsRemoved:true,excelAllRowsOrderAmountsConfidenceMatch:true,fixtureExcel:path.join(base,'quality-fixture.xlsx')};
+  }
   console.log(JSON.stringify({mode,bootstrapExecuted:true,nativeContext:true,legacyInstantRows:59,legacyMorningPeriodRows:439,canonicalPeriodRows:439,
     latestStatusSnapshotJobMatch:true,excelPeriodRows:439,excelJobId:exported.json().periodJobId,probePhases:phases,probeReport:report.report,
     scheduledDispatcherVerified:true,scheduledDispatcherIdleWrites:0,scheduledDispatcherIdleSourceCalls:0,
     sdkVersions:[...new Set(report.invocations.map(value=>value.sdkVersion))],fixtureBlobReads:calls.filter(x=>x.method==="GET").length,
-    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results)}));
+    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality}));
 }
 async function main() {
   if(process.argv[2]==="--child")return childMain(path.resolve(process.argv[3]),process.argv[4]);
   const archives=path.resolve(process.argv[2]||"data/build-smoke/native-functions-portable");
-  const input=process.argv[3]?path.resolve(process.argv[3]):null;
+  const input=process.argv[3]&&!process.argv[3].startsWith('--')?path.resolve(process.argv[3]):null;
+  const qualityDirectory=process.argv.find(value=>value.startsWith('--quality-fixtures='))?.slice('--quality-fixtures='.length);
   const reportOutput=path.resolve(process.argv.find(value=>value.startsWith("--report="))?.slice(9)||path.join(archives,"execution-report.json"));
   const base=fs.mkdtempSync(path.join(os.tmpdir(),"netlify-zip-execution-"));
   const only=process.argv.find(value=>value.startsWith("--only="))?.slice(7);
@@ -226,6 +314,12 @@ async function main() {
     evidence.push({name:route,sha256:hash(fs.readFileSync(archive)),normalizedLinks});}
   if(!process.argv.includes("--allow-link-normalization"))assert.ok(evidence.every(item=>item.normalizedLinks.length===0),"Final artifact gate forbids ZIP symlink normalization");
   fs.writeFileSync(path.join(base,"archives.json"),JSON.stringify(directories));fs.writeFileSync(path.join(base,"fixtures.json"),JSON.stringify(prepareData(input)));
+  if (qualityDirectory) {
+    const read = name => JSON.parse(fs.readFileSync(path.join(path.resolve(qualityDirectory),`${name}.json`),'utf8'));
+    const today = read('today');
+    fs.writeFileSync(path.join(base,'quality-fixtures.json'),JSON.stringify({instant:read('instant'),period:read('period'),snapshot:read('snapshot'),
+      today:{...today,history:today.items}})); // Current stored observations suffice; historical source remains untouched.
+  }
   fs.copyFileSync(__filename,path.join(base,"verify.cjs"));
   const env={...process.env};delete env.NODE_PATH;delete env.NODE_OPTIONS;
   for(const key of Object.keys(env))if(/TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY/i.test(key))delete env[key];
