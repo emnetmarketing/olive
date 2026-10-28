@@ -15,6 +15,7 @@ const { calculateMarketConfidence } = require("./market-confidence");
 const scheduler = require("./trend-scheduler-execution-cache");
 const dispatch = require("./instant-dispatch");
 const executionBudget = require("./instant-execution-budget");
+const targetPreflight = require("./instant-target-preflight");
 const PART_SIZE = 250;
 const SAFE_MS = 4 * 60 * 1000;
 const COLLECTION_MS = 3 * 60 * 1000;
@@ -28,9 +29,26 @@ const shift = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 
 const memory = () => ({ rss: process.memoryUsage().rss, heapUsed: process.memoryUsage().heapUsed,
   maxRSS: process.resourceUsage().maxRSS * 1024 });
 const error = (code, text) => Object.assign(new Error(text), { code });
+const sourcePartHash = entries => digest(entries.map(e => ({ keyword: e.candidate.keyword, data: e.data,
+  shopping: e.shopping, requestStartDate: e.sourceRecord?.requestStartDate || null,
+  requestEndDate: e.sourceRecord?.requestEndDate || null })));
+const candidateFingerprint = candidates => digest(candidates.map(({ candidateTier, ...source }) => source));
+const evidenceFingerprint = early => digest((early || []).map(({ confirmation, ...source }) => source));
+async function currentRecoveryFingerprint(input, state) {
+  if (!input.recoveryFingerprint) return null;
+  const hashes = [];
+  for (const ref of state.parts) {
+    const entries = await artifacts.readArtifact(ref);
+    for (const entry of entries) if (state.fingerprintShoppingOverrides?.[key(entry.candidate.keyword)])
+      entry.shopping = state.fingerprintShoppingOverrides[key(entry.candidate.keyword)];
+    hashes.push(sourcePartHash(entries));
+  }
+  return { ...input.recoveryFingerprint, sourceHash: digest(hashes) };
+}
 const initialState = (job, input) => ({ version: 1, jobId: job.jobId, stage: "collection", cursor: 0,
   calculationCursor: 0, ratioCursor: 0, parts: input.parts, outputs: [], apiMetrics: emptyMetrics(), responsesSaved: 0,
-  errors: [], budgetMode: null, inflight: null, fastPath: Boolean(job.fastPath) });
+  errors: [], budgetMode: null, inflight: null, fastPath: Boolean(job.fastPath),
+  ...(input.targetDatePreflight ? { targetDatePreflight: structuredClone(input.targetDatePreflight) } : {}) });
 
 function funnelFor(candidates, eligible, selection, marketCount) {
   const n = predicate => candidates.filter(predicate).length;
@@ -86,12 +104,15 @@ async function prepare(job, lease, core) {
   const previous = await analysis.readLastSuccess("instant");
   const relevantEarly = (early?.history || []).filter(item => allKeys.has(item.normalizedKeyword));
   const tiers = require("./trend-collection-policy");
-  const parts = [], queue = [], states = {};
+  const parts = [], queue = [], states = {}, preflightEntries = [], sourceHashes = [];
   for (const [partIndex, candidates] of chunks(all, PART_SIZE).entries()) {
     const entries = candidates.map((candidate, offset) => {
       const cached = series.lookup(cache.entries, candidate.keyword, "search", candidate.category, job.queryStartDate, job.endDate, now);
       const freshness = policy.classify(cached.record, cached, frozenJob, now);
       const compatible = freshness.reusable;
+      preflightEntries.push({ keyword: candidate.keyword, category: candidate.category, partIndex, offset,
+        compatible, series: cached.record?.rawRatioSeries || [], fetchedAt: cached.record?.fetchedAt,
+        priority: Number(candidate.monthlyTotalSearches || 0) });
       const data = compatible ? cached.record.rawRatioSeries.filter(p => p.period >= job.queryStartDate && p.period <= frozenJob.targetDataDate) : null;
       const shopping = series.lookup(cache.entries, candidate.keyword, "shopping", candidate.category, job.queryStartDate, job.endDate, now);
       candidate.candidateTier = tiers.isDueForCollection(candidate, prior.get(candidate.keyword), cached.record, now).tier;
@@ -110,6 +131,7 @@ async function prepare(job, lease, core) {
         prior: prior.get(candidate.keyword) || null, early: relevantEarly.filter(item => item.normalizedKeyword === key(candidate.keyword)) };
     });
     parts.push(await artifacts.writeArtifact(lease, `input-part-${partIndex}`, entries));
+    sourceHashes.push(sourcePartHash(entries));
   }
   queue.sort((a, b) => b.priority - a.priority);
   const input = { version: 1, calculationVersion: history.CALCULATION_VERSION, jobId: job.jobId,
@@ -123,11 +145,28 @@ async function prepare(job, lease, core) {
       jobId: previous?.jobId, latestDataDate: previous?.latestDataDate, completedAt: previous?.completedAt,
       results: (previous?.results || []).map(r => ({ keyword: r.keyword, news: r.news, newsEvidenceProvenance: r.newsEvidenceProvenance })) }),
     surge: await artifacts.writeArtifact(lease, "prior-surge-history", { manifest: surge.manifest, records: [...surge.records].filter(([k]) => allKeys.has(k)) }),
-    queue, initialStates: states, funnel: funnelFor(candidateCache.candidates, eligible, selection, market?.items?.length || 0),
+    queue, initialStates: states, targetDatePreflight: targetPreflight.plan(frozenJob, preflightEntries),
+    recoveryFingerprint: { version: 1, targetDataDate: frozenJob.targetDataDate,
+      startDate: job.startDate, endDate: job.endDate, queryStartDate: job.queryStartDate,
+      surgeThreshold: job.surgeThreshold, matchThreshold: job.matchThreshold, calculationVersion: history.CALCULATION_VERSION,
+      candidatesHash: candidateFingerprint(all), productHash: products.hash, sourceHash: digest(sourceHashes),
+      // Prior signals/history already influence the frozen selected candidates
+      // and order. Their own publication timestamps are not a new source event.
+      // Confirmation and previous-news are derived outputs, not source changes.
+      evidenceHash: evidenceFingerprint(relevantEarly) },
+    funnel: funnelFor(candidateCache.candidates, eligible, selection, market?.items?.length || 0),
     cut: { included: core.summaryStats(selection.selected), excluded: core.summaryStats(selection.excluded), selectionGroups: selection.diagnostics,
       excludedTopMonthly100: selection.excluded.slice().sort((a, b) => Number(b.monthlyTotalSearches || 0) - Number(a.monthlyTotalSearches || 0)).slice(0, 100).map(core.candidateDiagnostic),
       excludedTopNewQueries100: selection.excluded.filter(c => c.sources.includes("searchad-query")).sort((a, b) => Number(b.impressions30d || 0) - Number(a.impressions30d || 0)).slice(0, 100).map(core.candidateDiagnostic) } };
   job = await artifacts.writeInputs(lease, input);
+  if (job.recoveryOfJobId) {
+    const previousJob = await analysis.readRawJob(job.recoveryOfJobId, { forMutation: true });
+    const decision = previousJob?.state === "completed" && previousJob.publicationState === "published" && Array.isArray(previousJob.results)
+      ? require("./trend-scheduled-recovery").compareRecoveryInputs(previousJob.recoveryFingerprint, input.recoveryFingerprint)
+      : { unchanged: false, reason: "previous-result-not-published", changed: [] };
+    job = await worker.writeOwnedInstantJob(lease, { recoveryInputComparison: { ...decision, previousJobId: job.recoveryOfJobId,
+      checkedAt: new Date().toISOString() } });
+  }
   return { job, input };
 }
 
@@ -226,7 +265,8 @@ async function run(original, context = {}, delivery = {}) {
     const ticket = crypto.randomUUID(), requestedAt = new Date().toISOString();
     job = await worker.releaseInstantWorker(lease, { continuationCount: Number(job.continuationCount || 0) + 1,
       continuationRequestedAt: requestedAt, resumable: true, lastInvocation: completedRun,
-      continuationDispatch: { ticket, state: "pending", requestedAt, readyAt: requestedAt,
+      continuationDispatch: { ticket, state: "pending", requestedAt,
+        readyAt: state.targetDatePreflight?.status === "waiting" ? state.targetDatePreflight.nextCheckAt : requestedAt,
         checkpointRevision: job.instantStateRevision, number: Number(job.continuationCount || 0) + 1 } });
     log("instant-continuation-pending", { phase: state.stage, cursor: state.cursor, ticket });
   };
@@ -275,6 +315,34 @@ async function run(original, context = {}, delivery = {}) {
     log("instant-checkpoint-loaded", { phase: state.stage, cursor: state.cursor });
     if (state.stage === "collection") {
       await collect({ job, lease, input, state, core, started, save, patch, log });
+      if (state.stage === "numeric" && job.recoveryOfJobId) {
+        const previous = await analysis.readRawJob(job.recoveryOfJobId, { forMutation: true });
+        const decision = previous?.state === "completed" && previous.publicationState === "published" && Array.isArray(previous.results)
+          ? require("./trend-scheduled-recovery").compareRecoveryInputs(previous.recoveryFingerprint, await currentRecoveryFingerprint(input, state))
+          : { unchanged: false, reason: "previous-result-not-published", changed: [] };
+        await patch({ recoveryInputComparison: { ...decision, previousJobId: job.recoveryOfJobId, checkedAt: new Date().toISOString() } });
+      }
+      if (state.stage === "numeric" && job.recoveryInputComparison?.unchanged) {
+        await save();
+        job = await worker.releaseInstantWorker(lease, { state: "deferred", outcome: "unchanged-input", currentStage: "existing-result-maintained",
+          resumable: false, deferredAt: new Date().toISOString(), resultJobId: job.recoveryOfJobId,
+          message: "원천·후보·설정 변화 없음 · 기존 게시 결과 유지" });
+        if (job.schedulerExecutionId) await scheduler.updateById(job.schedulerExecutionId, { state: "skipped", stage: "unchanged-input",
+          jobId: job.jobId, resultJobId: job.recoveryOfJobId, retryable: false });
+        log("instant-unchanged-result-maintained", { resultJobId: job.recoveryOfJobId });
+        return;
+      }
+      if (state.targetDatePreflight && targetPreflight.action(state.targetDatePreflight, Date.now()) === "defer") {
+        await save();
+        job = await worker.releaseInstantWorker(lease, { state: "deferred", outcome: "target-date-unconfirmed",
+          currentStage: "waiting-for-source", resumable: false, deferredAt: new Date().toISOString(),
+          targetDatePreflight: targetPreflight.summarize(state.targetDatePreflight),
+          message: "확인한 표본에서 목표일 미확인 · 기존 정상 결과 유지" });
+        if (job.schedulerExecutionId) await scheduler.updateById(job.schedulerExecutionId, { state: "deferred", stage: "waiting-for-source",
+          jobId: job.jobId, targetDatePreflight: job.targetDatePreflight, retryable: false });
+        log("instant-target-preflight-deferred", { targetDatePreflight: job.targetDatePreflight });
+        return;
+      }
       await next(); return;
     }
     if (state.stage === "numeric" || state.stage === "ratio") {
@@ -371,6 +439,12 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
     if (!confirmed) state.collectionStopReason = "emergency-probe-target-unconfirmed";
     log("instant-emergency-probe-saved", state.emergencyProbe);
   };
+  const applyTargetPreflight = (responses, observedAt) => {
+    if (!state.inflight?.targetDateProbe) return;
+    const checkedAt = observedAt || responses.map(r => r.fetchedAt).filter(Boolean).sort().at(-1) || state.inflight.startedAt;
+    state.targetDatePreflight = targetPreflight.observe(state.targetDatePreflight, responses, state.inflight.items, checkedAt);
+    log("instant-target-preflight-observed", targetPreflight.summarize(state.targetDatePreflight));
+  };
   const updateParts = async (items, responses) => {
     const touched = new Map();
     for (const [index, item] of items.entries()) {
@@ -399,6 +473,7 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
     if (receipt) {
       await saveSeries(lease, receipt.updates); await updateParts(state.inflight.items, receipt.responses);
       applyProbe(receipt.responses);
+      applyTargetPreflight(receipt.responses, receipt.observedAt);
       state.responsesSaved += receipt.updates.length;
       state.trendCollectedAt = receipt.updates.map(u => u.fetchedAt).concat(state.trendCollectedAt || []).sort().at(-1) || null;
     } else {
@@ -417,13 +492,23 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
       }
       await updateParts(state.inflight.items, responses);
       applyProbe(responses);
+      applyTargetPreflight(responses);
       state.responsesSaved += responses.filter(r => r.success).length;
       state.trendCollectedAt = responses.filter(r => r.success).map(r => r.fetchedAt).concat(state.trendCollectedAt || []).sort().at(-1) || null;
     }
     metrics.keywords = Math.max(metrics.keywords, state.responsesSaved); await record();
     state.inflight = null; await save();
   }
-  while (state.cursor < input.queue.length && !job.fastPath && !state.collectionStopReason) {
+  const publishPreflight = async () => {
+    if (!state.targetDatePreflight) return;
+    const check = targetPreflight.summarize(state.targetDatePreflight);
+    await patch({ targetDatePreflight: check, lastSourceCheckedAt: check.lastCheckedAt || null,
+      ...(targetPreflight.action(check, Date.now()) !== "collect" ? { currentStage: "waiting-for-source",
+        message: check.status === "waiting" ? "확인한 표본에서 목표일 미확인 · 예약 재확인 대기" : "목표일 사전 확인 · 기존 정상 결과 유지" } : {}) });
+  };
+  await publishPreflight();
+  if (["wait", "defer"].includes(targetPreflight.action(state.targetDatePreflight, Date.now()))) return;
+  while ((state.cursor < input.queue.length || targetPreflight.action(state.targetDatePreflight, Date.now()) === "probe") && !job.fastPath && !state.collectionStopReason) {
     if (Date.now() - started >= COLLECTION_MS) break;
     const liveUsage = await quota.readUsage();
     const status = emergencyJob ? quota.emergencyStatus(liveUsage, emergencyJob)
@@ -432,13 +517,26 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
     if (status.exhausted || !status.remaining) {
       state.budgetLimited = true; state.providerLimited = status.exhausted;
       if (emergencyJob) state.collectionStopReason = status.reason || "emergency-budget-exhausted";
+      if (targetPreflight.action(state.targetDatePreflight, Date.now()) === "probe") {
+        state.targetDatePreflight = { ...state.targetDatePreflight, status: "budget-limited", nextCheckAt: null,
+          reason: "existing-source-budget-unavailable" };
+        await publishPreflight(); await save(); return;
+      }
       break;
     }
     const probe = Boolean(emergencyJob && !state.emergencyProbe);
-    const items = input.queue.slice(state.cursor, state.cursor + Math.min(probe ? 5 : 25, status.remaining * 5));
+    const automaticProbe = targetPreflight.action(state.targetDatePreflight, Date.now()) === "probe";
+    const page = input.queue.slice(state.cursor, state.cursor + Math.min(probe ? 5 : 25, status.remaining * 5));
+    const sampled = new Set(state.targetDatePreflight?.successfulSampleKeys || []);
+    const items = automaticProbe ? state.targetDatePreflight.samples
+      : page.filter(item => !sampled.has(targetPreflight.normalized(item.keyword)));
+    if (!items.length) { state.cursor += page.length; await save(); continue; }
     const requestBatches = chunks(items, 5);
-    state.inflight = { startedAt: new Date().toISOString(), items, ...(probe ? { emergencyProbe: true } : {}) };
-    state.cursor += items.length; await save(); // conservative at-most-once intent
+    if (automaticProbe) state.targetDatePreflight.attempts++;
+    state.inflight = { startedAt: new Date().toISOString(), items, ...(probe ? { emergencyProbe: true } : {}),
+      ...(automaticProbe ? { targetDateProbe: state.targetDatePreflight.attempts } : {}) };
+    if (!automaticProbe) state.cursor += page.length;
+    await save(); // conservative at-most-once intent; sample attempts do not advance the bulk cursor
     const settled = await Promise.allSettled(requestBatches.map(batch => core.api("/search-trend/v1/search", {
       method: "POST", body: { startDate: job.queryStartDate, endDate: job.endDate, timeUnit: "date",
         keywordGroups: batch.map(c => ({ groupName: c.keyword, keywords: [c.keyword] })) },
@@ -466,13 +564,17 @@ async function collect({ job, lease, input, state, core, started, save, patch, l
         updates.push({ keyword: item.keyword, source: "search", startDate: job.queryStartDate, endDate: job.endDate, series: data, fetchedAt, cacheScope: "latest" });
       }
     }
-    state.inflight.receipt = await artifacts.writeArtifact(lease, `source-receipt-${state.cursor}`, { updates, responses });
+    state.inflight.receipt = await artifacts.writeArtifact(lease, automaticProbe
+      ? `target-probe-${state.targetDatePreflight.attempts}` : `source-receipt-${state.cursor}`, { updates, responses, observedAt: fetchedAt });
     await save();
     await saveSeries(lease, updates); await updateParts(items, responses);
     applyProbe(responses);
+    applyTargetPreflight(responses, fetchedAt);
     metrics.keywords = Math.max(metrics.keywords, state.responsesSaved + updates.length); await record();
     state.responsesSaved += updates.length; state.trendCollectedAt = updates.length ? fetchedAt : state.trendCollectedAt;
     state.inflight = null; await save();
+    await publishPreflight();
+    if (["wait", "defer"].includes(targetPreflight.action(state.targetDatePreflight, Date.now()))) return;
     await patch({ currentStage: "search-trend", processedCount: state.cursor, totalCount: input.queue.length,
       progress: 5 + Math.round(state.cursor / Math.max(1, input.queue.length) * 35),
       message: `목표일 Trend 확인 · ${state.cursor.toLocaleString("ko-KR")} / ${input.queue.length.toLocaleString("ko-KR")} · 응답 저장 ${state.responsesSaved}` });
@@ -556,28 +658,40 @@ async function combine(input, state) {
     emptySeriesCount: 0, targetDataCandidateCount: 0, confirmedNoTargetCount: 0, refreshPendingCount: 0, queryErrorCount: 0,
     actualStartDate: null, actualDataDate: null, states: {}, note: "캐시 확보율과 목표일 관측 비율은 다릅니다. 희소·빈 응답은 미관측이며 수집 실패와 동일하지 않습니다." };
   let reused = 0, fresh = 0, shoppingHits = 0;
-  for (const ref of state.parts) for (const entry of await artifacts.readArtifact(ref)) {
+  const dateCounts = {}, sourceHashes = [];
+  for (const ref of state.parts) {
+    const entries = await artifacts.readArtifact(ref); sourceHashes.push(sourcePartHash(entries));
+    for (const entry of entries) {
     freshness.states[entry.freshness.state] = (freshness.states[entry.freshness.state] || 0) + 1;
     if (["query-error", "error"].includes(entry.freshness.state)) freshness.queryErrorCount++;
     if (entry.freshness.shouldFetch) freshness.refreshPendingCount++;
     if (entry.freshness.state === "confirmed-no-target") freshness.confirmedNoTargetCount++;
     if (entry.shopping.length) shoppingHits++;
+    const observedAt = entry.sourceRecord?.fetchedAt || entry.trace.trendFetchedAt || null;
+    if (observedAt && (!freshness.sourceObservedAt || observedAt > freshness.sourceObservedAt)) freshness.sourceObservedAt = observedAt;
     if (entry.data === null) continue;
     freshness.cacheAvailableCount++;
     if (entry.trace.cacheHit) reused++; else fresh++;
     if (!entry.data.length) { freshness.emptySeriesCount++; continue; }
     freshness.validSeriesCount++;
     if (entry.data.some(p => p.period === input.targetDataDate)) freshness.targetDataCandidateCount++;
+    for (const date of new Set(entry.data.map(p => p.period))) dateCounts[date] = (dateCounts[date] || 0) + 1;
     for (const point of entry.data) {
       if (!freshness.actualStartDate || point.period < freshness.actualStartDate) freshness.actualStartDate = point.period;
       if (!freshness.actualDataDate || point.period > freshness.actualDataDate) freshness.actualDataDate = point.period;
     }
   }
+  }
   freshness.targetDataCoveragePct = Math.round(freshness.targetDataCandidateCount / input.totalCount * 10000) / 100;
+  freshness.actualDataCandidateCount = dateCounts[freshness.actualDataDate] || 0;
+  freshness.actualDataCoveragePct = Math.round(freshness.actualDataCandidateCount / input.totalCount * 10000) / 100;
+  freshness.lastSourceCheckedAt = [state.targetDatePreflight?.lastCheckedAt, state.trendCollectedAt, freshness.sourceObservedAt]
+    .filter(Boolean).sort().at(-1) || null;
   freshness.olderNonemptyCount = freshness.validSeriesCount - freshness.targetDataCandidateCount;
   freshness.unavailableCount = input.totalCount - freshness.cacheAvailableCount;
   freshness.completeForTarget = freshness.targetDataCandidateCount === input.totalCount;
   result.sourceFreshness = freshness;
+  result.recoveryFingerprint = input.recoveryFingerprint ? { ...input.recoveryFingerprint, sourceHash: digest(sourceHashes) } : null;
   result.funnel.searchTrend.apiErrorCandidates = freshness.queryErrorCount;
   result.cache = { hits: reused, freshFetchCandidates: fresh, misses: freshness.unavailableCount, windowUnavailable: freshness.unavailableCount,
     pendingCandidates: freshness.unavailableCount, requestedMisses: input.queue.length, scheduledFetchCandidates: state.collectionCursor,
@@ -652,6 +766,8 @@ async function enrich({ job, lease, input, state, core, started, save, patch, lo
           startDate: intent.queryStartDate, endDate: intent.endDate, series: values, fetchedAt: receipt.receivedAt });
       }
       await saveSeries(lease, updates);
+      state.fingerprintShoppingOverrides ||= {};
+      for (const update of updates) state.fingerprintShoppingOverrides[key(update.keyword)] = update.series;
       state.apiMetrics.shoppingInsight.keywords = Math.max(Number(state.apiMetrics.shoppingInsight.keywords || 0), intent.baseKeywordCount + updates.length);
       await record("shoppingInsight");
     } else if (receipt?.success && intent.phase === "news") {
@@ -787,6 +903,9 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
   const final = { state: "publishing", currentStage: "publishing", publicationState: "pending", calculatedAt: completedAt,
     completedAt, progress: 99, message: "계산 완료 · 결과 게시 중", results: rows, resultCount: rows.length, errors: [],
     sourceFreshness, latestDataDate, analyzedCandidateCount: input.totalCount,
+    ...(input.recoveryFingerprint ? { recoveryFingerprint: await currentRecoveryFingerprint(input, state) } : {}),
+    ...(state.targetDatePreflight ? { targetDatePreflight: targetPreflight.summarize(state.targetDatePreflight) } : {}),
+    lastSourceCheckedAt: sourceFreshness.lastSourceCheckedAt || null,
     productCacheObservedAt: input.productCacheObservedAt || null,
     processedCount: input.totalCount, totalCount: input.totalCount,
     searchAdCount: (await artifacts.readArtifact(input.product)).items.length,
@@ -826,4 +945,5 @@ async function finalize({ job, lease, input, state, core, patch, log }) {
   log("instant-final-result-saved", { rows: rows.length, hash: final.resultsHash, actualDataDate: latestDataDate });
 }
 
-module.exports = { run, prepare, funnelFor, saveSeries, writeCurrentProjection, combine, collect, calculate, enrich, finalize, PART_SIZE, SAFE_MS, COLLECTION_MS, MAX_INVOCATIONS };
+module.exports = { run, prepare, funnelFor, saveSeries, writeCurrentProjection, combine, collect, calculate, enrich, finalize,
+  candidateFingerprint, evidenceFingerprint, currentRecoveryFingerprint, sourcePartHash, PART_SIZE, SAFE_MS, COLLECTION_MS, MAX_INVOCATIONS };

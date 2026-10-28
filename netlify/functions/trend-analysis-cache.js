@@ -263,6 +263,15 @@ function checkpointProgress(job) {
   return { checkpointStage: job.instantStage || null, lastCursor: cursor, checkpointTotalCount: total,
     remainingCount: cursor != null && total != null ? Math.max(0, total - cursor) : null };
 }
+function waitingForTargetDate(job, now = Date.now()) {
+  const check = job?.targetDatePreflight;
+  const due = Date.parse(check?.nextCheckAt || "");
+  const deadline = Date.parse(check?.deadlineAt || "");
+  return job?.mode === "instant" && job.state === "running" && job.targetDatePreflightEnabled === true
+    && check?.status === "waiting" && Boolean(job.instantStateKey && job.continuationDispatch?.ticket)
+    && Number.isFinite(due) && Number.isFinite(deadline) && due <= deadline
+    && now <= Math.min(due + STALE_JOB_MS, deadline + STALE_JOB_MS);
+}
 async function readCurrentJob({ markStale = false, includeStale = false } = {}) {
   const pointer = await store().get(CURRENT_JOB_KEY, { type: "json" });
   if (!pointer?.jobId) return null;
@@ -273,6 +282,9 @@ async function readCurrentJob({ markStale = false, includeStale = false } = {}) 
     return null;
   }
   const age = Date.now() - Date.parse(job.updatedAt || job.createdAt || 0);
+  // A bounded source-date recheck is deliberately idle, not an abandoned
+  // worker. Retain the same logical Job until its reserved wake-up is overdue.
+  if (waitingForTargetDate(job)) return job;
   if (Number.isFinite(age) && age <= STALE_JOB_MS) return job;
   // Recovery owns its immutable artifacts and control record. A legacy lock
   // read must not rewrite the original Job from this read-only status overlay.
@@ -324,7 +336,7 @@ async function acquireJob(input) {
   return { job, existing: false };
 }
 
-module.exports = { connect, store, readJob, readRawJob, writeJob, createJob, acquireJob, readCurrentJob, writeLastSuccess, readLastSuccess,
+module.exports = { connect, store, readJob, readRawJob, writeJob, createJob, acquireJob, readCurrentJob, waitingForTargetDate, writeLastSuccess, readLastSuccess,
   writeLastPartial, readLastPartial, writeDiagnosticIndex, readDiagnosticIndex, lastSuccessKeys, lastPartialKeys,
   publishCompletedPeriod, periodJobGeneration, claimPeriodWorker, assertPeriodWorker, writeOwnedPeriodJob, releasePeriodWorker,
   writePeriodCheckpoint, readPeriodCheckpoint, writePeriodInputs, readPeriodInputs, PERIOD_WORKER_LEASE_MS,

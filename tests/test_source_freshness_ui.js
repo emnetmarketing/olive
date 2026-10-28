@@ -39,6 +39,101 @@ test("collection, calculation and publication timestamps remain independent; dis
   assert.doesNotMatch(display.summary, /진행 중|자동 작업 완료/);
 });
 
+test("target-date sample wait is not collection failure and selected-result clocks stay separate from the newer attempt", () => {
+  const payload = trend({ observation: { lastSourceCheckedAt: "2026-10-16T09:00:00Z",
+    preflight: { status: "waiting", targetDataDate: "2026-10-15", sampleSize: 5, attempts: 1,
+      lastCheckedAt: "2026-10-16T09:00:00Z", nextCheckAt: "2026-10-16T11:00:00Z" },
+    mainSelection: { text: "실제 데이터 날짜가 같아 기존 결과 유지", candidateChanged: true },
+    lastAttempt: { jobId: "auto113", resultCount: 113, calculatedAt: "2026-10-16T08:00:00Z", publishedAt: "2026-10-16T08:02:00Z" } } });
+  const display = runtime().context.trendFreshnessDisplay(payload, now);
+  assert.match(display.summary, /목표일 2026-10-15 미확인 · 마지막 확인 데이터 2026-10-14/);
+  assert.match(display.summary, /목표일 표본 재확인 대기/);
+  assert.match(display.summary, /확인한 표본에서 목표일 미확인/);
+  assert.match(display.summary, /NAVER 전체 미제공 확정 아님/);
+  assert.match(display.detail, /마지막 원천 확인 2026-10-16 18:00/);
+  assert.match(display.detail, /최근 별도 계산 Job auto113 \(113건\)/);
+  assert.match(display.detail, /기존 결과 유지/);
+  assert.doesNotMatch(display.summary, /자동 작업 실패|자동 작업 완료/);
+});
+
+test("read-only observation metadata reports saved checks and selection reasons without inferring target availability", () => {
+  const { observationStatus } = require("../netlify/functions/trend-cache-status");
+  const selected = { jobId: "main109", mode: "instant", latestDataDate: "2026-10-26", trendCoveragePct: 100 };
+  const analysis = { jobId: "auto113", mode: "instant", state: "completed", latestDataDate: "2026-10-26", trendCoveragePct: 99.9,
+    targetDataDate: "2026-10-27", calculatedAt: "2026-10-28T00:00:00Z", publishedAt: "2026-10-28T00:02:00Z", resultCount: 113 };
+  const scheduledJob = { targetDatePreflight: { targetDataDate: "2026-10-27", status: "waiting", lastCheckedAt: "2026-10-28T01:00:00Z" } };
+  const before = JSON.stringify([selected, analysis, scheduledJob]);
+  const status = observationStatus({ selected, latestAnalysis: analysis, scheduledJob, target: "2026-10-27" });
+  assert.equal(status.mainSelection.code, "same-date-coverage");
+  assert.equal(status.lastSourceCheckedAt, "2026-10-28T01:00:00Z");
+  assert.equal(status.lastAttempt.publishedAt, analysis.publishedAt);
+  assert.equal(status.lastAttempt.actualDataDate, "2026-10-26");
+  assert.equal(JSON.stringify([selected, analysis, scheduledJob]), before);
+  assert.equal(observationStatus({ selected, scheduledJob, target: "2026-10-28" }).preflight, null);
+});
+
+test("confirmed sample while old main is retained is not mislabeled as target-day absence or full coverage", () => {
+  const display = runtime().context.trendFreshnessDisplay(trend({ observation: { preflight: {
+    status: "confirmed-sample", targetDataDate: "2026-10-15", sampleSize: 5, attempts: 1, lastCheckedAt: "2026-10-16T09:00:00Z" } } }), now);
+  assert.match(display.summary, /표본 또는 저장 캐시에서 목표일 2026-10-15 확인/);
+  assert.match(display.summary, /전체 확보·메인 반영과 별도/);
+  assert.doesNotMatch(display.summary, /목표일 2026-10-15 미확인|목표일 100%/);
+});
+
+test("scheduled unchanged-input disposition is shown as retained result, not unfinished work", () => {
+  const display = runtime().context.trendFreshnessDisplay(trend({ schedulerExecution: {
+    state: "skipped", stage: "unchanged-input", triggeredAt: "2026-10-16T00:00:00Z" } }), now);
+  assert.match(display.summary, /입력 변화 없음 · 기존 정상 결과 유지/);
+  assert.doesNotMatch(display.summary, /완료 확인 필요|자동 작업 실패/);
+});
+
+test("waiting after sample transport failure is distinct from a successful response without target data", () => {
+  const display = runtime().context.trendFreshnessDisplay(trend({ observation: { preflight: {
+    status: "waiting", reason: "sample-request-failed", targetDataDate: "2026-10-15", sampleSize: 5, attempts: 1,
+    lastCheckedAt: "2026-10-16T09:00:00Z", nextCheckAt: "2026-10-16T11:00:00Z" } } }), now);
+  assert.match(display.summary, /표본 조회 오류로 목표일 확인 불가/);
+  assert.match(display.summary, /데이터 미제공 판정 아님/);
+  assert.doesNotMatch(display.summary, /확인한 표본에서 목표일 미확인/);
+});
+
+function pollRuntime(job) {
+  const rt = runtime(); const calls = [], timers = [];
+  rt.context.fetch = async route => { calls.push(route); return new Response(JSON.stringify(job)); };
+  rt.context.setTimeout = (fn, ms) => { timers.push(ms); return 1; };
+  rt.context.finishAnalysisControls = () => calls.push("controls-finished");
+  rt.context.loadLastSuccessfulAnalysis = async mode => { calls.push(`read-selected-${mode}`); return rt.context.state.currentAnalysisJob; };
+  rt.context.loadTrendCacheStatus = async () => calls.push("read-existing-freshness");
+  rt.context.showApiErrors = () => { throw new Error("Unexpected error UI"); };
+  rt.context.loadMarketDiscoveryNewList = rt.context.loadTodayEarlySignals = async () => {};
+  rt.context.log = () => {};
+  vm.runInContext(extractFunction(html, "pollAnalysis"), rt.context);
+  return { ...rt, calls, timers };
+}
+
+test("Instant source wait never overwrites selected main metadata and needs no additional endpoint", async () => {
+  const rt = pollRuntime({ jobId: "waiting-job", mode: "instant", state: "running", currentStage: "waiting-for-source",
+    message: "예약 재확인 대기", updatedAt: "2026-10-16T09:00:00Z", targetDatePreflight: { status: "waiting" } });
+  const before = JSON.stringify(rt.context.state);
+  await rt.context.pollAnalysis("waiting-job");
+  assert.equal(JSON.stringify(rt.context.state), before);
+  assert.deepEqual(rt.calls, ["/.netlify/functions/trend-analysis-status?jobId=waiting-job"]);
+  assert.deepEqual(rt.timers, [3000]);
+});
+
+test("deferred Instant restores only existing result/status and does not report completion or failure", async () => {
+  for (const outcome of ["target-date-unconfirmed", "unchanged-input"]) {
+    const rt = pollRuntime({ jobId: "deferred-job", mode: "instant", state: "deferred", outcome, currentStage: "waiting-for-source" });
+    const before = JSON.stringify(rt.context.state);
+    await rt.context.pollAnalysis("deferred-job");
+    assert.equal(JSON.stringify(rt.context.state), before);
+    assert.deepEqual(rt.calls, ["/.netlify/functions/trend-analysis-status?jobId=deferred-job",
+      "read-selected-instant", "read-existing-freshness", "controls-finished"]);
+    assert.equal(rt.timers.length, 0);
+    assert.match(rt.node("analysisProgressText").textContent, /기존 정상 게시 결과 유지/);
+    assert.doesNotMatch(rt.node("analysisProgressText").textContent, /분석 완료|분석 실패/);
+  }
+});
+
 test("NAVER normal/partial/failed/no-data states do not treat valid cache coverage as current data", () => {
   const context = runtime().context;
   const fresh = trend({ snapshot: { latestDataDate: "2026-10-15", trendCoveragePct: 100 } });

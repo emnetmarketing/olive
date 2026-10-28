@@ -2767,7 +2767,9 @@
         polledJob = job;
         if (!response.ok) throw new Error(job.error || `분석 상태 HTTP ${response.status}`);
         if (job.mode === "period") state.currentPeriodAnalysisJob = job;
-        else state.currentAnalysisJob = job;
+        // Instant progress (including a deliberate source-date wait) is not a
+        // replacement for the selected published result. Its only assignment
+        // path is loadLastSuccessfulAnalysis after the saved pointer is read.
         const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-checkpoint": "기간 계산 continuation 준비", "calculation-matching": "급등 계산 및 상품 매칭", "continuation_failed": "기간 분석 continuation 실패 · 재개 가능", "interrupted": "기간 분석 중단 · 재개 가능", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
         const periodText = job.mode === "instant" ? "즉시 분석" : periodFlow?.phase === "historical-collection"
           ? `NAVER 기간 데이터 수집 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`
@@ -2788,6 +2790,17 @@
           if (stalePeriod) { finishAnalysisControls(); return; }
           analysisPollTimer = setTimeout(() => pollAnalysis(jobId, periodFlow), 3000);
           return;
+        }
+        if (job.mode === "instant" && job.state === "deferred") {
+          $("analysisProgressText").textContent = job.outcome === "unchanged-input"
+            ? "원천·후보·설정 변화 없음 · 기존 정상 게시 결과 유지"
+            : job.targetDatePreflight?.reason === "sample-request-failed"
+              ? "표본 조회 오류로 목표일 확인 보류 · 기존 정상 게시 결과 유지"
+              : job.targetDatePreflight?.status === "budget-limited"
+                ? "기존 예산 한도로 목표일 확인 보류 · 기존 정상 게시 결과 유지"
+                : "목표일 확인 보류 · 기존 정상 게시 결과 유지";
+          await Promise.allSettled([loadLastSuccessfulAnalysis("instant"), loadTrendCacheStatus()]);
+          finishAnalysisControls(); return;
         }
         if (["continuation_failed", "interrupted"].includes(job.state)) {
           $("periodAnalysisMeta").textContent = `기간 분석 continuation 실패 · ${Number(job.lastCursor || job.processedCount || 0).toLocaleString("ko-KR")} / ${Number(job.totalCount || 0).toLocaleString("ko-KR")} 처리 · 저장된 checkpoint/cache에서 재개 가능`;
@@ -2989,6 +3002,7 @@
       const snapshot = payload.snapshot || {}; const job = payload.latestJob || {};
       const freshness = payload.freshness || job.sourceFreshness || {};
       const collection = payload.latestCollection || {}; const analysis = payload.latestAnalysis || {}; const scheduled = payload.schedulerExecution || {};
+      const observation = payload.observation || {}; const preflight = observation.preflight || {};
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(now);
       const targetDate = freshness.targetDataDate || new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
       const actualDate = freshness.actualDataDate || snapshot.latestDataDate || job.latestDataDate || null;
@@ -3000,14 +3014,34 @@
       const calculatedAt = freshness.lastCalculatedAt || analysis.analyzedAt || job.calculatedAt || job.completedAt;
       const publishedAt = freshness.lastPublishedAt || analysis.publishedAt || snapshot.publishedAt || job.publishedAt;
       const collectionAt = freshness.lastSuccessfulCollectionAt || collection.collectedAt;
+      const sourceCheckedAt = observation.lastSourceCheckedAt || collectionAt;
       const showTime = value => value ? formatHistoryDate(value) : "기록 없음";
       const scheduledDay = scheduled.triggeredAt ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date(scheduled.triggeredAt)) : null;
       const automation = scheduledDay !== today ? "오늘 자동 수집 기록 없음"
         : scheduled.state === "failed" ? `자동 작업 실패 · ${showTime(scheduled.failedAt || scheduled.updatedAt || scheduled.triggeredAt)}`
           : scheduled.state === "completed" ? `자동 작업 완료 · ${showTime(scheduled.completedAt || scheduled.updatedAt || scheduled.triggeredAt)}`
+            : preflight.status === "waiting" ? `목표일 표본 재확인 대기 · 다음 확인 ${showTime(preflight.nextCheckAt)}`
+              : ["sample-target-unconfirmed", "sample-error", "budget-limited", "no-representative-sample"].includes(preflight.status)
+                ? "자동 목표일 확인 보류 · 기존 정상 결과 유지"
             : scheduled.stage === "already-collected" ? `자동 수집 확인 완료 · ${showTime(scheduled.triggeredAt)}`
+              : ["unchanged-input", "unchanged-inputs"].includes(scheduled.stage) ? "입력 변화 없음 · 기존 정상 결과 유지"
               : `자동 작업 요청 접수 · ${showTime(scheduled.triggeredAt)} · 완료 확인 필요`;
       const dates = `확인 대상일 ${targetDate} · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"}`;
+      const targetNote = delayed ? ["confirmed-cache", "confirmed-sample"].includes(preflight.status)
+        ? `표본 또는 저장 캐시에서 목표일 ${targetDate} 확인 · 전체 확보·메인 반영과 별도`
+        : observation.lastAttempt?.actualDataDate >= targetDate ? `별도 결과에서 목표일 ${targetDate} 확인 · 현재 메인 기준일 ${actualDate}`
+          : `목표일 ${targetDate} 미확인 · 마지막 확인 데이터 ${actualDate}` : "";
+      const preflightNote = preflight.status === "sample-error" || preflight.reason === "sample-request-failed"
+        ? " · 표본 조회 오류로 목표일 확인 불가 (데이터 미제공 판정 아님)"
+        : preflight.status === "budget-limited" ? " · 기존 예산 한도 내 날짜 확인 보류"
+          : preflight.status === "no-representative-sample" ? " · 정상 시계열 대표 표본이 없어 목표일 확인 보류"
+            : preflight.lastCheckedAt && !["confirmed-cache", "confirmed-sample"].includes(preflight.status)
+              ? ` · 확인한 표본에서 목표일 미확인 (${Number(preflight.sampleSize || 0)}개 표본, ${Number(preflight.attempts || 0)}회 확인; NAVER 전체 미제공 확정 아님)` : "";
+      const selection = observation.mainSelection;
+      const selectionNote = selection?.text ? ` · 결과 선택: ${selection.text}${selection.candidateChanged ? " · 후보 구성 변경 확인" : ""}` : "";
+      const attempt = observation.lastAttempt;
+      const attemptNote = attempt?.jobId && attempt.jobId !== job.jobId
+        ? ` · 최근 별도 계산 Job ${attempt.jobId} (${attempt.resultCount == null ? "건수 미확인" : `${Number(attempt.resultCount)}건`}) · 계산 ${showTime(attempt.calculatedAt)} · 게시 ${showTime(attempt.publishedAt)}` : "";
       const scope = `Trend 분석 범위 ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${coverage}%, 캐시 확보)`;
       const countText = value => value == null ? "확인 불가" : Number(value).toLocaleString("ko-KR");
       const observedScope = `목표일 관측 후보 ${countText(freshness.targetDataCandidateCount)} / ${countText(total || null)}`
@@ -3016,10 +3050,10 @@
       const observationNote = "희소·빈 시계열의 목표일 미관측은 수집 오류를 뜻하지 않습니다.";
       const productCacheNote = `상품 매칭 cache 관측 ${showTime(job.productCacheObservedAt || snapshot.productCacheObservedAt)} (NAVER 기준일과 별도)`;
       return { status, actualDate, targetDate, coverage,
-        summary: `${dates} · ${scope} · ${observedScope} · 상태 ${sourceFreshnessLabel(status)} · ${automation}`,
+        summary: `${dates} · ${scope} · ${observedScope} · 상태 ${sourceFreshnessLabel(status)} · ${automation}${targetNote ? ` · ${targetNote}` : ""}${preflightNote}`,
         detail: `마지막 실제 Trend 수집 ${showTime(collectionAt)} · 마지막 계산 ${showTime(calculatedAt)} · 마지막 게시 ${showTime(publishedAt)}`
-          + ` · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"} · 유효 snapshot 캐시 확보율 ${Number(snapshot.trendCoveragePct || 0)}% · ${productCacheNote} · ${observationNote}`,
-        resultMeta: `${dates} · ${scope} · ${observedScope} · ${sourceFreshnessLabel(status)} · 계산 ${showTime(calculatedAt)} · 게시 ${showTime(publishedAt)} · ${productCacheNote} · ${observationNote}` };
+          + ` · 마지막 원천 확인 ${showTime(sourceCheckedAt)} · 실제 NAVER 데이터 기준일 ${actualDate || "확인 불가"} · 유효 snapshot 캐시 확보율 ${Number(snapshot.trendCoveragePct || 0)}% · ${productCacheNote} · ${observationNote}${selectionNote}${attemptNote}`,
+        resultMeta: `${dates} · ${scope} · ${observedScope} · ${sourceFreshnessLabel(status)} · 계산 ${showTime(calculatedAt)} · 게시 ${showTime(publishedAt)} · ${productCacheNote} · ${observationNote}${selectionNote}` };
     }
 
     function earlySignalFreshnessDisplay(payload, now = new Date()) {

@@ -80,7 +80,13 @@ test("period analysis does not clear the main automatic results", () => {
 
 test("period polling cannot replace the main current analysis state", () => {
   const html = fs.readFileSync("index.html", "utf8");
-  assert.match(html, /if \(job\.mode === "period"\) state\.currentPeriodAnalysisJob = job;[\s\S]*else state\.currentAnalysisJob = job/);
+  const { extractFunction } = require("../scripts/verify-deployed-period-display.cjs");
+  const poll = extractFunction(html, "pollAnalysis");
+  assert.match(poll, /if \(job\.mode === "period"\) state\.currentPeriodAnalysisJob = job/);
+  // Neither Period nor unselected Instant progress may overwrite the main
+  // result. Even a completed Instant must first resolve the published pointer.
+  assert.doesNotMatch(poll, /state\.currentAnalysisJob\s*=/);
+  assert.match(poll, /job\.mode === "instant" \? await loadLastSuccessfulAnalysis\("instant"\)/);
 });
 
 test("instant analysis does not clear the period result panel", () => {

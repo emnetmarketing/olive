@@ -295,7 +295,7 @@ async function tick(options = {}) {
       if (clock(options) >= boundedOptions.dispatchDeadline) break;
       lastScanned = hint.jobId;
       let job = await store.get(`jobs/${hint.jobId}`, { type: "json" });
-      if (!job || ["completed", "cancelled"].includes(job.state)) { await removeJob(hint.jobId, options); continue; }
+      if (!job || ["completed", "cancelled", "deferred"].includes(job.state)) { await removeJob(hint.jobId, options); continue; }
       // Keep failed Jobs and checkpoints; discard only their advisory queue hint.
       // Explicit adoption registers the hint again after checking audited hashes.
       if (["interrupted", "continuation_failed", "failed"].includes(job.state)

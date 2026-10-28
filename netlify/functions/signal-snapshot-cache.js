@@ -27,6 +27,10 @@ function buildSnapshot(job) {
     createdAt: job.createdAt,
     queryStartDate: job.queryStartDate, generatedAt: job.completedAt, latestDataDate: job.latestDataDate,
     sourceFreshness: job.sourceFreshness || null, publishedAt: job.publishedAt || null,
+    ...(job.mode === "instant" ? { calculatedAt: job.calculatedAt || job.completedAt || null, targetDataDate: job.targetDataDate || null,
+      orderedCandidateHash: job.orderedCandidateHash || null, productVersionHash: job.productVersionHash || null,
+      analyzedCandidateCount: job.analyzedCandidateCount || job.totalCandidates || 0,
+      freshFetchCount: Number(job.freshFetchCount || 0), trendCollectedAt: job.trendCollectedAt || null } : {}),
     ...(job.productCacheObservedAt ? { productCacheObservedAt: job.productCacheObservedAt } : {}),
     trendCoveragePct: job.trendCoveragePct, partialAnalysis: Boolean(job.partialAnalysis), surgeThreshold: job.surgeThreshold,
     matchThreshold: job.matchThreshold, executionPath: job.fastPath ? "fast" : "slow", items: (job.results || []).map(compactItem) };

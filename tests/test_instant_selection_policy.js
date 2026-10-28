@@ -49,6 +49,48 @@ test("unknown historical observation coverage remains unknown instead of inventi
   assert.equal(policy.isMeaningfulInstant(legacy), true);
 });
 
+function observed(id, extra = {}) {
+  return job(id, "2026-10-26", { analyzedCandidateCount: 5000, orderedCandidateHash: `candidates-${id}`,
+    productVersionHash: "products", freshFetchCount: 4995,
+    sourceFreshness: { actualDataCoveragePct: 95.1, validSeriesCount: 4930,
+      sourceObservedAt: "2026-10-28T00:00:00Z" }, ...extra });
+}
+test("same-day genuinely newer source observations can replace near-full coverage without changing analysis rows", () => {
+  const previous = observed("previous", { sourceFreshness: { actualDataCoveragePct: 95.26, validSeriesCount: 4936,
+    sourceObservedAt: "2026-10-27T00:00:00Z" } });
+  const next = observed("next", { trendCoveragePct: 99.9 });
+  const before = JSON.stringify([previous, next]);
+  assert.equal(policy.canPromoteInstant(next, previous), true);
+  assert.equal(policy.canPromoteInstant(previous, next), false);
+  assert.equal(policy.selectionReason(next, previous).code, "newer-equivalent-observation");
+  assert.equal(policy.selectionReason(next, previous).candidateChanged, true);
+  assert.equal(policy.canPromoteInstant(snapshots.buildSnapshot(next), snapshots.buildSnapshot(previous)), true);
+  assert.equal(JSON.stringify([previous, next]), before);
+});
+test("later calculation time, unknown evidence, substantial coverage loss or changed candidate count cannot bypass quality checks", () => {
+  const previous = observed("previous", { sourceFreshness: { actualDataCoveragePct: 95.26, validSeriesCount: 4936,
+    sourceObservedAt: "2026-10-27T00:00:00Z" } });
+  const next = observed("next", { trendCoveragePct: 99.9 });
+  for (const patch of [{ freshFetchCount: 0 }, { orderedCandidateHash: null }, { productVersionHash: null },
+    { analyzedCandidateCount: 4000 }, { trendCoveragePct: 98 },
+    { sourceFreshness: { ...next.sourceFreshness, actualDataCoveragePct: null } },
+    { sourceFreshness: { ...next.sourceFreshness, sourceObservedAt: null } },
+    { sourceFreshness: { ...next.sourceFreshness, validSeriesCount: 4000 } }]) {
+    assert.equal(policy.canPromoteInstant({ ...next, ...patch }, previous), false, JSON.stringify(patch));
+  }
+  assert.equal(policy.selectionReason({ ...next, freshFetchCount: 0 }, previous).code, "same-date-coverage");
+});
+
+test("same-day observation tie-break cannot ratchet coverage below a fixed quality band", () => {
+  const previous = observed("previous", { sourceFreshness: { actualDataCoveragePct: 95.26, validSeriesCount: 4936,
+    sourceObservedAt: "2026-10-27T00:00:00Z" } });
+  const first = observed("first", { trendCoveragePct: 99.6 });
+  const second = observed("second", { trendCoveragePct: 99.2,
+    sourceFreshness: { ...first.sourceFreshness, sourceObservedAt: "2026-10-29T00:00:00Z" } });
+  assert.equal(policy.canPromoteInstant(first, previous), true);
+  assert.equal(policy.canPromoteInstant(second, first), false);
+});
+
 function storeFixture() {
   const records = new Map(); let sequence = 0;
   return { async get(key) { return clone(records.get(key)?.data || null); }, async getWithMetadata(key) { return clone(records.get(key) || null); },

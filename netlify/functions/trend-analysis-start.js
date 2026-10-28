@@ -62,7 +62,7 @@ async function recordInstantDispatchFailure(createdJob, failure, options = {}) {
   throw Object.assign(new Error("Instant dispatch state changed concurrently; existing progress was preserved."), { code: "INSTANT_DISPATCH_STATE_CONFLICT" });
 }
 
-async function handle(event, { fastPath = true } = {}) {
+async function handle(event, { fastPath = true, targetDatePreflight = false, recoveryOfJobId = null } = {}) {
   connect(event); connectSnapshot(event); connectQuota(event);
   if (event.httpMethod !== "POST") return json(405, { error: "POST 요청만 허용됩니다." });
   let createdJob, dispatchAttempted = false;
@@ -135,6 +135,12 @@ async function handle(event, { fastPath = true } = {}) {
         calculationVersion: require("./surge-history-cache").CALCULATION_VERSION } : {}),
       ...(collectionObservationStartedAt ? { collectionObservationStartedAt, reusedCollectionJobId: String(input.reuseCollectionJobId) } : {}),
       triggerSource, schedulerExecutionId,
+      // Only the server-side scheduler options enable these controls. Never
+      // trust same-named fields from the public request body.
+      ...(mode === "instant" && !fastPath && targetDatePreflight === true ? {
+        targetDatePreflightEnabled: true,
+        ...(/^[a-zA-Z0-9_-]{1,120}$/.test(recoveryOfJobId || "") ? { recoveryOfJobId } : {})
+      } : {}),
       currentStage: "preparing", processedCount: 0, totalCount: 0 });
     const job = acquired.job;
     createdJob = job;

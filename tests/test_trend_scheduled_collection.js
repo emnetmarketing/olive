@@ -8,6 +8,7 @@ function mocks({ collection = null, running = null, response = { statusCode: 202
   return { updates, get calls() { return calls; }, deps: { skipConnect: true,
     begin: async (source) => ({ executionId: "execution-1", source }), update: async (record, patch) => { updates.push(patch); return { ...record, ...patch }; },
     readLatestCollection: async () => collection, readCurrentJob: async () => running, recoverWaiting: async () => null,
+    readRecoveryContext: async () => ({ current: null, completed: null }),
     handle: async (event, options) => { calls += 1; assert.equal(options.fastPath, false); const body = JSON.parse(event.body);
       assert.match(body.triggerSource, /^scheduled-/); assert.equal(body.schedulerExecutionId, "execution-1"); return response; } } };
 }
