@@ -20,6 +20,7 @@ const { hasVerifiedBrand, projectBrandContext } = require("./brand-context");
 const { buildPeriodMarketEvidence, calculatePeriodMarketConfidence } = require("./period-market-evidence");
 const schedulerExecutions = require("./trend-scheduler-execution-cache");
 const historicalContinuation = require("./historical-continuation");
+const { freezePeriodCalculationInputs } = require("./period-frozen-input");
 const { publishInstant, patchInstantPublication } = require("./instant-publication");
 const { claimInstantWorker, assertInstantWorker, writeOwnedInstantJob, releaseInstantWorker } = require("./instant-worker");
 const { PRODUCT_TYPES, INGREDIENTS, compact, matchTokens, evaluateMatch, buildProductIndex, findBestMatch,
@@ -176,6 +177,8 @@ async function responseJson(response, name) {
 }
 function isSearchTrendOnly(job) { return job?.collectionScope === "search-trend-only"; }
 function assertProviderAllowed(path, job) {
+  if (job?.mode === "period" && job.cacheOnlyRecovery === true)
+    throw Object.assign(new Error("이 기간 복구는 저장된 캐시만 사용할 수 있습니다."), { code: "PERIOD_CACHE_ONLY" });
   if (job?.collectionScope === undefined || job?.collectionScope === null) return;
   if (!isSearchTrendOnly(job) || job.mode !== "instant" || job.fastPath || job.historicalCollection || path !== "/search-trend/v1/search")
     throw Object.assign(new Error("이 Job은 NAVER Search Trend 외 원천 API 호출을 허용하지 않습니다."), { code: "COLLECTION_SCOPE_BLOCKED" });
@@ -692,7 +695,7 @@ exports.handler = async (event, context = {}) => {
     generation: workerLease?.fence || instantLease?.fence || null, continuation: job.continuationCount || 0,
     stage: job.currentStage, cursor: job.calculationCursor || 0, at: new Date().toISOString(), ...details }));
   if (job.mode === "period") {
-    const claimed = await claimPeriodWorker(job.jobId, { owner: invocationId });
+    const claimed = await claimPeriodWorker(job.jobId, { owner: invocationId, continuationTicket: input.continuationTicket });
     if (!claimed.claimed) { trace("worker-skipped", { reason: claimed.reason }); return; }
     job = claimed.job; workerLease = claimed.lease;
   } else if (job.mode === "instant") {
@@ -779,38 +782,20 @@ exports.handler = async (event, context = {}) => {
   const invokeContinuation = async (patch = {}) => {
     const continuationCount = Number(job.continuationCount || 0) + 1;
     if (continuationCount > historicalContinuation.MAX_CONTINUATIONS) throw new Error("Historical continuation 최대 횟수를 초과했습니다.");
-    const next = { ...patch, continuationCount, continuationRequestedAt: new Date().toISOString(), resumable: true };
-    if (workerLease) job = await releasePeriodWorker(workerLease, next);
-    else if (instantLease) job = await releaseInstantWorker(instantLease, next);
-    else if (job.mode === "instant" && job.currentStage === "publishing" && Array.isArray(job.results)) {
-      job = (await patchInstantPublication(job.jobId, next)).job;
-      if (job.state === "completed") { trace("continuation-skipped-already-published"); return; }
-    } else await persist(next);
-    trace("continuation-requested");
-    const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
-    try {
-      const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId }),
-        signal: AbortSignal.timeout(30000)
-      });
-      if (!response.ok && response.status !== 202) throw new Error(`Historical continuation 시작 실패: HTTP ${response.status}`);
-      trace("continuation-accepted", { httpStatus: response.status });
-    } catch (error) {
-      // The next worker may already have entered even when this HTTP response
-      // was lost. Only reacquire an unowned Job before recording failure.
-      if (workerLease) {
-        const claimed = await claimPeriodWorker(job.jobId, { owner: invocationId });
-        if (!claimed.claimed) { trace("continuation-response-unknown-worker-active"); return; }
-        job = claimed.job; workerLease = claimed.lease;
-      } else if (instantLease) {
-        const claimed = await claimInstantWorker(job.jobId, { owner: invocationId });
-        if (!claimed.claimed) { trace("continuation-response-unknown-worker-active"); return; }
-        job = claimed.job; instantLease = claimed.lease;
-      }
-      throw error;
-    }
+    if (job.mode !== "period" || !workerLease || !(job.periodInputsKey && job.periodInputsHash)
+      && !(job.currentStage === "publishing" && Array.isArray(job.results)))
+      throw new Error("검증한 기간 입력 또는 게시할 결과가 없습니다.");
+    const submitted = require("./period-dispatch-policy").ticket(job, continuationCount);
+    // The durable registration precedes the release CAS. An intervening tick
+    // cannot claim a live worker, and the next ticket+lease release are atomic.
+    await require("./instant-dispatch").registerJob(job.jobId, { hint: { mode: "period", createdAt: job.createdAt } });
+    job = await releasePeriodWorker(workerLease, { ...patch, periodDispatchVersion: 1, continuationCount,
+      continuationRequestedAt: submitted.requestedAt, continuationDispatch: submitted,
+      resumable: Boolean(job.calculationCheckpointHash || job.currentStage === "publishing") });
+    trace("continuation-queued");
   };
   try {
+    require("./period-dispatch-policy").assertCacheOnly(job);
     // Saved calculation is retried at publication only, before any cache or
     // provider work. A verified publication is the user-visible completion.
     if (job.mode === "period" && job.currentStage === "publishing" && Array.isArray(job.results)) {
@@ -888,7 +873,7 @@ exports.handler = async (event, context = {}) => {
         monthlyVolumeRequestFailed: allCandidates.filter((item) => item.monthlyVolumeStatus === "request-failed").length,
         monthlyAtOrAboveThreshold: eligibleBeforeLimit.length,
         before5000Limit: eligibleBeforeLimit.length + Number(selection.diagnostics.marketSelected || 0), analyzed: eligible.length + ratioOnlyCandidates.length, excludedBy5000Limit: excludedByLimit.length,
-        marketDiscoveryCache: marketCache?.items?.length || 0, marketDiscoverySelected: selection.diagnostics.marketSelected || 0,
+        marketDiscoveryCache: marketCache?.frozenItemCount ?? marketCache?.items?.length ?? 0, marketDiscoverySelected: selection.diagnostics.marketSelected || 0,
         marketDiscoveryNumeric: selection.diagnostics.marketNumeric || 0, ratioOnlySelected: ratioOnlyCandidates.length },
       searchTrend: { requested: eligible.length + ratioOnlyCandidates.length, validSeries: 0, emptySeries: 0, apiErrorCandidates: 0 },
       surge: { positive: 0, from0To99: 0, from100To199: 0, from200To299: 0, from300To499: 0, from500To999: 0, atLeast1000: 0,
@@ -992,7 +977,7 @@ exports.handler = async (event, context = {}) => {
         Object.assign(trace, { searchTrendStatus: "pending-cache", trendWaitReason, exclusionReason });
       }
     }
-    await persist({ message: `검색어트렌드 캐시 ${cacheStats.searchTrend.hits.toLocaleString("ko-KR")}건 재사용 · 신규 ${searchFetchQueue.length.toLocaleString("ko-KR")}건`, totalCandidates: trendCandidates.length, progress: 5,
+    if (!frozenInputs) await persist({ message: `검색어트렌드 캐시 ${cacheStats.searchTrend.hits.toLocaleString("ko-KR")}건 재사용 · 미확보 ${searchFetchQueue.length.toLocaleString("ko-KR")}건`, totalCandidates: trendCandidates.length, progress: 5,
       currentStage: "search-trend", processedCount: 0, totalCount: trendCandidates.length,
       diagnostic: { funnel, candidateCut: cutDiagnostic, surgeTop30: [], matchTop30: [], calculationSamples: [] } });
     let processed = cacheStats.searchTrend.hits;
@@ -1064,7 +1049,10 @@ exports.handler = async (event, context = {}) => {
     funnel.trendCache.shoppingInsight.expectedApiCalls = expectedShoppingCalls;
     funnel.trendCache.shoppingInsight.pendingCandidates = shoppingPlan.pending.length;
     funnel.trendCache.quota.shoppingInsight = { ...shoppingQuota, expectedCalls: expectedShoppingCalls };
-    await persist({ message: job.fastPath ? "저장된 Trend 캐시로 분석 중" : "Trend 신호 계산 준비", progress: 42 });
+    if (job.mode === "period" && !frozenInputs) {
+      await persist({ currentStage: "freezing-inputs", message: "캐시 확인 완료 · 기간 분석 입력 저장 및 검증",
+        processedCount: trendCandidates.length, totalCount: trendCandidates.length, progress: 42 });
+    } else if (job.mode !== "period") await persist({ message: job.fastPath ? "저장된 Trend 캐시로 분석 중" : "Trend 신호 계산 준비", progress: 42 });
     cacheStats.searchTrend.freshFetchCandidates = [...analysisTrace.values()].filter((trace) => trace.dataFreshness === "fresh-fetch").length;
     cacheStats.searchTrend.pendingCandidates = pendingTrendKeys.size; cacheStats.searchTrend.apiCalls = apiMetrics.searchTrend.calls; cacheStats.searchTrend.retries = apiMetrics.searchTrend.retries;
     cacheStats.shoppingInsight.freshFetchCandidates = [...eligibleShoppingFetch.values()].reduce((sum, values) => sum + values.length, 0);
@@ -1085,13 +1073,9 @@ exports.handler = async (event, context = {}) => {
           : trace.trendWaitReason === "internal_budget_wait" ? "내부 일일 Trend budget 소진 대기" : "Fast Path Trend 캐시 대기";
     }
     if (job.mode === "period" && !frozenInputs) {
-      const selectedCacheKeys = new Set(trendCandidates.map(c => normalizeCacheKeyword(c.keyword)));
-      job = await writePeriodInputs(workerLease, { calculationVersion: CALCULATION_VERSION,
-        candidateCache, marketCache, productCache, priorSignalCache, selection,
-        surgeHistoryCache: { ...surgeHistoryCache, records: [...surgeHistoryCache.records] },
-        seriesCache: { ...seriesCache, entries: [...seriesCache.entries].filter(([key]) => selectedCacheKeys.has(key)) },
-        earlyCache: loadedEarlyCache,
-        collectionSummary: { apiMetrics, trendCollectedAt, historicalRequiredCalls } });
+      job = await writePeriodInputs(workerLease, freezePeriodCalculationInputs({ job, calculationVersion: CALCULATION_VERSION,
+        candidateCache, marketCache, productCache, priorSignals, selection, surgeHistoryCache, seriesCache,
+        earlyCache: loadedEarlyCache, collectionSummary: { apiMetrics, trendCollectedAt, historicalRequiredCalls } }));
     }
     if (job.mode === "period" && job.continuationPhase !== "calculation") {
       await recordObservedUsage();
@@ -1107,7 +1091,8 @@ exports.handler = async (event, context = {}) => {
       }
       return;
     }
-    await persist({ message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 });
+    await persist({ currentStage: "calculation-matching", processedCount: Number(job.calculationCursor || 0), totalCount: eligible.length,
+      message: "추정 급등수 계산 및 상품 매칭 중", progress: 75 + Math.round(Number(job.calculationCursor || 0) / Math.max(1, eligible.length) * 14) });
     job.currentStage = "calculation-matching"; job.processedCount = 0; job.totalCount = eligible.length;
     const productIndex = buildProductIndex(productCache.items);
     const checkpointKey = historicalContinuation.checkpointKey(job);
@@ -1125,7 +1110,7 @@ exports.handler = async (event, context = {}) => {
     let ratioProcessed = Number(checkpoint?.ratioCursor || 0);
     let evidenceProcessed = Number(checkpoint?.evidenceCursor || 0);
     const invocationStartCursor = calculationProcessed;
-    const persistCalculationCheckpoint = async () => {
+    const persistCalculationCheckpoint = async (stage = "calculation-matching") => {
       const value = { version: historicalContinuation.CHECKPOINT_VERSION, jobId: job.jobId,
         selectedStartDate: job.startDate, selectedEndDate: job.endDate, queryStartDate: job.queryStartDate,
         requiredWindow: `${job.queryStartDate}:${job.endDate}`, calculationCursor: calculationProcessed,
@@ -1135,9 +1120,12 @@ exports.handler = async (event, context = {}) => {
         boundaryRelated, funnel, analysisTrace: [...analysisTrace.values()], updatedAt: new Date().toISOString() };
       job = await writePeriodCheckpoint(workerLease, value);
       trace("checkpoint-saved", { ratioCursor: ratioProcessed, evidenceCursor: evidenceProcessed });
-      await persist({ currentStage: "calculation-matching", calculationCursor: calculationProcessed,
-        processedCount: calculationProcessed, totalCount: eligible.length, checkpointKey,
-        progress: 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14) });
+      const ratio = stage === "calculation-ratio", evidence = stage === "period-evidence";
+      await persist({ currentStage: stage, calculationCursor: calculationProcessed,
+        processedCount: ratio ? ratioProcessed : evidence ? evidenceProcessed : calculationProcessed,
+        totalCount: ratio ? ratioOnlyCandidates.length : evidence ? rows.length : eligible.length, checkpointKey,
+        progress: evidence ? 90 + Math.round(8 * evidenceProcessed / Math.max(rows.length, 1))
+          : ratio ? 89 : 75 + Math.round((calculationProcessed / Math.max(1, eligible.length)) * 14) });
     };
     for (const candidate of eligible.slice(calculationProcessed)) {
       if (job.mode === "period" && calculationProcessed > invocationStartCursor
@@ -1166,7 +1154,7 @@ exports.handler = async (event, context = {}) => {
       calculateRatioCandidate(candidate, calculationContext);
       ratioProcessed += 1;
     }
-    if (job.mode === "period") await persistCalculationCheckpoint();
+    if (job.mode === "period") await persistCalculationCheckpoint("calculation-ratio");
     // Slow Path only: enrich the already selected business signals. This keeps
     // Shopping Insight out of the 5,000-candidate fan-out while preserving the
     // existing shoppingRise UI for candidates where data is available.
@@ -1253,7 +1241,8 @@ exports.handler = async (event, context = {}) => {
     rows.sort((a, b) => Number(b.estimatedSurgeCount || 0) - Number(a.estimatedSurgeCount || 0)
       || Number(b.relativeRatioLift || 0) - Number(a.relativeRatioLift || 0) || b.shoppingRise - a.shoppingRise || b.trendSlope - a.trendSlope);
     const reusedNewsCount = searchTrendOnly ? reuseCachedNews(rows, priorInstant) : 0;
-    await persist({ message: searchTrendOnly ? "저장된 보조 근거로 최신 결과 계산 중 · 추가 원천 호출 없음" : "상위 급등 검색어 뉴스 확인 중", progress: 90 });
+    await persist(job.mode === "period" ? { currentStage: "period-evidence", processedCount: evidenceProcessed, totalCount: rows.length,
+      message: "저장된 기간 근거 결합 중", progress: 90 } : { message: searchTrendOnly ? "저장된 보조 근거로 최신 결과 계산 중 · 추가 원천 호출 없음" : "상위 급등 검색어 뉴스 확인 중", progress: 90 });
     job.currentStage = "news"; job.processedCount = 0; job.totalCount = Math.min(rows.length, 20);
     const newsResults = job.fastPath || job.historicalCollection || searchTrendOnly ? [] : await Promise.allSettled(rows.slice(0, 20).map(async (row) => {
       const payload = await api("/search/v1/news", { params: { query: row.keyword, display: 3, start: 1, sort: "date" },
@@ -1275,7 +1264,7 @@ exports.handler = async (event, context = {}) => {
       } else Object.assign(row, calculateMarketConfidence(row, job.surgeThreshold));
       evidenceProcessed += 1;
       if (job.mode === "period" && evidenceProcessed % 50 === 0) {
-        await persistCalculationCheckpoint();
+        await persistCalculationCheckpoint("period-evidence");
         if (Date.now() - started >= historicalContinuation.SAFE_EXECUTION_MS && evidenceProcessed < rows.length) {
           await invokeContinuation({ continuationPhase: "calculation", currentStage: "period-evidence",
             message: "기간 근거 checkpoint 저장 · 다음 구간 자동 계속" });
@@ -1285,6 +1274,8 @@ exports.handler = async (event, context = {}) => {
     }
     const latestDataDate = [...trendMap.values()].flatMap((data) => (data || []).map((point) => point.period)).filter(Boolean).sort().at(-1) || null;
     const sourceFreshness = summarizeDateCoverage(trendMap, job.endDate, trendCandidates.length);
+    const periodCoverage = job.mode === "period"
+      ? require("./period-observation-coverage").observedPeriodCoverage(trendMap, job.startDate, job.endDate, trendCandidates.length) : null;
     sourceFreshness.refreshPendingCount = Number(cacheStats.searchTrend.targetDateRefreshPending || 0);
     sourceFreshness.collectionTimeLimited = Boolean(cacheStats.searchTrend.collectionTimeLimited);
     const resultByKeyword = new Map(rows.map((row) => [normalizeKeyword(row.keyword), row]));
@@ -1298,7 +1289,9 @@ exports.handler = async (event, context = {}) => {
             : "상품·브랜드·도메인 관련 근거 부족";
     }
     if (instantLease) await assertInstantWorker(instantLease);
-    await writeDiagnosticIndex({ version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
+    const saveDiagnostics = job.cacheOnlyRecovery && job.mode === "period"
+      ? value => analysisStore().setJSON(`jobs/${job.jobId}/diagnostics/${workerLease.fence}`, value, { onlyIfNew: true }) : writeDiagnosticIndex;
+    await saveDiagnostics({ version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
       latestDataDate, completedAt: new Date().toISOString(), items: [...analysisTrace.values()] });
     if (!partialAnalysis && job.mode === "instant") await analysisStore().setJSON("signals/current", { updatedAt: new Date().toISOString(), mode: job.mode,
       items: calculated.map((entry) => ({ keyword: entry.candidate.keyword, estimatedSurgeCount: Math.round(entry.metrics.surgeCount),
@@ -1306,7 +1299,7 @@ exports.handler = async (event, context = {}) => {
     await persist({ state: "publishing", message: "계산 완료 · 결과 게시 중",
       progress: 99, calculatedAt: new Date().toISOString(), completedAt: new Date().toISOString(), durationMs: Date.now() - started,
       currentStage: "publishing", processedCount: trendCandidates.length, totalCount: trendCandidates.length,
-      latestDataDate, sourceFreshness, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
+      latestDataDate, sourceFreshness, ...periodCoverage, searchAdCount: productCache.items.length, analyzedCandidateCount: trendCandidates.length, resultCount: rows.length,
       ...(searchTrendOnly ? { reusedNewsCount } : {}),
       partialAnalysis, trendAvailableCount, pendingTrendCacheCount, trendCoveragePct,
       cacheHitCount: Number(cacheStats?.searchTrend?.hits || 0), freshFetchCount: Number(cacheStats?.searchTrend?.freshFetchCandidates || 0),

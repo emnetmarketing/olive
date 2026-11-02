@@ -60,6 +60,61 @@ test("duplicate period invocations acquire only one CAS worker lease", async () 
   assert.equal(claims.find(item => !item.claimed).reason, "worker-active");
 });
 
+test("Period tickets use the shared scheduler but fence late deliveries and recover a dead worker at its saved cursor", async () => {
+  const { runtime, options, now, value } = workerFixture();
+  const policy = runtime.load("period-dispatch-policy.js"), dispatch = runtime.load("instant-dispatch.js");
+  const store = options.store, id = value.jobId, deliveries = [];
+  Object.assign(options, { baseURL: "https://fixture.invalid", fetch: async (_url, req) => {
+    deliveries.push(JSON.parse(req.body).continuationTicket); return { status: 202 }; } });
+  const firstTicket = policy.ticket({}, 0, now.value);
+  await runtime.cache.writeJob(id, { ...value, currentStage: "preparing", periodDispatchVersion: 1, continuationDispatch: firstTicket });
+  await store.setJSON("current-job/v1", { jobId: id });
+  // Simulate a dead starter before registry registration; the independent recovery scan
+  // discovers the precommitted first ticket without adding a second Job.
+  await dispatch.recoverWaiting(options);
+  assert.deepEqual((await store.get(dispatch.REGISTRY_KEY)).jobs.map(h => [h.jobId, h.mode]), [[id, "period"]]);
+  assert.equal((await runtime.cache.claimPeriodWorker(id, { ...options, continuationTicket: firstTicket.ticket })).claimed, false);
+  await Promise.all([dispatch.tick(options), dispatch.tick(options)]);
+  assert.deepEqual(deliveries, [firstTicket.ticket]);
+  assert.equal((await store.get("jobs/" + id)).continuationDispatch.state, "accepted");
+  const original = await runtime.cache.claimPeriodWorker(id, { ...options, continuationTicket: firstTicket.ticket });
+  assert.ok(original.claimed);
+  const frozen = await runtime.cache.writePeriodInputs(original.lease, { calculationVersion: 1 }, options);
+  const secondTicket = policy.ticket(frozen, 1, now.value);
+  await runtime.cache.releasePeriodWorker(original.lease, { continuationCount: 1, continuationDispatch: secondTicket }, options);
+  assert.equal((await runtime.cache.claimPeriodWorker(id, { ...options, continuationTicket: firstTicket.ticket })).claimed, false);
+  await dispatch.tick(options);
+  const second = await runtime.cache.claimPeriodWorker(id, { ...options, continuationTicket: secondTicket.ticket });
+  assert.ok(second.claimed);
+  await runtime.cache.writePeriodCheckpoint(second.lease, { jobId: id, calculationCursor: 4, totalCount: 9 }, options);
+  assert.equal((await dispatch.tick(options)).dispatched, false);
+  now.value += runtime.cache.PERIOD_WORKER_LEASE_MS + 1;
+  await dispatch.tick(options);
+  const replay = await runtime.cache.claimPeriodWorker(id, { ...options, continuationTicket: secondTicket.ticket });
+  assert.ok(replay.claimed);
+  assert.equal(replay.job.calculationCursor, 4);
+  assert.ok(replay.lease.fence > second.lease.fence);
+  assert.equal((await runtime.cache.readPeriodCheckpoint(replay.job, options)).calculationCursor, 4);
+  await assert.rejects(runtime.cache.writeOwnedPeriodJob(second.lease, { calculationCursor: 2 }, options), /owns this Job/);
+  await assert.rejects(runtime.cache.writeOwnedPeriodJob(replay.lease, { calculationCursor: 2 }, options), /behind the saved checkpoint/);
+  assert.deepEqual(deliveries, [firstTicket.ticket, secondTicket.ticket, secondTicket.ticket]);
+});
+
+test("expired historical source invocation without frozen inputs is stopped, not automatically recollected", async () => {
+  const { runtime, options, now, value } = workerFixture();
+  const d = runtime.load("instant-dispatch.js"), policy = runtime.load("period-dispatch-policy.js");
+  const id = value.jobId, ticket = policy.ticket({}, 0, now.value);
+  await runtime.cache.writeJob(id, { ...value, historicalCollection: true, currentStage: "search-trend", fastPath: false,
+    results: undefined, periodDispatchVersion: 1, workerLease: { token: "expired", expiresAt: now.value - 1 },
+    continuationDispatch: { ...ticket, state: "entered", enteredAt: new Date(now.value - 900000).toISOString(), attemptCount: 1 } });
+  await d.registerJob(id, { ...options, hint: { mode: "period", createdAt: value.createdAt } });
+  let posts = 0;
+  await d.tick({ ...options, baseURL: "https://fixture.invalid", fetch: async () => { posts++; return { status: 202 }; } });
+  const raw = await runtime.cache.readRawJob(id);
+  assert.equal(posts, 0); assert.equal(raw.state, "continuation_failed");
+  assert.equal(raw.resumable, false); assert.equal(raw.dispatchErrorCode, "PERIOD_DISPATCH_BOUNDARY_MISMATCH");
+});
+
 test("expired period worker cannot overwrite a newer claimant's progress or checkpoint", async () => {
   const { runtime, options, now, value } = workerFixture(); await runtime.cache.writeJob(value.jobId, value);
   const first = await runtime.cache.claimPeriodWorker(value.jobId, options);
@@ -200,8 +255,8 @@ function backgroundFixture({ chunkSize = 1, historical = false } = {}) {
   const normalize = require("../netlify/functions/trend-series-cache").normalizedKeyword;
   const series = Array.from({ length: 31 }, (_, index) => ({
     period: new Date(Date.UTC(2026, 8, 16 + index)).toISOString().slice(0, 10), ratio: index < 28 ? 1 : 15 }));
-  const entries = new Map(candidates.map(candidate => [normalize(candidate.keyword), {
-    requestStartDate: "2026-09-16", requestEndDate: "2026-10-16", rawRatioSeries: series, fetchedAt: "2026-10-16T05:00:00Z" }]));
+  const entries = new Map(candidates.map(candidate => [normalize(candidate.keyword), { search: {
+    requestStartDate: "2026-09-16", requestEndDate: "2026-10-16", rawRatioSeries: series, fetchedAt: "2026-10-16T05:00:00Z" } }]));
   if (historical) entries.clear();
   const continuation = require("../netlify/functions/historical-continuation");
   const deniedWrite = async () => { throw new Error("Unexpected provider/instant cache mutation"); };
@@ -213,10 +268,10 @@ function backgroundFixture({ chunkSize = 1, historical = false } = {}) {
       assessSearchFreshness: require("../netlify/functions/trend-series-cache").assessSearchFreshness,
       summarizeDateCoverage: require("../netlify/functions/trend-series-cache").summarizeDateCoverage,
       readCache: async () => { sourceReads.series++; return { entries: new Map(entries) }; },
-      lookup(map, keyword, source) { const record = map.get(normalize(keyword)); return source === "search" && record
+      lookup(map, keyword, source) { const record = map.get(normalize(keyword))?.search; return source === "search" && record
         ? { state: "hit", record, series: record.rawRatioSeries } : { state: "miss", record: null }; },
-      upsert: historical ? (map, input) => { const key = normalize(input.keyword); map.set(key, {
-        requestStartDate: input.startDate, requestEndDate: input.endDate, rawRatioSeries: input.series, fetchedAt: input.fetchedAt }); return key; } : deniedWrite,
+      upsert: historical ? (map, input) => { const key = normalize(input.keyword); map.set(key, { search: {
+        requestStartDate: input.startDate, requestEndDate: input.endDate, rawRatioSeries: input.series, fetchedAt: input.fetchedAt } }); return key; } : deniedWrite,
       writeDirty: historical ? async () => {} : deniedWrite },
     "trend-api-quota.js": { connect() {}, readUsage: async () => ({}), recordUsageBatch: historical ? async (metrics, options) => {
       const previous = quotaInvocations.get(options.invocationId) || {};
@@ -237,23 +292,30 @@ function backgroundFixture({ chunkSize = 1, historical = false } = {}) {
 async function runBackgroundFixture(fixture, id) {
   const { runtime } = fixture;
   const value = { ...job(id), state: "running", currentStage: "preparing", fastPath: !fixture.historical, historicalCollection: fixture.historical,
-    startDate: "2026-10-14", endDate: "2026-10-16", queryStartDate: "2026-09-16", surgeThreshold: 300, matchThreshold: 40 };
+    startDate: "2026-10-14", endDate: "2026-10-16", queryStartDate: "2026-09-16", surgeThreshold: 300, matchThreshold: 40,
+    periodDispatchVersion: 1, continuationDispatch: runtime.load("period-dispatch-policy.js").ticket({}, 0) };
   delete value.results; delete value.completedAt; delete value.resultCount;
   await runtime.cache.writeJob(id, value);
   const background = runtime.load("trend-analysis-background.js");
-  const queue = [id]; const calls = []; const originalFetch = global.fetch;
+  const dispatch = runtime.load("instant-dispatch.js");
+  const store = runtime.getStore("trend-analysis");
+  await dispatch.registerJob(id, { store, hint: { mode: "period", createdAt: value.createdAt } });
+  const queue = []; const calls = []; const originalFetch = global.fetch;
   global.fetch = async (url, options) => {
     calls.push(String(url));
     if (fixture.historical && String(url).endsWith("/search-trend/v1/search")) return { ok: true, status: 200, headers: { get: () => null },
       json: async () => ({ results: JSON.parse(options.body).keywordGroups.map(group => ({ title: group.groupName, data: fixture.series })) }) };
-    assert.match(String(url), /\/\.netlify\/functions\/trend-analysis-background$/);
-    queue.push(JSON.parse(options.body).jobId); return { ok: true, status: 202 };
+    throw new Error("A Period worker must never POST to itself");
   };
   let invocations = 0;
   try {
-    while (queue.length) {
+    for (;;) {
+      const tick = await dispatch.tick({ store, requestId: "scheduled-delivery-" + invocations, baseURL: "https://fixture.invalid",
+        fetch: async (url, options) => { assert.match(String(url), /\/\.netlify\/functions\/trend-analysis-background$/);
+          queue.push(JSON.parse(options.body)); return { status: 202 }; } });
+      if (!tick.dispatched) break;
       assert.ok(++invocations <= 10, "continuation must be bounded");
-      await background.handler({ body: JSON.stringify({ jobId: queue.shift() }) }, { awsRequestId: `${id}-${invocations}` });
+      await background.handler({ body: JSON.stringify(queue.shift()) }, { awsRequestId: `${id}-${invocations}` });
       // A live source rotation between invocations must not affect the frozen
       // generation or produce additional source-cache reads.
       if (invocations === 1) { fixture.candidates.length = 0; fixture.products.length = 0; fixture.entries.clear(); }
@@ -320,9 +382,15 @@ test("background retries a missing exact-Job receipt even when canonical reads a
     const background = runtime.load("trend-analysis-background.js");
     await background.handler({ body: JSON.stringify({ jobId: value.jobId }) });
     assert.equal((await runtime.cache.readJob(value.jobId)).state, "completed");
-    assert.equal((await runtime.cache.readRawJob(value.jobId)).state, "publication_failed");
+    const queued = await runtime.cache.readRawJob(value.jobId);
+    assert.equal(queued.state, "publishing");
+    assert.equal(queued.continuationDispatch.state, "pending");
     fail = false;
-    await background.handler({ body: JSON.stringify({ jobId: value.jobId }) });
+    let delivery;
+    const tick = await runtime.load("instant-dispatch.js").tick({ store: runtime.getStore("trend-analysis"),
+      baseURL: "https://fixture.invalid", fetch: async (_url, options) => { delivery = options.body; return { status: 202 }; } });
+    assert.equal(tick.status, "accepted");
+    await background.handler({ body: delivery });
   } finally { global.fetch = originalFetch; }
   assert.ok(publication.records.get(`published-jobs/${value.jobId}`), "verified publication must retain an exact-Job receipt");
   assert.equal((await runtime.cache.readRawJob(value.jobId)).state, "completed");

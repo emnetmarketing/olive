@@ -5,6 +5,7 @@ const { getCompatibleStore } = require("./blob-store-compat");
 const artifacts = require("./instant-continuation");
 const { CALCULATION_VERSION } = require("./surge-history-cache");
 const { active } = require("./instant-worker");
+const period = require("./period-dispatch-policy");
 
 const REGISTRY_KEY = "instant-dispatch/v1";
 const MAX_ATTEMPTS = 5;
@@ -40,7 +41,8 @@ async function mutateRegistry(change, options = {}) {
 async function registerJob(jobId, options = {}) {
   assertId(jobId);
   const saved = options.hint ? null : await storeFor(options).get(`jobs/${jobId}`, { type: "json" });
-  const metadata = options.hint || { targetDataDate: saved?.targetDataDate, createdAt: saved?.createdAt };
+  const metadata = options.hint || { targetDataDate: saved?.targetDataDate, createdAt: saved?.createdAt,
+    ...(saved?.mode === "period" ? { mode: "period" } : {}) };
   return mutateRegistry(previous => {
     const existing = previous.jobs.find(item => item.jobId === jobId);
     if (existing && (!metadata.targetDataDate || existing.targetDataDate === metadata.targetDataDate)) return null;
@@ -186,6 +188,13 @@ async function recoverWaiting(options = {}) {
     || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   for (const job of jobs) {
     if (options.dispatchDeadline && clock(options) >= options.dispatchDeadline) break;
+    // Covers death between current-job acquisition and registration of a NEW
+    // ticketed Period Job. Never adopt legacy stale Periods or finished Jobs.
+    if (period.managed(job) && pointer?.jobId === job.jobId && ["running", "publishing"].includes(job.state)
+      && job.continuationDispatch?.ticket && !job.continuationDispatch.attemptsExhausted
+      && !registry?.jobs?.some(h => h.jobId === job.jobId)) {
+      await registerJob(job.jobId, { ...options, hint: { mode: "period", createdAt: job.createdAt } });
+    }
     if (!autoRecoverable(job, now, options)) continue;
     const quarantined = hints.find(hint => hint.jobId === job.jobId && hint.blockedInputHash === job.instantInputsHash
       && hint.blockedStateHash === job.instantStateHash);
@@ -222,8 +231,8 @@ async function recoverWaiting(options = {}) {
 }
 
 function canDispatch(job, now) {
-  if (!job || job.mode !== "instant" || !["running", "publishing", "publication_failed"].includes(job.state)) return false;
-  if (active(job.instantWorker, now)) return false;
+  if (!job || job.mode !== "instant" && !period.managed(job) || !["running", "publishing", "publication_failed"].includes(job.state)) return false;
+  if (period.managed(job) ? period.live(job, now) : active(job.instantWorker, now)) return false;
   const dispatch = job.continuationDispatch;
   if (!dispatch?.ticket || dispatch.attemptsExhausted || dispatch.state === "blocked") return false;
   // An explicit worker failure is not a request to retry its computation forever.
@@ -236,7 +245,13 @@ async function claimDispatch(jobId, options) {
   const now = clock(options), token = crypto.randomUUID();
   return mutateJob(jobId, async job => {
     if (!canDispatch(job, now)) return null;
-    try { await validateCheckpoint(job, options); }
+    try {
+      if (period.managed(job)) {
+        // Input/checkpoint contents were read back before their references were
+        // committed. The worker itself verifies the hashes again on read.
+        if (!period.validBoundary(job)) return blocked(job, "PERIOD_DISPATCH_BOUNDARY_MISMATCH", now);
+      } else await validateCheckpoint(job, options);
+    }
     catch (error) {
       if (/^INSTANT_(ARTIFACT_|STATE_|DISPATCH_INPUT_MISMATCH|DISPATCH_CHECKPOINT_MISSING)/.test(error.code || ""))
         return blocked(job, error.code, clock(options));
@@ -251,6 +266,11 @@ async function claimDispatch(jobId, options) {
   }, options);
 }
 function blocked(job, code, now) {
+  if (period.managed(job)) return { ...job, state: "continuation_failed", updatedAt: iso(now), failedAt: iso(now),
+    resumable: Boolean(job.calculationCheckpointHash || job.currentStage === "publishing" && Array.isArray(job.results)),
+    message: "기간 분석 예약 전달 중단 · 마지막 저장 상태 확인 필요",
+    dispatchErrorCode: code, continuationDispatch: { ...job.continuationDispatch, state: "blocked", attemptsExhausted: true,
+      dispatchLeaseUntil: 0, blockedAt: iso(now), lastErrorCode: code } };
   return { ...job, state: ["publishing", "publication_failed"].includes(job.state) ? "publication_failed" : "interrupted",
     resumable: Boolean(job.instantStateKey || Array.isArray(job.results)),
     message: "다음 실행 연결 중단 · 저장된 checkpoint 보존 · 명시적 재개 필요",
@@ -301,7 +321,7 @@ async function tick(options = {}) {
       if (["interrupted", "continuation_failed", "failed"].includes(job.state)
         || job.continuationDispatch?.state === "blocked"
         || job.state === "publication_failed" && (!job.continuationDispatch?.adoptedAt || job.continuationDispatch.state === "entered")) {
-        await removeJob(hint.jobId, { ...options, recoverable: job }); continue;
+        await removeJob(hint.jobId, { ...options, recoverable: job.mode === "instant" ? job : null }); continue;
       }
       if (!job.continuationDispatch?.ticket && untouchedInitial(job)) job = await enqueueInitial(job.jobId, options);
       if (!canDispatch(job, clock(options))) continue;

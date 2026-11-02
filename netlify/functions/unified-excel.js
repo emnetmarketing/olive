@@ -126,6 +126,7 @@ function addSheet(workbook, name, columns, rows) {
 
 function periodStatus(job, request) {
   if (!job) return request?.startDate && request?.endDate ? "분석 이력 없음" : "선택 기간 없음";
+  if (Number.isInteger(job.analyzablePeriodCandidateCount) && job.actualDataEndDate !== job.endDate) return "부분 분석 · 요청 종료일 관측 없음";
   if (Number(job.cacheWindowUnavailableCount || 0) > 0 && Number(job.trendCoveragePct || 0) < 100) return "cache window 부족 / 부분 분석";
   return job.partialAnalysis ? "부분 분석" : "완료";
 }
@@ -142,9 +143,15 @@ function addPeriodSheet(workbook, job, request) {
   meta.forEach((row) => sheet.addRow(row)); sheet.getCell(5, 2).numFmt = "0.0%";
   // Keep the established header/data row positions and all original result cells.
   const stored = periodView(job);
-  [['결과 구분', job ? stored.title : '저장된 기간 결과 없음'], ['실제 확보 시작일', job?.actualDataStartDate || job?.sourceFreshness?.actualStartDate || '확인 불가'],
-    ['실제 확보 종료일', job?.actualDataEndDate || job?.sourceFreshness?.actualDataDate || '확인 불가'], ['Period Job', job?.jobId || '없음']]
+  [['결과 구분', job ? stored.title : '저장된 기간 결과 없음'], ['실제 확보 시작일', stored.actualStart || '확인 불가'],
+    ['실제 확보 종료일', stored.actualEnd || '확인 불가'], ['Period Job', job?.jobId || '없음']]
     .forEach(([label, value], index) => { sheet.getCell(index + 1, 4).value = label; sheet.getCell(index + 1, 5).value = value; });
+  if (Number.isInteger(job?.analyzablePeriodCandidateCount)) {
+    [["선택 기간 관측 후보", job.analyzablePeriodCandidateCount], ["비교 기간에만 관측", job.baselineOnlyCandidateCount],
+      ["빈 시계열", job.emptySeriesCandidateCount], ["호환 캐시 없음", job.missingPeriodCacheCount],
+      ["요청 종료일 관측 후보", job.endDateObservedCandidateCount]]
+      .forEach(([label, value], index) => { sheet.getCell(index + 5, 4).value = label; sheet.getCell(index + 5, 5).value = value; });
+  }
   sheet.addRow([]); const headerRow = sheet.addRow(resultColumns.map(([, header]) => header));
   headerRow.eachCell((cell) => { cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } }; });
   sheet.autoFilter = { from: { row: 11, column: 1 }, to: { row: 11, column: periodResultColumns.length } };
@@ -179,8 +186,8 @@ async function buildWorkbook(data) {
     { item: "선택 기간 결과 건수", value: Number(data.periodJob?.results?.length || 0) },
     { item: "선택 기간 분석 상태", value: periodStatus(data.periodJob, data.periodRequest) },
     { item: '선택 기간 결과 구분', value: data.periodJob ? '저장된 과거 기간 결과 · 최신 Instant와 별도' : '저장된 기간 결과 없음' },
-    { item: '선택 기간 실제 확보 시작일', value: asDate(data.periodJob?.actualDataStartDate || data.periodJob?.sourceFreshness?.actualStartDate) },
-    { item: '선택 기간 실제 확보 종료일', value: asDate(data.periodJob?.actualDataEndDate || data.periodJob?.sourceFreshness?.actualDataDate) },
+    { item: '선택 기간 실제 확보 시작일', value: asDate(periodView(data.periodJob).actualStart) },
+    { item: '선택 기간 실제 확보 종료일', value: asDate(periodView(data.periodJob).actualEnd) },
     { item: '선택 기간 Period Job', value: data.periodJob?.jobId || '' },
     { item: '최근 발견 필터 안내', value: '키워드 발견 시점 기준 · NAVER 분석 기간·데이터 최신성을 뜻하지 않음' },
     { item: 'NAVER 상태 기준 Instant Job', value: instant.jobId || '' }

@@ -2,6 +2,8 @@ const crypto = require("node:crypto");
 const { getStore } = require("@netlify/blobs");
 const { connectLambda, getCompatibleStore } = require("./blob-store-compat");
 const periodPublication = require("./period-publication");
+const periodInputs = require("./period-input-parts");
+const periodDispatch = require("./period-dispatch-policy");
 const { stagePointer, visiblePointer, patchInstantPublication, writeInstantJobGuarded } = require("./instant-publication");
 
 const STORE = "trend-analysis";
@@ -45,7 +47,10 @@ async function readJob(jobId) {
   if (published?.job) return published.job;
   if (raw?.mode !== "period") return raw;
   const recovery = await recoveryStore().get(recoveryControlKey(jobId), { type: "json" });
-  return recovery?.jobId === jobId ? overlayRecovery(raw, recovery) : raw;
+  if (recovery?.jobId === jobId) return overlayRecovery(raw, recovery);
+  if (periodDispatch.managed(raw) && ["running", "publishing"].includes(raw.state))
+    return { ...raw, periodDispatchRegistered: await registeredPeriodDelivery(raw).catch(() => null) };
+  return raw;
 }
 function periodWorkerError(code, message) { return Object.assign(new Error(message), { code }); }
 function mutationStore(options = {}) { return options.store || getCompatibleStore({ name: STORE, consistency: "strong" }); }
@@ -81,9 +86,18 @@ async function claimPeriodWorker(jobId, options = {}) {
       return { claimed: false, reason: "not-runnable", job };
     if (await hasRecoveryFence(jobId, options)) return { claimed: false, reason: "recovery-fenced", job };
     if (liveLease(job.workerLease, now)) return { claimed: false, reason: "worker-active", job };
+    const managed = periodDispatch.managed(job), delivery = job.continuationDispatch;
+    if (managed && (!delivery?.ticket || delivery.ticket !== options.continuationTicket || delivery.attemptsExhausted
+      || !["dispatching", "accepted", "pending"].includes(delivery.state) || !Number(delivery.attemptCount)
+      || !periodDispatch.validBoundary(job)))
+      return { claimed: false, reason: "stale-or-unrequested-period-delivery", job };
+    if (!managed && options.continuationTicket) return { claimed: false, reason: "foreign-period-delivery", job };
     const lease = { jobId, token: crypto.randomUUID(), owner: options.owner || "period-background",
       fence: Number(job.workerLease?.fence || 0) + 1, expiresAt: now + PERIOD_WORKER_LEASE_MS };
-    const next = { ...job, workerLease: lease, updatedAt: new Date(now).toISOString() };
+    const next = { ...job, workerLease: lease, updatedAt: new Date(now).toISOString(),
+      ...(managed ? { continuationDispatch: { ...delivery, state: "entered", enteredAt: new Date(now).toISOString(),
+        firstEnteredAt: delivery.firstEnteredAt || delivery.enteredAt || new Date(now).toISOString(),
+        workerFence: lease.fence, invocationId: lease.owner }, invocationCount: Number(job.invocationCount || 0) + 1 } : {}) };
     if (await hasRecoveryFence(jobId, options)) return { claimed: false, reason: "recovery-fenced", job };
     const saved = await blobStore.setJSON(`jobs/${jobId}`, next, { onlyIfMatch: entry.etag });
     if (saved?.modified) return { claimed: true, job: next, lease };
@@ -155,18 +169,28 @@ async function readPeriodCheckpoint(job, options = {}) {
   return readPeriodArtifact(job, "calculationCheckpointKey", "calculationCheckpointHash", options);
 }
 async function readPeriodInputs(job, options = {}) {
-  return readPeriodArtifact(job, "periodInputsKey", "periodInputsHash", options);
+  const stored = await readPeriodArtifact(job, "periodInputsKey", "periodInputsHash", options);
+  return stored?.format === periodInputs.FORMAT
+    ? periodInputs.readParts(mutationStore(options), job.jobId, stored) : stored;
 }
 async function writePeriodInputs(lease, value, options = {}) {
   const raw = await assertPeriodWorker(lease, options);
   if (raw.periodInputsKey) { await readPeriodInputs(raw, options); return raw; }
-  const blobStore = mutationStore(options); const hash = periodPublication.digest(value);
+  const blobStore = mutationStore(options);
+  const started = Date.now();
+  const metrics = {};
+  const manifest = await periodInputs.writeParts(blobStore, lease.jobId, value, { metrics });
+  const hash = periodPublication.digest(manifest);
   const key = `jobs/${encodeURIComponent(lease.jobId)}/inputs/${hash}`;
-  await blobStore.setJSON(key, value, { onlyIfNew: true });
+  await blobStore.setJSON(key, manifest, { onlyIfNew: true });
   const stored = await blobStore.get(key, { type: "json" });
   if (!stored || periodPublication.digest(stored) !== hash)
     throw periodWorkerError("PERIOD_INPUTS_VERIFY_FAILED", "Period calculation inputs could not be read back intact.");
-  return writeOwnedPeriodJob(lease, { periodInputsKey: key, periodInputsHash: hash }, options);
+  return writeOwnedPeriodJob(lease, { periodInputsKey: key, periodInputsHash: hash,
+    periodInputFreeze: { parts: manifest.partCount, bytes: manifest.storedBytes, durationMs: Date.now() - started, metrics,
+      rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed,
+      source: value.sourceMetadata || null }
+  }, options);
 }
 function periodJobGeneration(job) {
   return Number(job?.publicationGeneration) || Date.parse(job?.createdAt || job?.completedAt || "") || 0;
@@ -272,6 +296,12 @@ function waitingForTargetDate(job, now = Date.now()) {
     && Number.isFinite(due) && Number.isFinite(deadline) && due <= deadline
     && now <= Math.min(due + STALE_JOB_MS, deadline + STALE_JOB_MS);
 }
+async function registeredPeriodDelivery(job, options = {}) {
+  if (!periodDispatch.managed(job) || !["running", "publishing"].includes(job.state) || !job.continuationDispatch?.ticket
+    || job.continuationDispatch.attemptsExhausted || job.continuationDispatch.state === "blocked") return false;
+  const registry = await mutationStore(options).get("instant-dispatch/v1", { type: "json" });
+  return Boolean(registry?.jobs?.some(hint => hint.jobId === job.jobId && hint.mode === "period"));
+}
 async function readCurrentJob({ markStale = false, includeStale = false } = {}) {
   const pointer = await store().get(CURRENT_JOB_KEY, { type: "json" });
   if (!pointer?.jobId) return null;
@@ -285,6 +315,10 @@ async function readCurrentJob({ markStale = false, includeStale = false } = {}) 
   // A bounded source-date recheck is deliberately idle, not an abandoned
   // worker. Retain the same logical Job until its reserved wake-up is overdue.
   if (waitingForTargetDate(job)) return job;
+  // A registered scheduler ticket is active work, not an expired lock. For a
+  // dead lease the scheduler must replay/close the ticket rather than another
+  // caller replacing this Job. UI uses delivery.state, not age, for wording.
+  if (job.periodDispatchRegistered === true) return job;
   if (Number.isFinite(age) && age <= STALE_JOB_MS) return job;
   // Recovery owns its immutable artifacts and control record. A legacy lock
   // read must not rewrite the original Job from this read-only status overlay.
@@ -305,6 +339,7 @@ async function readCurrentJob({ markStale = false, includeStale = false } = {}) 
       // Recheck the authoritative Job immediately before CAS: an eventually
       // consistent UI read must not interrupt a worker that just progressed.
       if (!raw || !["running", "publishing"].includes(raw.state) || await hasRecoveryFence(job.jobId)) return null;
+      if (await registeredPeriodDelivery(raw, { store: blobStore })) return raw;
       if (Date.now() - Date.parse(raw.updatedAt || raw.createdAt || 0) <= STALE_JOB_MS || liveLease(raw.workerLease, Date.now())) return raw;
       const result = await blobStore.setJSON(`jobs/${job.jobId}`, { ...raw, ...patch }, { onlyIfMatch: entry.etag });
       if (!result?.modified) return readCurrentJob();

@@ -59,7 +59,7 @@ test("dashboard and Excel use the same current Period Job identity", () => {
 test("running Period jobs show recent progress while stale jobs are distinct", () => {
   assert.match(html, /job\.updatedAt \|\| job\.progressUpdatedAt/);
   assert.match(html, /progressAgeMs >= 12 \* 60 \* 1000/);
-  assert.match(html, /정상 계산 중/);
+  assert.match(html, /실행 상태 미확인/);
   assert.match(html, /마지막 진행 갱신/);
   assert.match(html, /analysisInterruptionText\(job\)\} · 마지막 진행 갱신/);
   assert.match(html, /proof\?\.verified === true \? "저장된 지점에서 재개 가능"/);
@@ -78,7 +78,7 @@ test("running, recovering and publishing all stop live polling after the same st
     const recent = evaluate({ mode: "period", state, updatedAt: new Date(now - 2 * 60000).toISOString() }, fixedDate);
     assert.equal(recent.stalePeriod, false);
     assert.match(recent.livePeriodStatus, /마지막 진행 갱신 2분 전/);
-    assert.match(recent.livePeriodStatus, state === "publishing" ? /계산 완료 · 결과 게시 중/ : /정상 계산 중/);
+    assert.match(recent.livePeriodStatus, state === "publishing" ? /계산 완료 · 결과 게시 중/ : /실행 상태 미확인/);
     const stale = evaluate({ mode: "period", state, updatedAt: new Date(now - 13 * 60000).toISOString(),
       resumeEvidence: { verified: false, status: "missing" } }, fixedDate);
     assert.equal(stale.stalePeriod, true);
@@ -91,6 +91,12 @@ test("running, recovering and publishing all stop live polling after the same st
   }
   assert.equal(evaluate({ mode: "period", state: "completed", updatedAt: "2020-01-01" }, fixedDate).stalePeriod, false);
   assert.equal(evaluate({ mode: "instant", state: "running", updatedAt: "2020-01-01" }, fixedDate).stalePeriod, false);
+  for (const [ticketState, label] of [["pending", "예약 대기"], ["accepted", "작업자 진입 대기"], ["entered", "작업자 진입 기록 있음"]]) {
+    const { livePeriodStatus } = evaluate({ mode: "period", state: "running", updatedAt: new Date(now).toISOString(),
+      periodDispatchRegistered: true, continuationDispatch: { state: ticketState, ticket: "same-period-ticket" } }, fixedDate);
+    assert.ok(livePeriodStatus.includes(label));
+    assert.doesNotMatch(livePeriodStatus, /정상 계산 중/);
+  }
 });
 
 test("period dashboard change is display-only and keeps collection and instant paths", () => {

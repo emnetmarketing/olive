@@ -38,9 +38,9 @@
   }
   function periodView(job = {}) {
     job = job || {};
-    const first = job.actualDataStartDate || job.sourceFreshness?.actualStartDate || null;
-    const last = job.actualDataEndDate || job.sourceFreshness?.actualDataDate || null;
-    return { title: "저장된 과거 기간 결과", requested: `요청 기간 ${time.formatDateOnly(job.startDate, "확인 불가")} ~ ${time.formatDateOnly(job.endDate, "확인 불가")}`,
+    const first = Object.hasOwn(job, "actualDataStartDate") ? job.actualDataStartDate : job.sourceFreshness?.actualStartDate;
+    const last = Object.hasOwn(job, "actualDataEndDate") ? job.actualDataEndDate : job.sourceFreshness?.actualDataDate;
+    return { title: "저장된 과거 기간 결과", actualStart: first || null, actualEnd: last || null, requested: `요청 기간 ${time.formatDateOnly(job.startDate, "확인 불가")} ~ ${time.formatDateOnly(job.endDate, "확인 불가")}`,
       actual: `실제 확보 기간 ${time.formatDateOnly(first, "확인 불가")} ~ ${time.formatDateOnly(last, "확인 불가")}`,
       note: `Job ${job.jobId || "확인 불가"} · 저장 결과 ${(job.results || []).length}건 · 현재 최신 결과와 별도. 캐시 확보율은 요청 종료일까지의 데이터 완전성을 뜻하지 않습니다.` };
   }

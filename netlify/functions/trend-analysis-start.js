@@ -131,6 +131,8 @@ async function handle(event, { fastPath = true, targetDatePreflight = false, rec
       collectionObservationStartedAt = previous.createdAt;
     }
     const acquired = await acquireJob({ ...requestedJob, surgeThreshold, matchThreshold,
+      ...(mode === "period" ? { periodDispatchVersion: 1,
+        continuationDispatch: require("./period-dispatch-policy").ticket({}, 0) } : {}),
       ...(mode === "instant" ? { targetDataDate: isoDate(new Date(end.getTime() - 86400000)),
         calculationVersion: require("./surge-history-cache").CALCULATION_VERSION } : {}),
       ...(collectionObservationStartedAt ? { collectionObservationStartedAt, reusedCollectionJobId: String(input.reuseCollectionJobId) } : {}),
@@ -156,15 +158,9 @@ async function handle(event, { fastPath = true, targetDatePreflight = false, rec
       return json(202, { existing: false, ...jobMetadata(job), dispatchState: "pending",
         message: "분석 작업을 예약했습니다. 서버가 자동으로 수집·계산·게시를 이어갑니다." });
     }
-    const baseUrl = String(process.env.URL || "").replace(/\/$/, "");
-    dispatchAttempted = true;
-    const response = await fetch(`${baseUrl}/.netlify/functions/trend-analysis-background`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId: job.jobId, job })
-    });
-    if (!response.ok && response.status !== 202) throw Object.assign(new Error(`분석 Background Function 시작 실패: HTTP ${response.status}`),
-      { code: "BACKGROUND_DISPATCH_REJECTED", status: response.status });
-    return json(202, { existing: false, ...jobMetadata(job),
-      message: fastPath ? "저장된 최신 데이터로 분석을 시작했습니다." : "최신 데이터 Background 수집을 시작했습니다." });
+    await require("./instant-dispatch").registerJob(job.jobId, { hint: { mode: "period", createdAt: job.createdAt } });
+    return json(202, { existing: false, ...jobMetadata(job), dispatchState: "pending",
+      message: "기간 분석을 예약했습니다. 서버에서 다음 실행을 전달합니다." });
   } catch (error) {
     if (createdJob?.mode === "instant") {
       const ambiguous = dispatchAttempted && error.code !== "BACKGROUND_DISPATCH_REJECTED";
@@ -172,6 +168,12 @@ async function handle(event, { fastPath = true, targetDatePreflight = false, rec
       if (ambiguous || saved?.reason === "worker-progressed") return json(202, { existing: false,
         ...jobMetadata(saved?.job || createdJob), dispatchState: ambiguous ? "unknown" : "worker-progressed",
         message: "서버 접수 응답을 확인 중입니다. 추가 실행 없이 같은 작업의 진행 상태를 확인합니다." });
+    } else if (createdJob?.periodDispatchVersion === 1) {
+      // The current-job pointer and first ticket already exist. Registration
+      // may actually have succeeded; the independent recovery tick repairs
+      // missing registration. Never replace a runnable Job with a stale copy.
+      return json(202, { existing: false, ...jobMetadata(createdJob), dispatchState: "registration-unconfirmed",
+        message: "기간 분석 접수 · 예약 등록 여부 확인 중" });
     } else if (createdJob) await writeJob(createdJob.jobId, { ...createdJob, state: "failed", message: "분석 시작 실패", errors: [error.message], updatedAt: new Date().toISOString() }).catch(() => {});
     return json(500, { error: error.message || "분석 시작 실패" });
   }
