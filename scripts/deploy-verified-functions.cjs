@@ -53,6 +53,15 @@ function parseArgs(argv) {
   return args;
 }
 
+function verifyExcelKstEvidence(execution) {
+  const proof = execution?.excelKst;
+  assert.equal(proof?.actualPackagedEntry, "download-history", "KST proof must execute the packaged download entry");
+  for (const key of ["timestampCellsKst", "dateOnlyCellsUnshifted", "timezoneLabelsVerified", "sourceTimestampsUnchanged"])
+    assert.equal(proof?.[key], true, `Missing packaged KST proof: ${key}`);
+  assert.equal(proof.checked?.length, 13, "Packaged timestamp/date-only cell checks missing");
+  assert.match(proof.apiCreatedAtUtcIso, /Z$/, "API timestamps must remain UTC ISO");
+}
+
 function loadVerifiedArtifacts(dir) {
   const manifest = json(path.join(dir, "manifest.json"));
   const evidence = json(path.join(dir, "build-evidence.json"));
@@ -75,6 +84,7 @@ function loadVerifiedArtifacts(dir) {
   for (const key of ["bootstrapExecuted", "nativeContext", "latestStatusSnapshotJobMatch"]) assert.equal(execution?.[key], true, key);
   assert.equal(execution?.sourceApiCalls, 0);
   assert.equal(execution?.productionCalls, 0);
+  verifyExcelKstEvidence(execution);
   assert.equal(execution?.scheduledDispatcherVerified, true);
   assert.equal(execution?.scheduledDispatcherIdleWrites, 0);
   assert.equal(execution?.scheduledDispatcherIdleSourceCalls, 0);
@@ -165,7 +175,7 @@ async function makePlan(args, api, verified, previousState) {
     assert.match(hash, /^[a-f0-9]{40}$/);
     files[name] = hash;
   }
-  for (const name of ["index.html", "netlify.toml", "shared/result-growth-presentation.js"]) {
+  for (const name of ["index.html", "netlify.toml", "shared/result-growth-presentation.js", "shared/kst-time-presentation.js"]) {
     const bytes = fs.readFileSync(path.join(ROOT, name)), hash = sha(bytes, "sha1");
     files[name] = hash; uploadFiles.set(hash, { name, bytes });
   }
@@ -233,7 +243,7 @@ async function main(argv = process.argv.slice(2)) {
   if (args.mode === "plan") {
     console.log(JSON.stringify({ mode: "plan", remoteWrites: 0, deploysCreated: 0, sourceApiCalls: 0,
       basePublishedId: plan.basePublishedId, commit: plan.commit, staticFiles: Object.keys(body.files).length,
-      staticLocalUploadAllowlist: ["index.html", "netlify.toml", "shared/result-growth-presentation.js", "_headers"], otherStaticFiles: "Remote published SHA references only; no local directory upload",
+      staticLocalUploadAllowlist: ["index.html", "netlify.toml", "shared/result-growth-presentation.js", "shared/kst-time-presentation.js", "_headers"], otherStaticFiles: "Remote published SHA references only; no local directory upload",
       functions: EXPECTED_FUNCTION_COUNT, schedules: verified.schedules, runtime: "nodejs22.x", runtimeAPIVersion: 2,
       inputDigest: plan.inputDigest, executionDigest: plan.executionDigest, payloadDigest: plan.payloadDigest,
       existingCandidateId: state?.deployId || null, draft: !args.production,
@@ -243,7 +253,7 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   assert.equal(git(["rev-parse", "HEAD"]), args.commit, "Commit must be current HEAD");
-  assert.equal(git(["diff", "HEAD", "--name-only", "--", ...verified.inputPaths, "index.html", "shared/result-growth-presentation.js"]), "", "Build inputs must be committed unchanged");
+  assert.equal(git(["diff", "HEAD", "--name-only", "--", ...verified.inputPaths, "index.html", "shared/result-growth-presentation.js", "shared/kst-time-presentation.js"]), "", "Build inputs must be committed unchanged");
   if (args.mode === "publish") {
     assert.ok(state?.readyVerifiedAt && state?.deployId, "Verified ready candidate required");
     assert.equal(args["confirm-publish"], state.deployId, "Explicit --confirm-publish <candidate-id> required");
@@ -292,7 +302,7 @@ async function main(argv = process.argv.slice(2)) {
     warning: "Ready/Published metadata is not a service health test. Check actual read-only Functions and restore the previous deploy immediately on failure." }, null, 2));
 }
 
-module.exports = { parseArgs, loadVerifiedArtifacts, client, makePlan, verifyRemote, ensureCandidate, needsManifestUpload, main,
+module.exports = { parseArgs, loadVerifiedArtifacts, verifyExcelKstEvidence, client, makePlan, verifyRemote, ensureCandidate, needsManifestUpload, main,
   EXPECTED_FUNCTION_COUNT, SCHEDULES };
 if (require.main === module) main().catch(error => {
   console.error(`Verified-artifact deployment stopped: ${String(error.message).slice(0, 600)}`);

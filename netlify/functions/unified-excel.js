@@ -4,10 +4,10 @@ const { projectStoredResultConfidence, projectStoredPeriodResult } = require("./
 const { growthView } = require("../../shared/result-growth-presentation");
 const { projectResult } = require("./result-quality-projection");
 const { projectBrandContext } = require("./brand-context");
+const { toKstExcelDate, toDateOnlyExcelDate: asDate, EXCEL_TIMESTAMP_FORMAT } = require("../../shared/kst-time-presentation");
 
 const gradeLabels = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
 const strengthLabels = { strong: "강한 신호", rising: "상승 신호", watch: "관찰 신호" };
-const asDate = (value) => value && Number.isFinite(Date.parse(value)) ? new Date(value) : null;
 const text = (value) => Array.isArray(value) ? value.filter(Boolean).join(" / ") : String(value ?? "");
 const percent = (value) => value == null || value === "" ? null : Number(value) / 100;
 const sourceList = (row) => row.discoverySource || row.sources || [];
@@ -45,7 +45,7 @@ function earlyRow(row) {
     ? `저장 광고 관측 ${ad.current ?? "데이터 없음"} · 이전 관측 없음 / 비교 불가 · 집계기간 미확인`
     : `저장 광고 관측 현재 ${ad.current ?? "데이터 없음"} / 이전 ${ad.previous} / Δ ${ad.delta ?? "비교 불가"} · 집계기간 미확인`;
   return { keyword: row.keyword, strength: strengthLabels[row.strength] || row.strength || "", score: row.todayEarlySignalScore == null ? null : Number(row.todayEarlySignalScore),
-    detectedAt: asDate(row.detectedAt), reasons: text([...(row.reasons || []), row.scoreWarning].filter(Boolean)),
+    detectedAt: toKstExcelDate(row.detectedAt), reasons: text([...(row.reasons || []), row.scoreWarning].filter(Boolean)),
     productBrand: text([row.relatedBrand, row.brandContextStatus === "unverified" ? `${row.relatedExpression || "일반 표현"} · 브랜드 미확인` : null,
       row.relatedProductLine || row.relatedProductType, row.relatedProduct].filter(Boolean)),
     sources: text(row.sources), youtubeChange: yt ? `현재 ${yt.current} / 이전 ${yt.previous} / Δ ${yt.delta}` : "",
@@ -56,8 +56,8 @@ function earlyRow(row) {
 
 function discoveryRow(row) {
   row = projectBrandContext(row);
-  return { rank: Number(row.rank || 0), keyword: row.keyword, sources: text(row.discoverySource), discoveredAt: asDate(row.discoveredAt),
-    lastSeenAt: asDate(row.lastSeenAt), confidence: row.sourceConfidence == null ? null : Number(row.sourceConfidence), brand: row.relatedBrand || "",
+  return { rank: Number(row.rank || 0), keyword: row.keyword, sources: text(row.discoverySource), discoveredAt: toKstExcelDate(row.discoveredAt),
+    lastSeenAt: toKstExcelDate(row.lastSeenAt), confidence: row.sourceConfidence == null ? null : Number(row.sourceConfidence), brand: row.relatedBrand || "",
     confidenceStatus: row.sourceConfidenceQuality?.warning || "", brandStatus: row.brandContextStatus === "unverified" ? `${row.relatedExpression || "일반 표현"} · 브랜드 미확인` : "",
     productContext: row.relatedProductLine || row.relatedProductType || "", monthlySearchStatus: row.monthlySearchStatus || "",
     monthlyTotalSearches: row.monthlyTotalSearches == null ? null : Number(row.monthlyTotalSearches), marketDiscoveryRank: Number(row.marketDiscoveryRank || 0),
@@ -152,11 +152,11 @@ async function buildWorkbook(data) {
   const workbook = new ExcelJS.Workbook(); workbook.creator = "네쇼검 트렌드 모니터"; workbook.created = new Date();
   const instant = data.instantJob || {}; const results = (instant.results || []).map(projectResult); const early = data.early?.items || []; const discoveries = data.discoveries || [];
   const summaryRows = [
-    { item: "파일 생성 시각", value: asDate(data.generatedAt) }, { item: "오늘 급상승 신호 기준일", value: asDate(data.early?.signalDate) },
-    { item: "오늘 신호 마지막 갱신 시각", value: asDate(data.early?.generatedAt) }, { item: "NAVER 최신 데이터 기준일", value: asDate(instant.latestDataDate) },
+    { item: "파일 생성 시각 (한국시간(KST))", value: toKstExcelDate(data.generatedAt), timestamp: true }, { item: "오늘 급상승 신호 기준일", value: asDate(data.early?.signalDate) },
+    { item: "오늘 신호 마지막 갱신 시각 (한국시간(KST))", value: toKstExcelDate(data.early?.generatedAt), timestamp: true }, { item: "NAVER 최신 데이터 기준일", value: asDate(instant.latestDataDate) },
     { item: "분석 목표 데이터일", value: asDate(instant.sourceFreshness?.targetDataDate || instant.targetDataDate) },
     { item: "목표일 관측 비율", value: instant.sourceFreshness?.targetDataCoveragePct == null ? null : Number(instant.sourceFreshness.targetDataCoveragePct) / 100 },
-    { item: "상품 매칭 cache 관측 시각", value: asDate(instant.productCacheObservedAt) },
+    { item: "상품 매칭 cache 관측 시각 (한국시간(KST))", value: toKstExcelDate(instant.productCacheObservedAt), timestamp: true },
     { item: "데이터 날짜 안내", value: "NAVER 기준일은 각 결과 행에 별도 표시됩니다. 상품 cache 관측 시각은 검색량 기준일이 아닙니다." },
     { item: "어제 분석 coverage", value: Number(instant.trendCoveragePct || 0) / 100 }, { item: "분석 완료 수", value: Number(instant.trendAvailableCount || 0) },
     { item: "전체 후보 수", value: Number(instant.analyzedCandidateCount || 0) }, { item: "급등 기준", value: Number(instant.surgeThreshold || 0) },
@@ -170,22 +170,22 @@ async function buildWorkbook(data) {
     { item: "선택 기간 결과 건수", value: Number(data.periodJob?.results?.length || 0) },
     { item: "선택 기간 분석 상태", value: periodStatus(data.periodJob, data.periodRequest) }
   ];
-  const summary = addSheet(workbook, "00_요약", [["item", "항목", 30], ["value", "값", 28]], summaryRows);
+  const summary = addSheet(workbook, "00_요약", [["item", "항목", 55], ["value", "값", 28]], summaryRows);
   summaryRows.forEach((row, index) => {
     const cell = summary.getCell(index + 2, 2);
-    if (row.value instanceof Date) cell.numFmt = "yyyy-mm-dd hh:mm";
+    if (row.value instanceof Date) cell.numFmt = row.timestamp ? EXCEL_TIMESTAMP_FORMAT : "yyyy-mm-dd";
     else if (["어제 분석 coverage", "상품 일치율 기준", "선택 기간 coverage", "목표일 관측 비율"].includes(row.item)) cell.numFmt = "0.0%";
     else if (typeof row.value === "number") cell.numFmt = "#,##0";
   });
   addSheet(workbook, "01_오늘 급상승 신호", [["keyword", "키워드", 24], ["strength", "신호 강도", 14], ["score", "Early Signal Score", 18, "0"],
-    ["detectedAt", "발견 시각", 20, "yyyy-mm-dd hh:mm"], ["reasons", "주요 탐지 근거", 42], ["productBrand", "상품/브랜드", 32], ["sources", "Source", 24],
+    ["detectedAt", "발견 시각 (한국시간(KST))", 29, EXCEL_TIMESTAMP_FORMAT], ["reasons", "주요 탐지 근거", 42], ["productBrand", "상품/브랜드", 32], ["sources", "Source", 24],
     ["youtubeChange", "YouTube 변화", 28], ["searchAdChange", "Search Ad 변화", 28], ["previousNaver", "전일 NAVER 상태", 22], ["earlySignalDate", "Early Signal 날짜", 18, "yyyy-mm-dd"]], early.map(earlyRow));
   addSheet(workbook, "02_어제 급등 확인", resultColumns, results.map(resultRow));
   addSheet(workbook, "03_상품 직접 매칭", resultColumns, results.filter((r) => r.resultType === "product_match").map(resultRow));
   addSheet(workbook, "04_브랜드_카테고리", resultColumns, results.filter((r) => r.resultType === "brand_or_category_signal").map(resultRow));
   addSheet(workbook, "05_기타 관련 급등", resultColumns, results.filter((r) => ["domain_related_signal", "unverified_context_signal"].includes(r.resultType)).map(resultRow));
   addSheet(workbook, "06_최근 발견 키워드", [["rank", "순위", 8, "0"], ["keyword", "키워드", 24], ["sources", "발견 소스", 24],
-    ["discoveredAt", "최초 발견", 20, "yyyy-mm-dd hh:mm"], ["lastSeenAt", "마지막 발견", 20, "yyyy-mm-dd hh:mm"], ["confidence", "sourceConfidence", 17, "0"],
+    ["discoveredAt", "최초 발견 (한국시간(KST))", 29, EXCEL_TIMESTAMP_FORMAT], ["lastSeenAt", "마지막 발견 (한국시간(KST))", 29, EXCEL_TIMESTAMP_FORMAT], ["confidence", "sourceConfidence", 17, "0"],
     ["brand", "관련 브랜드", 18], ["productContext", "제품군/제품라인", 24], ["monthlySearchStatus", "월간검색량 상태", 18],
     ["monthlyTotalSearches", "월간검색량", 14, "#,##0"], ["marketDiscoveryRank", "후보 순위", 12, "0"], ["protectedSlot", "500 보호 슬롯", 14], ["trendStatus", "Trend 상태", 20], ["confidenceStatus", "출처 신뢰도 확인 상태", 48], ["brandStatus", "브랜드 확인 상태", 36]], discoveries.map(discoveryRow));
   if (data.periodJob?.jobId || (data.periodRequest?.startDate && data.periodRequest?.endDate)) addPeriodSheet(workbook, data.periodJob, data.periodRequest);

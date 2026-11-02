@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { verifyDisplay: verifySuppliedDisplay } = require("../scripts/verify-deployed-period-display.cjs");
 const growthScript = fs.readFileSync("shared/result-growth-presentation.js", "utf8");
-const verifyDisplay = options => verifySuppliedDisplay({ growthScript, ...options });
+const kstScript = fs.readFileSync("shared/kst-time-presentation.js", "utf8");
+const verifyDisplay = options => verifySuppliedDisplay({ growthScript, kstScript, ...options });
 const html = fs.readFileSync(path.join(__dirname, "../index.html"), "utf8");
 
 function fixture(count = 439) {
@@ -33,6 +34,11 @@ test("deployed HTML display harness uses actual render functions and saved rows 
   assert.equal(report.excelRequestBinding.actualDownloadPerformed, false);
   assert.equal(report.suppliedWorkbook.verified, false); assert.equal(report.actualNetworkRequests, 0);
   assert.match(report.verificationKind, /NOT a logged-in browser visual test/);
+  assert.match(report.kstScriptSha256, /^[a-f0-9]{64}$/);
+});
+
+test("display harness requires supplied deployed KST asset instead of silently substituting workspace code", async () => {
+  await assert.rejects(verifyDisplay({ html, period: fixture(2), kstScript: undefined }), /Supply the same deployed .*kst-time-presentation/);
 });
 
 test("display harness refuses mismatched snapshot or incomplete Job instead of manufacturing completion", async () => {

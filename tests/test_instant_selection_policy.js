@@ -176,7 +176,7 @@ test("Excel keeps per-row NAVER dates and product observation time separate with
   assert.equal(sheet.getCell("B3").value.toISOString().slice(0, 10), "2026-10-25");
   assert.equal(sheet.getCell("C2").value, 7031);
   const summary = new Map(); workbook.getWorksheet("00_요약").eachRow(row => summary.set(row.getCell(1).value, row.getCell(2).value));
-  assert.equal(summary.get("상품 매칭 cache 관측 시각").toISOString(), "2026-10-13T01:00:00.000Z");
+  assert.equal(summary.get("상품 매칭 cache 관측 시각 (한국시간(KST))").toISOString(), "2026-10-13T10:00:00.000Z");
   assert.equal(summary.get("목표일 관측 비율"), 0); assert.equal(JSON.stringify(current), before);
 });
 

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { client, parseArgs, makePlan, ensureCandidate, needsManifestUpload, verifyRemote } = require("../scripts/deploy-verified-functions.cjs");
+const { client, parseArgs, makePlan, ensureCandidate, needsManifestUpload, verifyRemote, verifyExcelKstEvidence } = require("../scripts/deploy-verified-functions.cjs");
 
 const siteId = "dc4e873a-5b98-40de-a2f8-9c36e9f7e8bc";
 const healthy = "6a9a6ee0f88f8300080bc18f";
@@ -17,6 +17,16 @@ const verified = {
   functions: { "fixture-background": "b".repeat(64) }, functionsConfig: {}, schedules,
   inputDigest: "inputs", executionDigest: "execution", manifestDigest: "manifest",
 };
+
+test("deployment requires actual packaged KST Excel proof, not only source tests", () => {
+  const excelKst = { actualPackagedEntry: "download-history", timestampCellsKst: true, dateOnlyCellsUnshifted: true,
+    timezoneLabelsVerified: true, sourceTimestampsUnchanged: true, checked: Array.from({ length: 13 }, () => ({})),
+    apiCreatedAtUtcIso: "2026-11-02T03:00:00.000Z" };
+  assert.doesNotThrow(() => verifyExcelKstEvidence({ excelKst }));
+  assert.throws(() => verifyExcelKstEvidence({}), /packaged download entry/);
+  assert.throws(() => verifyExcelKstEvidence({ excelKst: { ...excelKst, dateOnlyCellsUnshifted: false } }), /dateOnlyCellsUnshifted/);
+  assert.throws(() => verifyExcelKstEvidence({ excelKst: { ...excelKst, checked: [] } }), /cell checks missing/);
+});
 
 test("deployment plan transport is GET-only and never follows redirects", async () => {
   const requests = [];
@@ -54,7 +64,7 @@ test("plan retains remote static SHA only and permits explicit UI/helper files",
   assert.equal(body.files["existing.txt"], "d".repeat(40));
   assert.equal(body.draft, false);
   assert.equal(body.branch, "main");
-  assert.deepEqual([...uploadFiles.values()].map(file => file.name).sort(), ["_headers", "index.html", "netlify.toml", "shared/result-growth-presentation.js"]);
+  assert.deepEqual([...uploadFiles.values()].map(file => file.name).sort(), ["_headers", "index.html", "netlify.toml", "shared/kst-time-presentation.js", "shared/result-growth-presentation.js"]);
   assert.equal(plan.basePublishedId, healthy);
   assert.equal(calls.length, 2);
   await assert.rejects(makePlan(args, async () => ({ published_deploy: { id: "changed" } }), verified, null), /Published deploy changed/);

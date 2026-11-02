@@ -63,20 +63,74 @@ function extractArchive(archive, destination) {
   }
   return normalizedLinks;
 }
-function workbookCells(files, name) {
+function workbookSheetXml(files, name) {
   const decode = value => String(value || '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
-  const strings = [...files.get('xl/sharedStrings.xml').matchAll(/<si>([\s\S]*?)<\/si>/g)]
-    .map(match => [...match[1].matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(text=>decode(text[1])).join(''));
   const sheets = [...files.get('xl/workbook.xml').matchAll(/<sheet\b[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)];
   const sheet = sheets.find(item=>decode(item[1])===name); assert.ok(sheet,name);
   const relationships = [...files.get('xl/_rels/workbook.xml.rels').matchAll(/<Relationship\b([^>]+)\/?\s*>/g)];
   const relation = relationships.find(item=>item[1].match(/\bId="([^"]+)"/)?.[1]===sheet[2]);
   const target=relation?.[1].match(/\bTarget="([^"]+)"/)?.[1]; assert.ok(target);
   const xml=files.get(target.startsWith('/')?target.slice(1):path.posix.normalize('xl/'+target));assert.ok(xml);
+  return xml;
+}
+function workbookCells(files, name) {
+  const decode = value => String(value || '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+  const strings = [...(files.get('xl/sharedStrings.xml') || '').matchAll(/<si>([\s\S]*?)<\/si>/g)]
+    .map(match => [...match[1].matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(text=>decode(text[1])).join(''));
+  const xml = workbookSheetXml(files, name);
   return new Map([...xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].map(match=>{
     const address=match[1].match(/\br="([^"]+)"/)?.[1], value=match[2]?.match(/<v>(.*?)<\/v>/)?.[1];
     return [address,value===undefined?null:/\bt="s"/.test(match[1])?strings[Number(value)]:Number(value)];
   }));
+}
+function workbookCellFormat(files, sheet, address) {
+  const cell = [...workbookSheetXml(files, sheet).matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)]
+    .find(match => match[1].match(/\br="([^"]+)"/)?.[1] === address);
+  assert.ok(cell, `${sheet}!${address} missing`);
+  const styleIndex = Number(cell[1].match(/\bs="(\d+)"/)?.[1] || 0);
+  const styles = files.get('xl/styles.xml'); assert.ok(styles);
+  const cellXfs = styles.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1]; assert.ok(cellXfs);
+  const xfs = [...cellXfs.matchAll(/<xf\b([^>]+)>?/g)];
+  const numberFormatId = xfs[styleIndex]?.[1].match(/\bnumFmtId="(\d+)"/)?.[1]; assert.ok(numberFormatId);
+  const format = [...styles.matchAll(/<numFmt\b([^>]+)\/?\s*>/g)]
+    .find(match => match[1].match(/\bnumFmtId="(\d+)"/)?.[1] === numberFormatId);
+  return format?.[1].match(/\bformatCode="([^"]+)"/)?.[1] || `builtin:${numberFormatId}`;
+}
+function verifyKstWorkbook(files, fixture) {
+  // Deliberately independent from the implementation's formatter: compare the
+  // actual packaged entry's numeric Excel cells, not mocked formatter output.
+  const serial = (iso, offsetHours = 0) => (Math.floor(Date.parse(iso) / 1000) * 1000 + offsetHours * 3600000) / 86400000 + 25569;
+  const cells = new Map();
+  const get = sheet => { if (!cells.has(sheet)) cells.set(sheet, workbookCells(files, sheet)); return cells.get(sheet); };
+  const checked = [];
+  function check(sheet, address, expected, timestamp) {
+    const actual = get(sheet).get(address);
+    assert.equal(typeof actual, 'number', `${sheet}!${address} must be an Excel numeric date`);
+    assert.ok(Math.abs(actual - serial(expected, timestamp ? 9 : 0)) < 1e-9, `${sheet}!${address} must ${timestamp ? 'encode KST wall-clock' : 'preserve date-only day'}: ${actual}`);
+    assert.equal(workbookCellFormat(files, sheet, address), timestamp ? 'yyyy-mm-dd hh:mm:ss' : 'yyyy-mm-dd');
+    checked.push({ sheet, cell: address, kind: timestamp ? 'KST timestamp' : 'date-only', source: expected, serial: actual });
+  }
+  function summary(label, expected, timestamp) {
+    const entry = [...get('00_요약')].find(([address, value]) => /^A\d+$/.test(address) && value === label);
+    assert.ok(entry, `Missing summary ${label}`); check('00_요약', entry[0].replace(/^A/, 'B'), expected, timestamp);
+  }
+  summary('파일 생성 시각 (한국시간(KST))', fixture.generatedAt, true);
+  summary('오늘 신호 마지막 갱신 시각 (한국시간(KST))', fixture.early.generatedAt, true);
+  summary('상품 매칭 cache 관측 시각 (한국시간(KST))', fixture.instant.productCacheObservedAt, true);
+  summary('오늘 급상승 신호 기준일', fixture.early.signalDate, false);
+  summary('NAVER 최신 데이터 기준일', fixture.instant.latestDataDate, false);
+  check('01_오늘 급상승 신호', 'D2', fixture.early.items[0].detectedAt, true);
+  check('01_오늘 급상승 신호', 'K2', fixture.early.items[0].earlySignalDate, false);
+  check('06_최근 발견 키워드', 'D2', fixture.discoveries[0].discoveredAt, true);
+  check('06_최근 발견 키워드', 'E2', fixture.discoveries[0].lastSeenAt, true);
+  check('02_어제 급등 확인', 'B2', fixture.instant.results[0].latestDataDate, false);
+  check('02_어제 급등 확인', 'G2', fixture.instant.results[0].peakDate, false);
+  check('07_선택기간분석', 'A12', fixture.period.startDate, false);
+  check('07_선택기간분석', 'B12', fixture.period.endDate, false);
+  assert.match(get('01_오늘 급상승 신호').get('D1'), /한국시간\(KST\)/);
+  assert.match(get('06_최근 발견 키워드').get('D1'), /한국시간\(KST\)/);
+  assert.match(get('06_최근 발견 키워드').get('E1'), /한국시간\(KST\)/);
+  return { timestampCellsKst: true, dateOnlyCellsUnshifted: true, timezoneLabelsVerified: true, checked };
 }
 function snapshot(job) {
   return { version: 1, jobId: job.jobId, mode: job.mode, startDate: job.startDate, endDate: job.endDate,
@@ -99,6 +153,17 @@ function prepareData(input) {
   const instant = { ...target, jobId: "instant-legacy-fixture-59", mode: "instant", results: results.slice(0,59).map(row => ({ ...row,
     keyword: `instant-fixture-${row.keyword}` })), resultCount: 59, latestDataDate: "2026-10-11" };
   return { target, morning, instant, evidenceKind: saved ? "recovered local read-only calculation rows; other identities/counts are explicit fixtures" : "synthetic fixtures" };
+}
+function prepareKstFixture(instant, period) {
+  return {
+    instant: { ...instant, productCacheObservedAt: '2026-10-31T15:45:02.000Z',
+      results: instant.results.map(row => ({ ...row, latestDataDate: '2026-10-11', peakDate: '2026-10-10' })) },
+    period,
+    early: { version: 1, signalDate: '2026-11-01', generatedAt: '2026-10-31T15:30:01.000Z', history: [],
+      items: [{ keyword: 'isolated-kst-fixture', earlySignalDate: '2026-10-31', detectedAt: '2026-10-31T15:00:02.000Z',
+        strength: 'watch', todayEarlySignalScore: 1, reasons: ['Explicit isolated timestamp fixture'], sources: [] }] },
+    discoveries: [{ rank: 1, keyword: 'isolated-kst-discovery', discoveredAt: '2026-10-31T15:01:03.000Z', lastSeenAt: '2026-11-01T00:02:04.000Z', discoverySource: [] }]
+  };
 }
 async function childMain(base, mode) {
   assert.equal(process.env.NODE_PATH, undefined); assert.ok(process.execArgv.includes("--no-global-search-paths"));
@@ -208,6 +273,24 @@ async function childMain(base, mode) {
   const strings=[...(xlsx.get("xl/sharedStrings.xml")||"").matchAll(/<si>([\s\S]*?)<\/si>/g)].map(match=>[...match[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(item=>item[1]).join("").replaceAll("&amp;","&").replaceAll("&lt;","<").replaceAll("&gt;",">").replaceAll("&quot;",'"').replaceAll("&apos;","'"));
   const keywordCells=[...xml.matchAll(/<c r="C(\d+)"[^>]*t="s"[^>]*><v>(\d+)<\/v><\/c>/g)].filter(match=>Number(match[1])>=12).map(match=>strings[Number(match[2])]);
   assert.deepEqual(keywordCells,target.results.map(row=>row.keyword));
+  // A separate local transport fixture exercises month-boundary timestamps
+  // through the real packaged download entry. It neither changes captured
+  // source rows nor performs a Production download/history write.
+  const kstFixture = prepareKstFixture(instant, target), kstSourceHash = digest(kstFixture);
+  seed('trend-analysis', `jobs/${instant.jobId}`, kstFixture.instant);
+  seed('today-early-signals', 'current-v1', kstFixture.early);
+  const kstExport = await invoke('download-history', 'POST', {}, {downloadType: 'unified_results', periodJobId: target.jobId,
+    periodStartDate: target.startDate, periodEndDate: target.endDate, discoveries: kstFixture.discoveries});
+  assert.equal(kstExport.statusCode, 201, kstExport.bytes.toString());
+  const kstPayload = kstExport.json(); assert.match(kstPayload.createdAt, /Z$/);
+  assert.equal(kstPayload.periodJobId, target.jobId); assert.equal(kstPayload.sourceJobId, instant.jobId);
+  const kstEntries = new Map(zipEntries(Buffer.from(kstPayload.contentBase64, 'base64')).map(entry => [entry.name, entry.bytes.toString('utf8')]));
+  const excelKst = verifyKstWorkbook(kstEntries, { ...kstFixture, generatedAt: kstPayload.createdAt });
+  assert.equal(digest(kstFixture), kstSourceHash, 'Export must not rewrite source timestamps or rows');
+  assert.equal(JSON.parse(records.get(address('today-early-signals', 'current-v1')).bytes).generatedAt, kstFixture.early.generatedAt);
+  assert.equal(JSON.parse(records.get(address('trend-analysis', `jobs/${instant.jobId}`)).bytes).productCacheObservedAt, kstFixture.instant.productCacheObservedAt);
+  seed('trend-analysis', `jobs/${instant.jobId}`, instant);
+  seed('today-early-signals', 'current-v1', {items:[],history:[]});
   const runId="11111111-1111-4111-8111-111111111111",token="offline-probe-token-000000000000000000000000";
   seed("trend-runtime-verification",`authorization/${runId}`,{jobId:`runtime-fixture-${runId}`,tokenHash:hash(token),expiresAt:new Date(Date.now()+3600000).toISOString()});
   const started=await invoke("runtime-storage-verification","POST",{},{runId},`Bearer ${token}`);assert.equal(started.statusCode,202);
@@ -296,7 +379,8 @@ async function childMain(base, mode) {
     latestStatusSnapshotJobMatch:true,excelPeriodRows:439,excelJobId:exported.json().periodJobId,probePhases:phases,probeReport:report.report,
     scheduledDispatcherVerified:true,scheduledDispatcherIdleWrites:0,scheduledDispatcherIdleSourceCalls:0,
     sdkVersions:[...new Set(report.invocations.map(value=>value.sdkVersion))],fixtureBlobReads:calls.filter(x=>x.method==="GET").length,
-    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality}));
+    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality,
+    excelKst:{...excelKst,actualPackagedEntry:'download-history',sourceTimestampsUnchanged:true,apiCreatedAtUtcIso:kstPayload.createdAt}}));
 }
 async function main() {
   if(process.argv[2]==="--child")return childMain(path.resolve(process.argv[3]),process.argv[4]);
@@ -341,4 +425,5 @@ async function main() {
   fs.writeFileSync(reportOutput,JSON.stringify(report,null,2));
   console.log(JSON.stringify({report:reportOutput,...report,artifacts:evidence.map(item=>({name:item.name,sha256:item.sha256,normalizedLinks:item.normalizedLinks.length}))},null,2));
 }
-main().catch(error=>{console.error(error.stack);process.exitCode=1;});
+if (require.main === module) main().catch(error=>{console.error(error.stack);process.exitCode=1;});
+module.exports = { zipEntries, workbookCells, workbookCellFormat, verifyKstWorkbook, prepareKstFixture, prepareData };

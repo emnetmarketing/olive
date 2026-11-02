@@ -8,7 +8,7 @@ const now = new Date("2026-10-16T09:10:00.000Z");
 function runtime(payload, endpoint = "trend-cache-status") {
   const nodes = new Map(), requests = [];
   const node = id => { if (!nodes.has(id)) nodes.set(id, { textContent: "", innerHTML: "", style: {}, classList: { toggle() {} } }); return nodes.get(id); };
-  const context = vm.createContext({ state: { currentAnalysisJob: { jobId: "instant96", results: Array(96).fill({}), analyzedCandidateCount: 5000 },
+  const context = vm.createContext({ KstTimePresentation: require("../shared/kst-time-presentation"), state: { currentAnalysisJob: { jobId: "instant96", results: Array(96).fill({}), analyzedCandidateCount: 5000 },
     currentPeriodAnalysisJob: { jobId: "period439", results: Array(439).fill({}) } }, $: node,
     fetch: async route => { requests.push(route); assert.equal(route, `/.netlify/functions/${endpoint}`); return new Response(JSON.stringify(payload)); } });
   for (const name of ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "sourceFreshnessLabel", "trendFreshnessDisplay", "earlySignalFreshnessDisplay", "loadTrendCacheStatus", "loadTodayEarlySignals"])
@@ -34,7 +34,7 @@ test("NAVER summary shows actual valid data date instead of older collection dat
 test("collection, calculation and publication timestamps remain independent; dispatched is not called running/completed", () => {
   const display = runtime().context.trendFreshnessDisplay(trend(), now);
   assert.match(display.detail, /마지막 실제 Trend 수집 2026-10-13 06:13/);
-  assert.match(display.detail, /마지막 계산 2026-10-16 18:06 · 마지막 게시 2026-10-16 18:06/);
+  assert.match(display.detail, /마지막 계산 2026-10-16 18:06:04 · 마지막 게시 2026-10-16 18:06:11/);
   assert.match(display.summary, /자동 작업 요청 접수/); assert.match(display.summary, /완료 확인 필요/);
   assert.doesNotMatch(display.summary, /진행 중|자동 작업 완료/);
 });

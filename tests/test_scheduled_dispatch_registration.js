@@ -85,6 +85,9 @@ function fixtureArtifacts() {
     "instantPreviousProtected", "normalWorkerClaimVerified", "normalWorkerFrozenInputsVerified", "normalWorkerCheckpointResumeVerified"];
   const execution = { mode: "execution", bootstrapExecuted: true, nativeContext: true, latestStatusSnapshotJobMatch: true,
     sourceApiCalls: 0, productionCalls: 0, canonicalPeriodRows: 439, excelPeriodRows: 439, probePhases: [1, 2],
+    excelKst: { actualPackagedEntry: "download-history", timestampCellsKst: true, dateOnlyCellsUnshifted: true,
+      timezoneLabelsVerified: true, sourceTimestampsUnchanged: true, checked: Array.from({ length: 13 }, () => ({})),
+      apiCreatedAtUtcIso: "2026-11-02T03:00:00.000Z" },
     probeReport: Object.fromEntries(flags.map(name => [name, true])), sdkVersions: ["10.7.12"],
     scheduledDispatcherVerified: true, scheduledDispatcherIdleWrites: 0, scheduledDispatcherIdleSourceCalls: 0 };
   const report = { node: "v22.23.3", ancestorModulesDisabled: true, workspaceModuleFallback: false, zipEntryCount: 32,

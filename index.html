@@ -1610,6 +1610,7 @@
           <pre id="analysisDiagnosticText" style="max-height:420px;overflow:auto;white-space:pre-wrap;font-size:12px;"></pre>
         </details>
         <div id="latestDataDate" class="muted" style="margin-bottom:6px;">최신 데이터 기준일: -</div>
+        <div id="timestampTimezoneNotice" class="muted" style="margin-bottom:6px;">모든 시각은 한국시간(KST)으로 표시합니다. 데이터 기준일·선택 기간은 날짜 그대로 표시합니다.</div>
         <div id="dataFreshnessSummary" class="muted" style="margin-bottom:12px;">데이터 최신성: 확인 중</div>
         <div class="stats">
           <div class="stat"><b id="statSearchAd">0</b><span class="muted">네이버 검색광고</span></div>
@@ -1617,7 +1618,7 @@
           <div class="stat"><b id="statShoppingInsight">0</b><span class="muted">네이버 쇼핑인사이트</span></div>
           <div class="stat"><b id="statNews">0</b><span class="muted">네이버 뉴스</span></div>
           <div class="stat"><b id="statMatches">0</b><span class="muted">일치 키워드</span></div>
-          <div class="stat"><b id="statLastRun">-</b><span class="muted">마지막 분석 시간</span></div>
+          <div class="stat"><b id="statLastRun">-</b><span class="muted">마지막 분석 시간 · 한국시간(KST)</span></div>
         </div>
         <div id="apiErrors" class="api-errors" role="alert"></div>
       </section>
@@ -1788,6 +1789,7 @@
   </div>
 
   <script src="/shared/result-growth-presentation.js"></script>
+  <script src="/shared/kst-time-presentation.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
@@ -2403,8 +2405,7 @@
     }
 
     function formatDateTimeText(date) {
-      const pad = (value) => String(value).padStart(2, "0");
-      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      return KstTimePresentation.formatKstTimestamp(date);
     }
 
     function setDefaultCollectionDates() {
@@ -2883,7 +2884,7 @@
       const running = status.state === "running";
       const account1 = Number(cache?.accountCounts?.["쇼핑검색광고 계정1"] || status.accountCounts?.["쇼핑검색광고 계정1"] || 0);
       const account2 = Number(cache?.accountCounts?.["쇼핑검색광고 계정2"] || status.accountCounts?.["쇼핑검색광고 계정2"] || 0);
-      const refreshedAt = cache?.refreshedAt ? new Date(cache.refreshedAt).toLocaleString("ko-KR") : "없음";
+      const refreshedAt = cache?.refreshedAt ? formatHistoryDate(cache.refreshedAt) : "없음";
       $("searchAdCacheSummary").textContent = payload.cacheExists
         ? `캐시 있음 · 전체 ${Number(cache.uniqueProducts || 0).toLocaleString("ko-KR")}건 · 계정 1 ${account1.toLocaleString("ko-KR")}건 · 계정 2 ${account2.toLocaleString("ko-KR")}건 · 마지막 새로고침 ${refreshedAt}`
         : "상품 캐시 없음 · 먼저 'Search Ad 상품 새로고침'을 실행해주세요.";
@@ -2942,7 +2943,7 @@
       const status = payload.status || {};
       const running = status.state === "running";
       $("candidateCacheSummary").textContent = payload.cacheExists
-        ? `캐시 있음 · 후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · 뷰티 ${Number(cache.categoryCounts?.beauty || 0).toLocaleString("ko-KR")}건 · 건강 ${Number(cache.categoryCounts?.health || 0).toLocaleString("ko-KR")}건 · unknown ${Number(cache.categoryCounts?.unknown || 0).toLocaleString("ko-KR")}건 · 월간검색량 있음 ${Number(cache.monthlyVolumeCounts?.available || 0).toLocaleString("ko-KR")}건 · 마지막 새로고침 ${new Date(cache.refreshedAt).toLocaleString("ko-KR")}`
+        ? `캐시 있음 · 후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · 뷰티 ${Number(cache.categoryCounts?.beauty || 0).toLocaleString("ko-KR")}건 · 건강 ${Number(cache.categoryCounts?.health || 0).toLocaleString("ko-KR")}건 · unknown ${Number(cache.categoryCounts?.unknown || 0).toLocaleString("ko-KR")}건 · 월간검색량 있음 ${Number(cache.monthlyVolumeCounts?.available || 0).toLocaleString("ko-KR")}건 · 마지막 새로고침 ${formatHistoryDate(cache.refreshedAt)}`
         : "검색어 후보 캐시 없음 · 먼저 '검색어 후보 새로고침'을 실행해주세요.";
       $("candidateCacheProgress").textContent = running
         ? status.message || "검색어 후보 동기화 중"
@@ -2983,7 +2984,7 @@
     function renderMarketDiscoveryStatus(payload) {
       const cache = payload.cache || {}; const status = payload.status || {}; const running = status.state === "running";
       $("marketDiscoverySummary").textContent = payload.cacheExists
-        ? `후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · YouTube ${Number(cache.sourceCounts?.youtube || 0).toLocaleString("ko-KR")}건 · 상품 ${Number(cache.sourceCounts?.productCache || 0).toLocaleString("ko-KR")}건 · 신규 유입 ${Number(cache.sourceCounts?.searchAdNewQuery || 0).toLocaleString("ko-KR")}건 · 월간검색량 ${Number(cache.monthlyVolumeCounts?.available || 0).toLocaleString("ko-KR")}건 / 미조회 ${Number(cache.monthlyVolumeCounts?.notRequested || 0).toLocaleString("ko-KR")}건 · ratio-only ${Number(cache.ratioOnlyCandidateCount || 0).toLocaleString("ko-KR")}건 · 마지막 갱신 ${cache.refreshedAt ? new Date(cache.refreshedAt).toLocaleString("ko-KR") : "-"}`
+        ? `후보 ${Number(cache.candidateCount || 0).toLocaleString("ko-KR")}건 · YouTube ${Number(cache.sourceCounts?.youtube || 0).toLocaleString("ko-KR")}건 · 상품 ${Number(cache.sourceCounts?.productCache || 0).toLocaleString("ko-KR")}건 · 신규 유입 ${Number(cache.sourceCounts?.searchAdNewQuery || 0).toLocaleString("ko-KR")}건 · 월간검색량 ${Number(cache.monthlyVolumeCounts?.available || 0).toLocaleString("ko-KR")}건 / 미조회 ${Number(cache.monthlyVolumeCounts?.notRequested || 0).toLocaleString("ko-KR")}건 · ratio-only ${Number(cache.ratioOnlyCandidateCount || 0).toLocaleString("ko-KR")}건 · 마지막 갱신 ${cache.refreshedAt ? formatHistoryDate(cache.refreshedAt) : "-"}`
         : "신규 시장 후보 캐시가 아직 없습니다.";
       const youtube = cache.youtube || {};
       $("marketDiscoveryProgress").textContent = running ? status.message || "신규 시장 후보 수집 중"
@@ -3187,7 +3188,7 @@
       $("statShoppingInsight").textContent = Number(counts.shoppingInsight || 0).toLocaleString("ko-KR");
       $("statNews").textContent = Number(counts.news || 0).toLocaleString("ko-KR");
       $("statMatches").textContent = results.length.toLocaleString("ko-KR");
-      $("statLastRun").innerHTML = formatDateTime(completedAt ? new Date(completedAt) : new Date());
+      $("statLastRun").innerHTML = formatDateTime(completedAt);
       renderTrendChart(surgeRows);
 
       const lowIntensitySignals = results.filter((row) => row.resultType === "low_intensity_early_signal");
@@ -3637,14 +3638,13 @@
     }
 
     function formatHistoryDate(value) {
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return "-";
-      return formatDateTimeText(date);
+      return KstTimePresentation.formatKstTimestamp(value);
     }
 
     function formatFileDate(date) {
-      const pad = (value) => String(value).padStart(2, "0");
-      return `${String(date.getFullYear()).slice(2)}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+      const formatted = KstTimePresentation.formatKstTimestamp(date);
+      const parts = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):\d{2}$/.exec(formatted);
+      return parts ? `${parts[1].slice(2)}${parts[2]}${parts[3]}-${parts[4]}${parts[5]}` : "time-unknown";
     }
 
     function instantRowDateSummary(row) {
@@ -3692,18 +3692,9 @@
     }
 
     function formatDateTime(date) {
-      const pad = (value) => String(value).padStart(2, "0");
-      const dateText = [
-        String(date.getFullYear()).slice(2),
-        pad(date.getMonth() + 1),
-        pad(date.getDate())
-      ].join("-");
-      const timeText = [
-        pad(date.getHours()),
-        pad(date.getMinutes()),
-        pad(date.getSeconds())
-      ].join(":");
-      return `<span class="date-line">${dateText}</span><span class="time-line">${timeText}</span>`;
+      const formatted = KstTimePresentation.formatKstTimestamp(date);
+      const parts = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(formatted);
+      return parts ? `<span class="date-line">${parts[1]}</span> <span class="time-line">${parts[2]}</span>` : escapeHtml(formatted);
     }
 
     function escapeHtml(value) {
@@ -3785,7 +3776,7 @@
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         const settings = applyOperatingSettings(payload.settings);
-        const savedText = settings.savedAt ? ` · ${new Date(settings.savedAt).toLocaleString("ko-KR")}` : " · 기본값";
+        const savedText = settings.savedAt ? ` · ${formatHistoryDate(settings.savedAt)}` : " · 기본값";
         showOperatingSettingsStatus(`✓ 공통 운영 설정 적용${savedText}`, "saved");
         return settings;
       } catch (error) {
@@ -3812,7 +3803,7 @@
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         applyOperatingSettings(payload.settings);
-        showOperatingSettingsStatus(`✓ 설정이 저장되었습니다. · ${new Date(payload.settings.savedAt).toLocaleString("ko-KR")}`, "saved");
+        showOperatingSettingsStatus(`✓ 설정이 저장되었습니다. · ${formatHistoryDate(payload.settings.savedAt)}`, "saved");
         alert("설정이 저장되었습니다.");
       } catch (error) {
         if (previous) applyOperatingSettings(previous);
@@ -3842,7 +3833,7 @@
         if (localStorage.getItem(SETTINGS_STORAGE_KEY) !== serialized) {
           throw new Error("브라우저 저장소 검증에 실패했습니다.");
         }
-        const savedTime = new Date(config.savedAt).toLocaleString("ko-KR");
+        const savedTime = formatHistoryDate(config.savedAt);
         updateSettingsSaveStatus(`✓ 이 브라우저에 저장됨 · ${savedTime}`, "saved");
         log("설정을 브라우저 저장소에 저장하고 검증했습니다.");
         if (notify) alert("설정이 이 브라우저에 저장되었습니다.\nAPI 데이터는 자동으로 호출되지 않으며 [API 데이터 가져오기] 버튼으로 별도 실행합니다.");
@@ -3905,7 +3896,7 @@
         });
         restoreScheduleTimes(config.scheduleTimes);
         updateAlertStateFields();
-        const savedTime = config.savedAt ? new Date(config.savedAt).toLocaleString("ko-KR") : "저장 시간 정보 없음";
+        const savedTime = config.savedAt ? formatHistoryDate(config.savedAt) : "저장 시간 정보 없음";
         updateSettingsSaveStatus(`✓ 저장된 설정 불러옴 · ${savedTime}`, "saved");
       } catch (error) {
         updateSettingsSaveStatus(`설정 불러오기 실패 · ${error.message}`, "error");
