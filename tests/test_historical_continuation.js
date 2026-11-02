@@ -87,8 +87,12 @@ test("uncertain hard-timeout consumption reduces historical safe availability wi
   assert.equal(quota.historicalRemaining(usage).uncertainUsageReserve, 1000);
   assert.equal(quota.historicalRemaining(usage).remaining, 1000);
 });
-test("period interruption UI reports checkpoint progress and resumability", () => {
-  assert.match(html, /기간 분석 중단/); assert.match(html, /저장된 checkpoint\/cache에서 재개 가능/);
+test("interruption UI is mode-aware and requires verified checkpoint evidence for resume wording", () => {
+  assert.match(html, /function analysisInterruptionText\(job/);
+  assert.match(html, /job\.mode === "instant" \? "최신 결과 재계산" : "기간 분석"/);
+  assert.match(html, /proof\?\.verified === true \? "저장된 지점에서 재개 가능"/);
+  assert.match(html, /재개 지점 없음/);
+  assert.doesNotMatch(html, /저장된 checkpoint\/cache에서 재개 가능/);
 });
 test("historical continuation does not alter instant or Early Signal code paths", () => {
   assert.match(background, /job\.historicalCollection/);

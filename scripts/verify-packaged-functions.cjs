@@ -265,6 +265,24 @@ async function childMain(base, mode) {
   for (const result of [latest,status,signal]) {assert.equal(result.statusCode,200);assert.equal(result.json().jobId,target.jobId);}
   assert.equal(digest(latest.json().results),digest(target.results));assert.equal(digest(status.json().results),digest(target.results));
   assert.equal(signal.json().items.length,439);assert.equal(writes.length,0,"Read APIs must not mutate any fixture");
+  // Exercise the changed status entry from the ZIP, not a mocked SDK import.
+  // This synthetic old Period has progress/cache metadata but no checkpoint.
+  const stalePeriod = { jobId: "fixture-old-period-no-checkpoint", mode: "period", fastPath: true,
+    state: "running", createdAt: "2026-11-02T03:15:15.928Z", updatedAt: "2026-11-02T03:15:29.230Z",
+    startDate: "2026-11-01", endDate: "2026-11-02", queryStartDate: "2026-10-03",
+    processedCount: 0, totalCount: 5000, currentStage: "search-trend" };
+  // Make the fixture independent of the test machine's calendar.
+  stalePeriod.createdAt = stalePeriod.updatedAt = new Date(Date.now() - 3600000).toISOString();
+  seed("trend-analysis", `jobs/${stalePeriod.jobId}`, stalePeriod);
+  seed("trend-analysis", "current-job/v1", { jobId: stalePeriod.jobId });
+  const oldCurrent = await invoke("trend-analysis-current"), oldStatus = await invoke("trend-analysis-status", "GET", { jobId: stalePeriod.jobId });
+  assert.equal(oldCurrent.statusCode, 200); assert.equal(oldCurrent.json().stale, true);
+  assert.equal(oldCurrent.json().job.resumeEvidence.verified, false);
+  assert.equal(oldCurrent.json().job.resumeEvidence.status, "missing");
+  assert.equal(oldStatus.statusCode, 200); assert.equal(oldStatus.json().resumeEvidence.status, "missing");
+  assert.equal(digest(JSON.parse(records.get(address("trend-analysis", `jobs/${stalePeriod.jobId}`)).bytes)), digest(stalePeriod));
+  assert.equal(writes.length, 0, "Checkpoint presentation may not mutate old Jobs or locks");
+  const checkpointPresentation = { currentEntryHttp: 200, statusEntryHttp: 200, missingCheckpointNotResumable: true, rawJobUnchanged: true, writes: 0 };
   const exported=await invoke("download-history","POST",{}, {downloadType:"unified_results",periodJobId:target.jobId,periodStartDate:target.startDate,periodEndDate:target.endDate});
   assert.equal(exported.statusCode,201);assert.equal(exported.json().periodJobId,target.jobId);assert.equal(exported.json().sourceJobId,instant.jobId);
   const xlsx=new Map(zipEntries(Buffer.from(exported.json().contentBase64,"base64")).map(entry=>[entry.name,entry.bytes.toString("utf8")]));
@@ -479,7 +497,7 @@ async function childMain(base, mode) {
     latestStatusSnapshotJobMatch:true,excelPeriodRows:439,excelJobId:exported.json().periodJobId,probePhases:phases,probeReport:report.report,
     scheduledDispatcherVerified:true,scheduledDispatcherIdleWrites:0,scheduledDispatcherIdleSourceCalls:0,
     sdkVersions:[...new Set(report.invocations.map(value=>value.sdkVersion))],fixtureBlobReads:calls.filter(x=>x.method==="GET").length,
-    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality,naverStatus,
+    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality,naverStatus,checkpointPresentation,
     excelKst:{...excelKst,actualPackagedEntry:'download-history',sourceTimestampsUnchanged:true,apiCreatedAtUtcIso:kstPayload.createdAt}}));
 }
 async function main() {

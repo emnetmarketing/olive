@@ -74,15 +74,19 @@ test("main yesterday metadata is updated only by the instant renderer", () => {
 
 test("period analysis does not clear the main automatic results", () => {
   const html = fs.readFileSync("index.html", "utf8");
-  assert.match(html, /if \(mode === "instant"\) clearAnalysisUI/);
-  assert.doesNotMatch(html, /if \(mode === "period"\) clearAnalysisUI/);
+  const { extractFunction } = require("../scripts/verify-deployed-period-display.cjs");
+  // Both modes now retain published results while the requested Job is checked.
+  // Executable pending/completed cases live in test_analysis_request_context.js.
+  assert.doesNotMatch(extractFunction(html, "analyze"), /clearAnalysisUI\(/);
 });
 
 test("period polling cannot replace the main current analysis state", () => {
   const html = fs.readFileSync("index.html", "utf8");
   const { extractFunction } = require("../scripts/verify-deployed-period-display.cjs");
   const poll = extractFunction(html, "pollAnalysis");
-  assert.match(poll, /if \(job\.mode === "period"\) state\.currentPeriodAnalysisJob = job/);
+  // Running Period progress must not replace the stored completed Period Job
+  // either: an incomplete row set is not an exportable published result.
+  assert.doesNotMatch(poll, /state\.currentPeriodAnalysisJob\s*=/);
   // Neither Period nor unselected Instant progress may overwrite the main
   // result. Even a completed Instant must first resolve the published pointer.
   assert.doesNotMatch(poll, /state\.currentAnalysisJob\s*=/);
@@ -92,7 +96,8 @@ test("period polling cannot replace the main current analysis state", () => {
 test("instant analysis does not clear the period result panel", () => {
   const html = fs.readFileSync("index.html", "utf8");
   const analyze = html.slice(html.indexOf("async function analyze"), html.indexOf("function finishAnalysisControls"));
-  assert.match(analyze, /if \(mode === "instant"\) clearAnalysisUI[\s\S]*else \{[\s\S]*periodAnalysisBody/);
+  assert.match(analyze, /if \(mode === "period"\) \{[\s\S]*periodAnalysisBody/);
+  assert.doesNotMatch(analyze, /if \(mode === "instant"\)[^{;]*\{[^}]*periodAnalysisBody/);
 });
 
 test("today Early Signal remains backed by its independent cache endpoint", () => {

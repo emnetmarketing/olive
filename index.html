@@ -1602,6 +1602,7 @@
             <pre id="marketDiscoveryDiagnosticResult" style="max-height:360px;overflow:auto;white-space:pre-wrap;font-size:12px;margin-top:8px;"></pre>
           </details>
         </div>
+        <div id="analysisPreviousJobNotice" class="muted" hidden></div>
         <div id="analysisProgressPanel" class="api-errors" style="margin-bottom:16px;">
           <strong>분석 진행 상태</strong><br><span id="analysisProgressText"></span>
         </div>
@@ -1686,6 +1687,7 @@
         <h2>선택 기간 분석 결과</h2>
         <div id="periodStoredResultMeta" class="muted" hidden></div>
         <div id="periodAnalysisMeta" class="muted">선택한 기간의 분석 결과가 아직 없습니다.</div>
+        <div id="periodPreviousJobNotice" class="muted" hidden></div>
         <p class="muted">저장된 과거 기간 결과는 요청 기간과 실제 사용 데이터 기간을 구분해 확인해주세요. 선택한 기간과 일치하는 완료 결과만 아래 표에 표시하며, 오늘·어제 자동 최신 결과와는 별개입니다. 새 기간 분석을 실행하면 저장된 기간 데이터를 우선 사용하고, 부족한 경우 필요한 NAVER Trend 데이터만 자동 수집합니다.</p>
         <h3>TOP 10</h3>
         <div class="table-wrap"><table>
@@ -1979,6 +1981,9 @@
     function logout() {
       stopCurrentJobWatcher();
       finishAnalysisControls();
+      analysisRequestVersion += 1;
+      analysisContext = null;
+      activePeriodOneClick = null;
       state.currentUser = null;
       sessionStorage.removeItem("monitoringCurrentUser");
       applyAuthState();
@@ -2449,10 +2454,58 @@
     let currentJobWatchTimer = null;
     let activeAnalysisJobId = null;
     let activePeriodOneClick = null;
+    // Keep request identity after completion; activeAnalysisJobId alone is
+    // cleared when polling ends and cannot fence a late watcher response.
+    let analysisRequestVersion = 0;
+    let analysisContext = null;
+    let analysisStatusReadVersion = 0;
+    let analysisPollInFlight = null;
+    const analysisResultReadVersion = { instant: 0, period: 0 };
     const HISTORICAL_START_MAX_ATTEMPTS = 3;
     const HISTORICAL_START_RETRY_MS = 1500;
     let lastMarketTrendStatusLoad = 0;
     const CURRENT_JOB_WATCH_INTERVAL_MS = 8000;
+
+    function beginAnalysisRequest(mode) {
+      if (analysisPollTimer) clearTimeout(analysisPollTimer);
+      analysisPollTimer = null;
+      activeAnalysisJobId = null;
+      analysisContext = { version: ++analysisRequestVersion, mode, jobId: null, busy: true,
+        startDate: $("collectionStart").value, endDate: $("collectionEnd").value };
+      return analysisContext;
+    }
+
+    function isAnalysisRequestCurrent(context, jobId = null) {
+      return Boolean(context && context === analysisContext && context.busy
+        && (!jobId || context.jobId === jobId));
+    }
+
+    function analysisViewStamp() {
+      return `${analysisRequestVersion}:${analysisContext?.jobId || ""}:${Boolean(analysisContext?.busy)}`;
+    }
+
+    function analysisInterruptionText(job, { previous = false } = {}) {
+      const mode = job.mode === "instant" ? "최신 결과 재계산" : "기간 분석";
+      const proof = job.resumeEvidence;
+      const resume = proof?.verified === true ? "저장된 지점에서 재개 가능"
+        : proof?.status === "missing" ? "재개 지점 없음" : "재개 지점 확인 불가";
+      const cursor = proof?.verified ? proof.cursor : job.processedCount;
+      const total = proof?.verified ? proof.totalCount : job.totalCount;
+      const counts = Number.isSafeInteger(cursor) && Number.isSafeInteger(total)
+        ? ` · ${cursor.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} 처리` : "";
+      return `${previous ? "이전 " : ""}${mode} 중단 · ${resume}${counts}`;
+    }
+
+    function displayUntrackedAnalysisJob(job, payload = {}) {
+      const element = $(job.mode === "period" ? "periodPreviousJobNotice" : "analysisPreviousJobNotice");
+      if (!element) return;
+      const stopped = payload.stale || ["failed", "interrupted", "continuation_failed", "publication_failed"].includes(job.state);
+      const description = stopped ? analysisInterruptionText(job, { previous: true })
+        : `${job.mode === "period" ? "별도 기간 분석" : "별도 최신 분석"} 진행 기록 · ${job.message || job.state}`;
+      element.hidden = false;
+      element.textContent = `${description} · ${job.startDate || "-"} ~ ${job.endDate || "-"}`
+        + ` · 마지막 기록 ${formatHistoryDate(job.updatedAt || job.createdAt)} · Job ${job.jobId}`;
+    }
 
     function startCurrentJobWatcher() {
       if (currentJobWatchTimer || !state.currentUser) return;
@@ -2478,26 +2531,33 @@
 
     async function analyze(mode = "period") {
       if (!requireOperate(mode === "instant" ? "즉시 분석" : "기간 분석")) return;
-      if (!state.operatingSettingsLoaded) await loadOperatingSettings();
+      if (analysisContext?.busy) return;
+      const context = beginAnalysisRequest(mode);
+      try { if (!state.operatingSettingsLoaded) await loadOperatingSettings(); }
+      catch (error) {
+        if (!isAnalysisRequestCurrent(context)) return;
+        showApiErrors({ "분석 설정": error.message }); finishAnalysisControls(context); return;
+      }
+      if (!isAnalysisRequestCurrent(context)) return;
       if (!state.operatingSettings) {
         showApiErrors({ "분석 설정": "공통 운영 설정을 불러오지 못해 분석을 시작할 수 없습니다." });
+        finishAnalysisControls(context);
         return;
       }
-      if (mode === "instant") clearAnalysisUI("저장된 최신 데이터로 최신 결과를 다시 계산하는 중입니다.");
-      else {
-        if (activePeriodOneClick?.active) return;
-        activePeriodOneClick = { active: true, phase: "initial-fast", startDate: $("collectionStart").value,
-          endDate: $("collectionEnd").value, collectionAttempted: false };
+      if (mode === "period") {
+        if (activePeriodOneClick?.active) { finishAnalysisControls(context); return; }
+        activePeriodOneClick = { active: true, phase: "initial-fast", startDate: context.startDate,
+          endDate: context.endDate, collectionAttempted: false };
         $("periodAnalysisMeta").textContent = "선택 기간 분석 준비 중 · exact-window cache를 확인하고 있습니다.";
         $("periodAnalysisBody").innerHTML = '<tr><td colspan="10" class="muted">분석 중입니다.</td></tr>';
       }
       showApiErrors();
       if (mode === "period") {
-        const days = inclusiveAnalysisDays($("collectionStart").value, $("collectionEnd").value);
+        const days = inclusiveAnalysisDays(context.startDate, context.endDate);
         if (!Number.isFinite(days) || days < 1 || days > 31) {
           showApiErrors({ "분석 기간": "분석 기간은 시작일과 종료일을 포함하여 1~31일이어야 합니다." });
           activePeriodOneClick = null;
-          finishAnalysisControls();
+          finishAnalysisControls(context);
           return;
         }
       }
@@ -2506,33 +2566,68 @@
       $("runBtn").disabled = true;
       $("instantRunBtn").disabled = true;
       $("analysisProgressPanel").classList.add("visible");
-      $("analysisProgressText").textContent = "분석 작업 생성 중";
+      $("analysisProgressText").textContent = "분석 조건과 저장 결과 확인 중";
       try {
         const response = await fetch("/.netlify/functions/trend-analysis-start", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode,
-            startDate: $("collectionStart").value, endDate: $("collectionEnd").value })
+            startDate: context.startDate, endDate: context.endDate })
         });
         const payload = await response.json().catch(() => ({}));
+        if (!isAnalysisRequestCurrent(context)) return;
         if (!response.ok) throw new Error(payload.error || `분석 시작 HTTP ${response.status}`);
+        if (!payload.jobId) throw new Error("분석 Job 응답을 확인할 수 없습니다.");
+        if (payload.mode && payload.mode !== mode) {
+          throw new Error("다른 종류의 작업이 실행 중입니다. 이번 요청의 작업으로 표시하지 않습니다.");
+        }
+        context.jobId = payload.jobId;
+        // Instant reuse is terminal. Period retains its existing One-Click
+        // missing-window collection flow; this display fix does not change it.
+        if (payload.cachedSnapshot === true && mode === "instant") {
+          const savedResponse = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(payload.jobId)}`, { cache: "no-store" });
+          const saved = await savedResponse.json().catch(() => ({}));
+          if (!isAnalysisRequestCurrent(context, payload.jobId)) return;
+          if (!savedResponse.ok || saved.jobId !== payload.jobId || saved.mode !== mode || saved.state !== "completed"
+            || (mode === "period" && (saved.startDate !== context.startDate || saved.endDate !== context.endDate)))
+            throw new Error("저장된 결과의 Job·종류·완료 상태가 요청과 일치하지 않습니다.");
+          displayCompletedAnalysis(saved);
+          const reuseText = `조건이 같아 저장된 최신 결과를 표시했습니다 · 데이터 기준일 ${saved.latestDataDate || "확인 불가"}`
+            + ` · 완료 ${formatHistoryDate(saved.completedAt)} · 한국시간(KST) · Job ${saved.jobId}`;
+          $("analysisProgressText").textContent = reuseText;
+          finishAnalysisControls(context);
+          return;
+        }
         if (payload.existing) { alert(payload.message || "현재 Background 작업이 실행 중입니다."); await loadLastSuccessfulAnalysis(mode); }
-        await pollAnalysis(payload.jobId, mode === "period" ? activePeriodOneClick : null);
+        if (!isAnalysisRequestCurrent(context, payload.jobId)) return;
+        await pollAnalysis(payload.jobId, mode === "period" ? activePeriodOneClick : null, context);
       } catch (error) {
-        if (mode === "instant") clearAnalysisUI("최신 결과 재계산에 실패했습니다. 마지막 정상 자동 결과를 복원하는 중입니다.");
-        else $("periodAnalysisMeta").textContent = `기간 분석 실패: ${error.message}`;
+        if (!isAnalysisRequestCurrent(context)) return;
         await loadLastSuccessfulAnalysis(mode);
+        if (!isAnalysisRequestCurrent(context)) return;
         showApiErrors({ "분석 실행": error.message });
+        $("analysisProgressPanel").classList.add("visible");
+        $("analysisProgressText").textContent = `${mode === "instant" ? "최신 결과 재계산" : "기간 분석"} 실패: ${error.message}`;
+        if (mode === "period") $("periodAnalysisMeta").textContent = `기간 분석 실패: ${error.message}`;
         if (mode === "period") activePeriodOneClick = null;
-        finishAnalysisControls();
+        finishAnalysisControls(context);
       }
     }
 
-    function finishAnalysisControls() {
+    function finishAnalysisControls(context = analysisContext) {
+      if (context && context !== analysisContext) return;
       $("runBtn").disabled = !canOperate();
       $("instantRunBtn").disabled = !canOperate();
       if (analysisPollTimer) clearTimeout(analysisPollTimer);
       analysisPollTimer = null;
       activeAnalysisJobId = null;
+      if (context) {
+        context.busy = false;
+        if (context.mode === "period" && activePeriodOneClick) {
+          activePeriodOneClick.active = false;
+          activePeriodOneClick = null;
+        }
+      }
+      analysisStatusReadVersion += 1;
     }
 
     function periodSelectionMatchesJob(job) {
@@ -2633,29 +2728,39 @@
       if ($("periodResultSearch")) $("periodResultSearch").value = "";
       if (periodSelectionMatchesJob(job)) renderPeriodResultTables();
       else refreshPeriodSelectionDisplay();
-      $("analysisProgressPanel").classList.toggle("visible", !restored);
-      $("analysisProgressText").textContent = `${restored ? "저장된 기간 결과 복원" : "기간 분석 완료"} · ${job.startDate || "-"} ~ ${job.endDate || "-"} · coverage ${Number(job.trendCoveragePct || 0)}% · 결과 ${rows.length.toLocaleString("ko-KR")}건`;
+      if (!restored && (typeof analysisContext === "undefined" || !analysisContext || analysisContext.mode === "period")) {
+        $("analysisProgressPanel").classList.add("visible");
+        $("analysisProgressText").textContent = `기간 분석 완료 · ${job.startDate || "-"} ~ ${job.endDate || "-"} · coverage ${Number(job.trendCoveragePct || 0)}% · 결과 ${rows.length.toLocaleString("ko-KR")}건`;
+      }
       return rows;
     }
 
     async function collectPeriodData() {
       if (!requireOperate("선택 기간 데이터 수집")) return;
+      if (analysisContext?.busy) return;
       const startDate = $("collectionStart").value; const endDate = $("collectionEnd").value;
       if (!confirm(`${startDate} ~ ${endDate} exact-window Trend 데이터가 부족한 후보를 수집합니다.\nNAVER Search Trend API와 기간 분석 전용 quota를 사용합니다. 계속할까요?`)) return;
+      const context = beginAnalysisRequest("period");
       $("collectPeriodDataBtn").disabled = true;
       $("periodAnalysisMeta").textContent = `선택 기간 데이터 준비 중 · ${startDate} ~ ${endDate}`;
       try {
         const response = await fetch("/.netlify/functions/trend-period-data-collection-start", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: "period", startDate, endDate, triggerSource: "user-historical-period" }) });
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-        await pollAnalysis(payload.jobId);
+        if (!isAnalysisRequestCurrent(context)) return;
+        context.jobId = payload.jobId;
+        await pollAnalysis(payload.jobId, null, context);
       } catch (error) {
+        if (!isAnalysisRequestCurrent(context)) return;
         $("periodAnalysisMeta").textContent = `선택 기간 데이터 준비 실패: ${error.message}`;
         showApiErrors({ "선택 기간 데이터 수집": error.message });
-      } finally { $("collectPeriodDataBtn").disabled = !canOperate(); }
+        finishAnalysisControls(context);
+      } finally { if (context === analysisContext) $("collectPeriodDataBtn").disabled = !canOperate(); }
     }
 
     async function startPeriodOneClickStep(flow, endpoint, phase, triggerSource) {
+      const context = analysisContext;
+      if (!isAnalysisRequestCurrent(context)) return;
       flow.phase = phase;
       const collecting = phase === "historical-collection";
       $("periodAnalysisMeta").textContent = collecting
@@ -2666,11 +2771,13 @@
         const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: "period", startDate: flow.startDate, endDate: flow.endDate, triggerSource }) });
         const payload = await response.json().catch(() => ({}));
+        if (!isAnalysisRequestCurrent(context)) return;
         const matchingHistorical = payload.mode === "period" && payload.historicalCollection === true && payload.fastPath === false
           && payload.startDate === flow.startDate && payload.endDate === flow.endDate
           && payload.queryStartDate === flow.requiredWindowStart;
         if (response.ok && (!collecting || matchingHistorical)) {
-          await pollAnalysis(payload.jobId, flow);
+          context.jobId = payload.jobId;
+          await pollAnalysis(payload.jobId, flow, context);
           return;
         }
         const retryableMismatch = collecting && (payload.errorCode === "INCOMPATIBLE_ACTIVE_JOB"
@@ -2682,6 +2789,7 @@
         }
         $("periodAnalysisMeta").textContent = `기간 데이터 수집 Job 확인 재시도 ${attempt}/${attempts - 1} · 현재 coverage ${Number(flow.initialCoveragePct || 0)}%`;
         await new Promise((resolve) => setTimeout(resolve, HISTORICAL_START_RETRY_MS));
+        if (!isAnalysisRequestCurrent(context)) return;
       }
     }
 
@@ -2708,7 +2816,7 @@
       return false;
     }
 
-    function displayCompletedAnalysis(job, { restored = false } = {}) {
+    function displayCompletedAnalysis(job, { restored = false, preserveProgress = false } = {}) {
       if (job.mode === "period") return displayPeriodAnalysis(job, { restored });
       const results = (job.results || []).map((row) => ({
         ...row, today: Number(row.estimatedLatest || 0), yesterday: Number(row.estimatedBaseline || 0),
@@ -2734,13 +2842,18 @@
       $("yesterdaySurgeMeta").textContent += ` · 상품 매칭 cache 관측 ${job.productCacheObservedAt ? formatHistoryDate(job.productCacheObservedAt) : "기록 없음"} (NAVER 기준일과 별도)`;
       render({ searchAd: job.searchAdCount, datalab: job.analyzedCandidateCount, shoppingInsight: job.analyzedCandidateCount,
         news: results.filter((row) => row.news).length }, results, results.slice(0, 10), job.completedAt);
-      $("analysisProgressPanel").classList.toggle("visible", !restored);
       const coverage = job.partialAnalysis ? ` · 부분 분석 · Trend 커버리지 ${Number(job.trendAvailableCount || 0).toLocaleString("ko-KR")} / ${Number(job.analyzedCandidateCount || 0).toLocaleString("ko-KR")} (${Number(job.trendCoveragePct || 0)}%) · 대기 ${Number(job.pendingTrendCacheCount || 0).toLocaleString("ko-KR")}건` : " · 전체 분석";
-      $("analysisProgressText").textContent = `${restored ? "저장 결과 복원" : "분석 완료"} · ${job.mode === "instant" ? "즉시 분석" : "기간 분석"}${coverage} · 결과 ${results.length.toLocaleString("ko-KR")}건 · 기준 ${Number(job.surgeThreshold).toLocaleString("ko-KR")} / ${job.matchThreshold}%`;
+      if (!preserveProgress) {
+        $("analysisProgressPanel").classList.toggle("visible", !restored);
+        $("analysisProgressText").textContent = `${restored ? "저장 결과 복원" : "분석 완료"} · ${job.mode === "instant" ? "즉시 분석" : "기간 분석"}${coverage} · 결과 ${results.length.toLocaleString("ko-KR")}건 · 기준 ${Number(job.surgeThreshold).toLocaleString("ko-KR")} / ${job.matchThreshold}%`;
+      }
       return results;
     }
 
     async function loadLastSuccessfulAnalysis(mode = "instant") {
+      const stamp = analysisViewStamp();
+      const readVersion = ++analysisResultReadVersion[mode];
+      const current = () => stamp === analysisViewStamp() && readVersion === analysisResultReadVersion[mode];
       try {
         if (mode === "instant") {
           // Main UI and Excel follow the same valid snapshot. A late-completing
@@ -2756,7 +2869,8 @@
           if (job.mode !== "instant" || job.state !== "completed" || job.jobId !== snapshot.jobId
             || job.latestDataDate !== snapshot.latestDataDate || Number(job.trendCoveragePct) !== Number(snapshot.trendCoveragePct)
             || (job.results || []).length !== (snapshot.items || []).length) throw new Error("자동 결과 snapshot과 Job이 일치하지 않습니다.");
-          displayCompletedAnalysis(job, { restored: true });
+          if (!current()) return null;
+          displayCompletedAnalysis(job, { restored: true, preserveProgress: Boolean(analysisContext) });
           return job;
         }
         const responses = await Promise.all(["full", "partial"].map((result) => fetch(`/.netlify/functions/trend-analysis-latest?mode=${encodeURIComponent(mode)}&result=${result}`, { cache: "no-store" })));
@@ -2767,27 +2881,47 @@
         const job = jobs.filter(Boolean).sort((a, b) => resultGeneration(b) - resultGeneration(a))[0];
         if (!job) return null;
         if (job.state !== "completed") return null;
-        displayCompletedAnalysis(job, { restored: true });
+        if (!current()) return null;
+        displayCompletedAnalysis(job, { restored: true, preserveProgress: Boolean(analysisContext) });
         return job;
       } catch (error) {
+        if (!current()) return null;
         showApiErrors({ "마지막 분석 결과": error.message });
         return null;
       }
     }
 
-    async function pollAnalysis(jobId, periodFlow = null) {
+    async function pollAnalysis(jobId, periodFlow = null, context = null) {
+      if (!context) {
+        context = analysisContext?.busy && analysisContext.jobId === jobId
+          ? analysisContext : beginAnalysisRequest(periodFlow ? "period" : null);
+        context.jobId = jobId;
+      }
+      if (!isAnalysisRequestCurrent(context, jobId)) return;
+      if (analysisPollInFlight?.context === context && analysisPollInFlight.jobId === jobId) return;
+      if (analysisPollTimer) clearTimeout(analysisPollTimer);
+      analysisPollTimer = null;
+      const pollToken = { context, jobId };
+      analysisPollInFlight = pollToken;
       activeAnalysisJobId = jobId;
       let polledJob = null;
       try {
         const response = await fetch(`/.netlify/functions/trend-analysis-status?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
         const job = await response.json().catch(() => ({}));
+        if (!isAnalysisRequestCurrent(context, jobId)) return;
+        analysisStatusReadVersion += 1;
         polledJob = job;
         if (!response.ok) throw new Error(job.error || `분석 상태 HTTP ${response.status}`);
-        if (job.mode === "period") state.currentPeriodAnalysisJob = job;
+        if (job.jobId !== jobId || (context.mode && job.mode !== context.mode)
+          || (context.mode === "period" && (job.startDate !== context.startDate || job.endDate !== context.endDate))) {
+          displayUntrackedAnalysisJob(job);
+          throw new Error("응답 Job·분석 종류·기간이 현재 요청과 일치하지 않습니다.");
+        }
+        context.mode = job.mode;
         // Instant progress (including a deliberate source-date wait) is not a
         // replacement for the selected published result. Its only assignment
         // path is loadLastSuccessfulAnalysis after the saved pointer is read.
-        const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-checkpoint": "기간 계산 continuation 준비", "calculation-matching": "급등 계산 및 상품 매칭", "continuation_failed": "기간 분석 continuation 실패 · 재개 가능", "interrupted": "기간 분석 중단 · 재개 가능", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
+        const stageLabels = { "preparing": "분석 준비", "search-trend": "검색어트렌드 조회", "shopping-trend": "쇼핑 트렌드 조회", "calculation-checkpoint": "계산 이어가기 준비", "calculation-matching": "급등 계산 및 상품 매칭", "continuation_failed": "다음 실행 전달 실패", "interrupted": "분석 중단", "news": "뉴스 이슈 확인", "completed": "분석 완료" };
         const periodText = job.mode === "instant" ? "즉시 분석" : periodFlow?.phase === "historical-collection"
           ? `NAVER 기간 데이터 수집 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`
           : `기간 분석 중 · ${job.startDate || "-"} ~ ${job.endDate || "-"}`;
@@ -2800,12 +2934,18 @@
         const activePeriod = job.mode === "period" && ["running", "publishing", "recovering"].includes(job.state);
         const stalePeriod = activePeriod && progressAgeMs >= 12 * 60 * 1000;
         const livePeriodStatus = activePeriod
-          ? stalePeriod ? ` · ${job.state === "publishing" ? "결과 게시가 중단된 것으로 보입니다" : "계산이 중단된 것으로 보입니다"} · 재개 가능 · 마지막 진행 갱신 ${progressAgeLabel}`
+          ? stalePeriod ? ` · ${analysisInterruptionText(job)} · 마지막 진행 갱신 ${progressAgeLabel}`
             : ` · ${job.state === "publishing" ? "계산 완료 · 결과 게시 중" : "정상 계산 중"} · 마지막 진행 갱신 ${progressAgeLabel}` : "";
         $("analysisProgressText").textContent = `${periodText}${started} · ${stageLabels[job.currentStage] || job.message || "분석 중"}${counts} · ${Number(job.progress || 0)}%${livePeriodStatus}`;
+        $("analysisProgressPanel").classList.add("visible");
         if (["running", "publishing", "recovering"].includes(job.state)) {
-          if (stalePeriod) { finishAnalysisControls(); return; }
-          analysisPollTimer = setTimeout(() => pollAnalysis(jobId, periodFlow), 3000);
+          if (stalePeriod || job.stale) {
+            $("analysisProgressText").textContent = analysisInterruptionText(job);
+            if (job.mode === "period") displayUntrackedAnalysisJob(job, { stale: true });
+            if (periodFlow) { periodFlow.active = false; activePeriodOneClick = null; }
+            finishAnalysisControls(context); return;
+          }
+          analysisPollTimer = setTimeout(() => pollAnalysis(jobId, periodFlow, context), 3000);
           return;
         }
         if (job.mode === "instant" && job.state === "deferred") {
@@ -2817,33 +2957,42 @@
                 ? "기존 예산 한도로 목표일 확인 보류 · 기존 정상 게시 결과 유지"
                 : "목표일 확인 보류 · 기존 정상 게시 결과 유지";
           await Promise.allSettled([loadLastSuccessfulAnalysis("instant"), loadTrendCacheStatus()]);
-          finishAnalysisControls(); return;
+          if (!isAnalysisRequestCurrent(context, jobId)) return;
+          finishAnalysisControls(context); return;
         }
         if (["continuation_failed", "interrupted"].includes(job.state)) {
-          $("periodAnalysisMeta").textContent = `기간 분석 continuation 실패 · ${Number(job.lastCursor || job.processedCount || 0).toLocaleString("ko-KR")} / ${Number(job.totalCount || 0).toLocaleString("ko-KR")} 처리 · 저장된 checkpoint/cache에서 재개 가능`;
-          $("analysisProgressText").textContent = "기간 분석이 중단되었습니다. 이미 수집·계산한 데이터는 보존되었습니다.";
+          $("analysisProgressText").textContent = analysisInterruptionText(job);
+          if (job.mode === "period") $("periodAnalysisMeta").textContent = analysisInterruptionText(job);
           if (periodFlow) { periodFlow.active = false; activePeriodOneClick = null; }
-          finishAnalysisControls(); return;
+          finishAnalysisControls(context); return;
         }
         if (job.state === "publication_failed") {
-          $("periodAnalysisMeta").textContent = "계산 결과는 보존되었으나 결과 게시가 완료되지 않았습니다. 게시 단계 재시도가 필요합니다.";
-          finishAnalysisControls(); return;
+          const notice = "결과 게시가 완료되지 않았습니다. 저장된 최종 결과 확인 후 게시 단계 재시도가 필요합니다.";
+          $("analysisProgressText").textContent = notice;
+          if (job.mode === "period") $("periodAnalysisMeta").textContent = notice;
+          finishAnalysisControls(context); return;
         }
         if (job.state === "failed") throw new Error((job.errors || []).join(" / ") || "분석 작업 실패");
-        if (job.state !== "completed") { finishAnalysisControls(); return; }
+        if (job.state !== "completed") { finishAnalysisControls(context); return; }
         if (periodFlow?.active && job.mode === "period" && await continuePeriodOneClick(job, periodFlow)) return;
+        if (!isAnalysisRequestCurrent(context, jobId)) return;
         const displayedInstant = job.mode === "instant" ? await loadLastSuccessfulAnalysis("instant") : null;
+        if (!isAnalysisRequestCurrent(context, jobId)) return;
         const results = job.mode === "instant" ? displayedInstant?.results || [] : displayCompletedAnalysis(job);
+        if (job.mode === "instant") $("analysisProgressText").textContent = `최신 결과 계산 완료 · Job ${job.jobId}`
+          + ` · 현재 게시 결과 ${displayedInstant?.jobId || "확인 불가"} · ${results.length.toLocaleString("ko-KR")}건`;
         await Promise.allSettled([loadTrendCacheStatus(), loadMarketDiscoveryNewList(), loadTodayEarlySignals()]);
+        if (!isAnalysisRequestCurrent(context, jobId)) return;
         log(`${job.mode === "instant" ? "즉시" : "기간"} 분석 완료: 결과 ${results.length}건, 급등수 ${Number(job.surgeThreshold).toLocaleString("ko-KR")}, 일치율 ${job.matchThreshold}%`);
-        finishAnalysisControls();
+        finishAnalysisControls(context);
       } catch (error) {
+        if (!isAnalysisRequestCurrent(context, jobId)) return;
         if (periodFlow?.active && error.periodCollectionStartFailed) {
           const available = Number(periodFlow.lastAvailable || 0); const total = Number(periodFlow.lastTotal || 0);
           $("periodAnalysisMeta").textContent = `기간 데이터 수집 시작 실패 · 현재 coverage ${available.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")} (${Number(periodFlow.initialCoveragePct || 0)}%) · pending ${Math.max(0, total - available).toLocaleString("ko-KR")}건 · 잠시 후 재시도 가능`;
           showApiErrors({ "기간 데이터 수집 시작 실패": error.message });
           $("analysisProgressText").textContent = "기간 데이터 수집 시작 실패 · 기존 기간 snapshot과 cache는 유지됩니다.";
-          periodFlow.active = false; activePeriodOneClick = null; finishAnalysisControls();
+          periodFlow.active = false; activePeriodOneClick = null; finishAnalysisControls(context);
           return;
         }
         if (periodFlow?.active && periodFlow.phase === "historical-collection") {
@@ -2852,33 +3001,56 @@
             await startPeriodOneClickStep(periodFlow, "/.netlify/functions/trend-analysis-start",
               "final-fast", "user-period-one-click-recovery-fast");
             return;
-          } catch (recoveryError) { error = recoveryError; }
+          } catch (recoveryError) { if (!isAnalysisRequestCurrent(context)) return; error = recoveryError; }
         }
-        if (polledJob?.mode === "instant") clearAnalysisUI("최신 결과 재계산에 실패했습니다. 마지막 정상 자동 결과를 복원하는 중입니다.");
-        else $("periodAnalysisMeta").textContent = `기간 분석 실패: ${error.message}`;
-        await loadLastSuccessfulAnalysis(polledJob?.mode || "instant");
+        const mode = context.mode || polledJob?.mode || "instant";
+        await loadLastSuccessfulAnalysis(mode);
+        if (!isAnalysisRequestCurrent(context)) return;
         showApiErrors({ "분석 실행": error.message });
+        $("analysisProgressPanel").classList.add("visible");
         $("analysisProgressText").textContent = `분석 실패: ${error.message}`;
+        if (mode === "period") $("periodAnalysisMeta").textContent = `기간 분석 실패: ${error.message}`;
         if (periodFlow) { periodFlow.active = false; activePeriodOneClick = null; }
-        finishAnalysisControls();
+        finishAnalysisControls(context);
+      } finally {
+        if (analysisPollInFlight === pollToken) analysisPollInFlight = null;
       }
     }
 
     async function loadCurrentAnalysis() {
+      const stamp = analysisViewStamp();
+      const readVersion = ++analysisStatusReadVersion;
       try {
         const response = await fetch("/.netlify/functions/trend-analysis-current", { cache: "no-store" });
         const payload = await response.json().catch(() => ({}));
+        if (stamp !== analysisViewStamp() || readVersion !== analysisStatusReadVersion) return null;
         if (!response.ok || !payload.job?.jobId) return null;
+        const job = payload.job;
+        // A global lock is not the user's selected request. Retain unrelated
+        // history separately, including after the selected request completes.
+        if (analysisContext && (analysisContext.jobId !== job.jobId || analysisContext.mode !== job.mode)) {
+          displayUntrackedAnalysisJob(job, payload); return job;
+        }
+        if (analysisContext && !analysisContext.busy) return job;
         if (payload.stale) {
-          $("analysisProgressPanel").classList.add("visible");
-          $("analysisProgressText").textContent = `기간 분석 중단 · ${Number(payload.job.lastCursor || 0).toLocaleString("ko-KR")} / ${Number(payload.job.totalCount || 0).toLocaleString("ko-KR")} 처리 · 저장된 checkpoint/cache에서 재개 가능`;
-          return payload.job;
+          if (analysisContext) {
+            $("analysisProgressPanel").classList.add("visible");
+            $("analysisProgressText").textContent = analysisInterruptionText(job);
+            finishAnalysisControls(analysisContext);
+          }
+          displayUntrackedAnalysisJob(job, payload);
+          return job;
         }
         if (!payload.running) return null;
+        if (job.mode === "period" && !periodSelectionMatchesJob(job)) {
+          displayUntrackedAnalysisJob(job, payload); return job;
+        }
+        const context = analysisContext || beginAnalysisRequest(job.mode);
+        context.jobId = job.jobId;
         $("analysisProgressPanel").classList.add("visible");
         $("runBtn").disabled = true; $("instantRunBtn").disabled = true;
-        if (activeAnalysisJobId !== payload.job.jobId) pollAnalysis(payload.job.jobId);
-        return payload.job;
+        if (activeAnalysisJobId !== job.jobId) pollAnalysis(job.jobId, null, context);
+        return job;
       } catch { return null; }
     }
 
@@ -3118,14 +3290,22 @@
 
     async function startLatestDataCollection() {
       if (!requireEdit("최신 데이터 수집")) return;
+      if (analysisContext?.busy) return;
+      const context = beginAnalysisRequest("instant");
       $("latestDataCollectionBtn").disabled = true;
       try {
         const response = await fetch("/.netlify/functions/trend-data-collection-start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "instant" }) });
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        if (!isAnalysisRequestCurrent(context)) return;
+        context.jobId = payload.jobId;
         $("analysisProgressPanel").classList.add("visible"); $("analysisProgressText").textContent = payload.message || "Background 최신 데이터 수집을 시작했습니다.";
-        pollAnalysis(payload.jobId); await loadLastSuccessfulAnalysis("instant");
-      } catch (error) { showApiErrors({ "최신 데이터 수집": error.message }); }
-      finally { $("latestDataCollectionBtn").disabled = !canEdit(); }
+        await loadLastSuccessfulAnalysis("instant");
+        if (isAnalysisRequestCurrent(context, payload.jobId)) await pollAnalysis(payload.jobId, null, context);
+      } catch (error) {
+        if (!isAnalysisRequestCurrent(context)) return;
+        showApiErrors({ "최신 데이터 수집": error.message }); finishAnalysisControls(context);
+      }
+      finally { if (context === analysisContext) $("latestDataCollectionBtn").disabled = !canEdit(); }
     }
     async function loadMarketDiscoveryNewList() {
       if (!canOperate()) return;

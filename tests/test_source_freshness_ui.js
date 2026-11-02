@@ -7,7 +7,7 @@ const html = fs.readFileSync("index.html", "utf8");
 const now = new Date("2026-10-16T09:10:00.000Z");
 function runtime(payload, endpoint = "trend-cache-status") {
   const nodes = new Map(), requests = [];
-  const node = id => { if (!nodes.has(id)) nodes.set(id, { textContent: "", innerHTML: "", style: {}, classList: { toggle() {} } }); return nodes.get(id); };
+  const node = id => { if (!nodes.has(id)) nodes.set(id, { textContent: "", innerHTML: "", style: {}, classList: { toggle() {}, add() {}, remove() {} } }); return nodes.get(id); };
   const context = vm.createContext({ KstTimePresentation: require("../shared/kst-time-presentation"), state: { currentAnalysisJob: { jobId: "instant96", results: Array(96).fill({}), analyzedCandidateCount: 5000 },
     currentPeriodAnalysisJob: { jobId: "period439", results: Array(439).fill({}) } }, $: node,
     fetch: async route => { requests.push(route); assert.equal(route, `/.netlify/functions/${endpoint}`); return new Response(JSON.stringify(payload)); } });
@@ -100,13 +100,18 @@ function pollRuntime(job) {
   const rt = runtime(); const calls = [], timers = [];
   rt.context.fetch = async route => { calls.push(route); return new Response(JSON.stringify(job)); };
   rt.context.setTimeout = (fn, ms) => { timers.push(ms); return 1; };
-  rt.context.finishAnalysisControls = () => calls.push("controls-finished");
+  rt.context.clearTimeout = () => {};
+  rt.context.canOperate = () => true;
   rt.context.loadLastSuccessfulAnalysis = async mode => { calls.push(`read-selected-${mode}`); return rt.context.state.currentAnalysisJob; };
   rt.context.loadTrendCacheStatus = async () => calls.push("read-existing-freshness");
   rt.context.showApiErrors = () => { throw new Error("Unexpected error UI"); };
   rt.context.loadMarketDiscoveryNewList = rt.context.loadTodayEarlySignals = async () => {};
   rt.context.log = () => {};
-  vm.runInContext(extractFunction(html, "pollAnalysis"), rt.context);
+  vm.runInContext("let analysisRequestVersion = 0, analysisContext = null, analysisStatusReadVersion = 0, analysisPollInFlight = null, analysisPollTimer = null, activeAnalysisJobId = null, activePeriodOneClick = null;", rt.context);
+  for (const name of ["beginAnalysisRequest", "isAnalysisRequestCurrent", "analysisInterruptionText", "displayUntrackedAnalysisJob", "finishAnalysisControls", "pollAnalysis"])
+    vm.runInContext(extractFunction(html, name), rt.context);
+  const finish = rt.context.finishAnalysisControls;
+  rt.context.finishAnalysisControls = (...args) => { calls.push("controls-finished"); return finish(...args); };
   return { ...rt, calls, timers };
 }
 

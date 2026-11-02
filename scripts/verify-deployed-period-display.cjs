@@ -149,6 +149,10 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
     assert.ok(kstScript, "NAVER status presentation requires the same deployed KST asset");
     vm.runInContext(naverScript, context, { filename: "supplied-naver-status-presentation.js" });
   }
+  if (html.includes("function analysisViewStamp(")) {
+    vm.runInContext("let analysisRequestVersion = 0, analysisContext = null; const analysisResultReadVersion = { instant: 0, period: 0 };", context);
+    vm.runInContext(extractFunction(html, "analysisViewStamp"), context, { filename: "deployed-index.html:analysisViewStamp" });
+  }
   const functions = ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "surgeSignalSummary", "periodSelectionMatchesJob",
     ...(html.includes("function storedPeriodConfidenceDisplay(") ? ["storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay"] : []),
     "periodConfidenceSummary", "periodRelationSummary", "periodSourceEvidence", "periodDataStatus", "periodResultRow",

@@ -36,5 +36,6 @@ test("frontend restores the latest completed analysis on startup", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   assert.match(html, /trend-analysis-latest\?mode=/);
   assert.match(html, /async function loadLastSuccessfulAnalysis/);
-  assert.match(html, /displayCompletedAnalysis\(job, \{ restored: true \}\)/);
+  assert.match(html, /displayCompletedAnalysis\(job, \{ restored: true, preserveProgress: Boolean\(analysisContext\) \}\)/);
+  assert.match(html, /if \(!current\(\)\) return null;\s*displayCompletedAnalysis/);
 });

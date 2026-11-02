@@ -128,7 +128,8 @@ function uiRuntime(responses = {}) {
     fetch: async route => { requests.push(route); assert.ok(Object.hasOwn(responses, route), "Unexpected request: " + route); return new Response(JSON.stringify(responses[route])); },
     displayCompletedAnalysis: value => displayed.push(value), showApiErrors: error => errors.push(error),
     marketConfidenceSummary: () => "confidence", surgeSignalSummary: () => "surge", sourceSummary: () => "sources", formatSurgeHistory: () => "history" });
-  for (const name of ["escapeHtml", "instantRowDateSummary", "loadLastSuccessfulAnalysis", "renderTrendChart", "renderRatioOnlySignals", "renderLowIntensitySignals", "renderRelatedSignals"])
+  vm.runInContext("let analysisRequestVersion = 0, analysisContext = null; const analysisResultReadVersion = { instant: 0, period: 0 };", context);
+  for (const name of ["analysisViewStamp", "escapeHtml", "instantRowDateSummary", "loadLastSuccessfulAnalysis", "renderTrendChart", "renderRatioOnlySignals", "renderLowIntensitySignals", "renderRelatedSignals"])
     vm.runInContext(extractFunction(html, name), context);
   return { context, $, requests, displayed, errors };
 }
