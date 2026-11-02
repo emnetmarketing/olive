@@ -375,11 +375,111 @@ async function childMain(base, mode) {
       sourceSeriesDatesAmountsOrderPreserved:true,readWrites:0,apiStatusSnapshotIdentical:true,excelSameJobs:true,zeroBaselineComparable:false,
       genericBrandContextPointsRemoved:true,excelAllRowsOrderAmountsConfidenceMatch:true,fixtureExcel:path.join(base,'quality-fixture.xlsx')};
   }
+  let naverStatus = null;
+  const naverFixtureFile = path.join(base, 'naver-status-fixtures.json');
+  if (fs.existsSync(naverFixtureFile)) {
+    const captured = JSON.parse(fs.readFileSync(naverFixtureFile, 'utf8'));
+    assert.equal(captured.job.mode, 'instant'); assert.equal(captured.job.state, 'completed');
+    assert.equal(captured.snapshot.jobId, captured.job.jobId);
+    assert.equal(captured.diagnostic.jobId, captured.job.jobId);
+    assert.equal(captured.diagnostic.mode, 'instant');
+    const beforeHash = digest(captured), beforeWrites = writes.length;
+    seed('trend-analysis', `jobs/${captured.job.jobId}`, captured.job);
+    seed('trend-analysis', 'last-success/instant', { jobId: captured.job.jobId });
+    seed('trend-signal-snapshots', 'latest-valid-v1/instant', { jobId: captured.job.jobId });
+    seed('trend-signal-snapshots', `snapshots/${captured.job.jobId}`, captured.snapshot);
+    seed('trend-analysis', 'diagnostics/latest-v1', captured.diagnostic);
+    seed('market-discovery', 'current-v1', { items: captured.market.items });
+    seed('today-early-signals', 'current-v1', { ...captured.early, history: captured.early.items });
+    for (const [key, artifact] of [[captured.job.instantInputsKey, captured.input], [captured.job.instantStateKey, captured.state]])
+      if (key && artifact) seed('trend-analysis', key, artifact);
+    // Only the captured wanted-key shards are populated. Missing raw artifacts
+    // stay missing: never manufacture frozen inputs or a live dispatch/lease.
+    const shards = Array.from({ length: 32 }, () => ({ entries: {} }));
+    for (const [key, value] of Object.entries(captured.entries || {})) {
+      const index = parseInt(crypto.createHash('sha1').update(key).digest('hex').slice(0, 8), 16) % 32;
+      shards[index].entries[key] = value;
+    }
+    shards.forEach((value, index) => seed('trend-series-cache', `shards/v1/${index}`, value));
+    const marketReply = await invoke('market-discovery-list', 'GET', { window: 'all', limit: '100' });
+    const earlyReply = await invoke('today-early-signals', 'GET');
+    const instantReply = await invoke('trend-analysis-latest', 'GET', { mode: 'instant' });
+    assert.equal(marketReply.statusCode, 200, marketReply.bytes.toString());
+    assert.equal(earlyReply.statusCode, 200, earlyReply.bytes.toString());
+    assert.equal(instantReply.statusCode, 200, instantReply.bytes.toString());
+    assert.equal(instantReply.json().jobId, captured.job.jobId);
+    assert.deepEqual(instantReply.json().results.map(row => [row.keyword, row.estimatedSurgeCount, row.latestDataDate]),
+      captured.job.results.map(row => [row.keyword, row.estimatedSurgeCount, row.latestDataDate]));
+    const marketRows = marketReply.json().items, earlyRows = earlyReply.json().items;
+    const marketByKey = new Map(marketRows.map(row => [row.keyword, row]));
+    const earlyByKey = new Map(earlyRows.map(row => [row.keyword, row]));
+    for (const keyword of ['텀블러', '썬스프레이', '엘레나질유산균']) {
+      const row = marketByKey.get(keyword); assert.ok(row, keyword);
+      assert.equal(row.naverStatus?.jobId, captured.job.jobId);
+      assert.equal(row.naverStatus.selection.state, 'not-selected');
+      assert.equal(row.naverStatus.data.state, 'window-unavailable');
+      assert.notEqual(row.naverStatus.collection.state, 'queued');
+      assert.notEqual(row.naverStatus.collection.state, 'running');
+    }
+    for (const keyword of ['시린이치약', '오다리', '니들']) {
+      const row = marketByKey.get(keyword); assert.ok(row, keyword);
+      assert.equal(row.naverStatus.selection.state, 'selected');
+      assert.equal(row.naverStatus.data.actualDataDate, '2026-11-01');
+      assert.equal(row.naverStatus.assessment.state, 'criteria-not-met');
+    }
+    assert.equal(earlyByKey.get('마비스치약').previousNaverState.everSurged, true, 'Historical source remains unchanged');
+    assert.equal(earlyByKey.get('마비스치약').previousDayNaverStatus.assessment.state, 'criteria-not-met');
+    assert.notEqual(earlyByKey.get('네이밍리필').previousDayNaverStatus.assessment.state, 'surge-confirmed', 'Old peak is not yesterday surge');
+    assert.deepEqual(earlyRows.map(row => [row.keyword, row.todayEarlySignalScore, row.detectedAt, row.earlySignalDate]),
+      captured.early.items.map(row => [row.keyword, row.todayEarlySignalScore, row.detectedAt, row.earlySignalDate]), 'State projection preserves scores, source dates and order');
+    assert.equal(writes.length, beforeWrites, 'Read-only status endpoints must never mutate business storage');
+    assert.equal(digest(captured), beforeHash, 'Captured input remains unchanged');
+    const statusExport = await invoke('download-history', 'POST', {}, { downloadType: 'unified_results',
+      periodJobId: target.jobId, periodStartDate: target.startDate, periodEndDate: target.endDate, discoveries: marketRows });
+    assert.equal(statusExport.statusCode, 201, statusExport.bytes.toString());
+    assert.equal(statusExport.json().sourceJobId, captured.job.jobId);
+    const statusFiles = new Map(zipEntries(Buffer.from(statusExport.json().contentBase64, 'base64')).map(entry => [entry.name, entry.bytes.toString('utf8')]));
+    const discoveryCells = workbookCells(statusFiles, '06_최근 발견 키워드');
+    const earlyCells = workbookCells(statusFiles, '01_오늘 급상승 신호');
+    const instantCells = workbookCells(statusFiles, '02_어제 급등 확인');
+    assert.equal(discoveryCells.get('L1'), '신규 후보 우선 선정');
+    assert.equal(discoveryCells.get('M1'), '네이버 데이터 확인 상태');
+    assert.equal(discoveryCells.get('P1'), '실제 Instant 분석 대상');
+    assert.equal(discoveryCells.get('R1'), '급등 판정');
+    assert.equal(discoveryCells.get('U1'), '기준 Instant Job');
+    marketRows.forEach((row, index) => {
+      const line = index + 2;
+      assert.equal(discoveryCells.get(`B${line}`), row.keyword);
+      assert.equal(discoveryCells.get(`U${line}`), captured.job.jobId);
+      if (row.naverStatus?.assessment?.label) assert.equal(discoveryCells.get(`R${line}`), row.naverStatus.assessment.label);
+      if (['텀블러', '썬스프레이', '엘레나질유산균'].includes(row.keyword)) {
+        assert.match(discoveryCells.get(`P${line}`), /대상 아님/);
+        assert.match(discoveryCells.get(`M${line}`), /기간 데이터 부족/);
+      }
+    });
+    const mavisLine = earlyRows.findIndex(row => row.keyword === '마비스치약') + 2;
+    assert.match(earlyCells.get(`J${mavisLine}`), /2026-11-01/);
+    assert.match(earlyCells.get(`J${mavisLine}`), /기준 미충족/);
+    assert.doesNotMatch(earlyCells.get(`J${mavisLine}`), /급등 확인|급등 확정/);
+    captured.job.results.forEach((row, index) => {
+      assert.equal(instantCells.get(`A${index + 2}`), row.keyword);
+      assert.equal(instantCells.get(`C${index + 2}`), Number(row.estimatedSurgeCount || 0));
+    });
+    assert.equal(digest(JSON.parse(records.get(address('trend-analysis', `jobs/${captured.job.jobId}`)).bytes)), digest(captured.job));
+    assert.equal(digest(JSON.parse(records.get(address('today-early-signals', 'current-v1')).bytes).items), digest(captured.early.items));
+    assert.ok(writes.slice(beforeWrites).every(write => write.store === 'analysis-downloads'), 'Offline export only writes its isolated download history');
+    naverStatus = { fixtureReadAt: captured.readAt, instantJobId: captured.job.jobId,
+      marketRows: marketRows.length, earlyRows: earlyRows.length, instantRows: captured.job.results.length, sourceSeriesScoresDatesOrderPreserved: true,
+      staleCacheIsNotAnalysisCompletion: true, historicalSurgeIsNotPreviousDay: true, readWrites: 0,
+      excelStateAndInstantJobMatch: true, actualPackagedEntries: ['market-discovery-list', 'today-early-signals', 'trend-analysis-latest', 'download-history'],
+      evidenceKind: 'Saved Production read-only bodies in isolated Blob transport; NOT a Production execution' };
+    fs.writeFileSync(path.join(base, 'naver-status-api.json'), JSON.stringify({ market: marketReply.json(), early: earlyReply.json() }));
+  }
   console.log(JSON.stringify({mode,bootstrapExecuted:true,nativeContext:true,legacyInstantRows:59,legacyMorningPeriodRows:439,canonicalPeriodRows:439,
     latestStatusSnapshotJobMatch:true,excelPeriodRows:439,excelJobId:exported.json().periodJobId,probePhases:phases,probeReport:report.report,
     scheduledDispatcherVerified:true,scheduledDispatcherIdleWrites:0,scheduledDispatcherIdleSourceCalls:0,
     sdkVersions:[...new Set(report.invocations.map(value=>value.sdkVersion))],fixtureBlobReads:calls.filter(x=>x.method==="GET").length,
-    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality,
+    fixtureBlobWrites:writes.length,sourceApiCalls:0,productionCalls:0,sourceRowsDigest:digest(target.results),quality,naverStatus,
     excelKst:{...excelKst,actualPackagedEntry:'download-history',sourceTimestampsUnchanged:true,apiCreatedAtUtcIso:kstPayload.createdAt}}));
 }
 async function main() {
@@ -387,6 +487,7 @@ async function main() {
   const archives=path.resolve(process.argv[2]||"data/build-smoke/native-functions-portable");
   const input=process.argv[3]&&!process.argv[3].startsWith('--')?path.resolve(process.argv[3]):null;
   const qualityDirectory=process.argv.find(value=>value.startsWith('--quality-fixtures='))?.slice('--quality-fixtures='.length);
+  const naverStatusFixtures=process.argv.find(value=>value.startsWith('--naver-status-fixtures='))?.slice('--naver-status-fixtures='.length);
   const reportOutput=path.resolve(process.argv.find(value=>value.startsWith("--report="))?.slice(9)||path.join(archives,"execution-report.json"));
   const base=fs.mkdtempSync(path.join(os.tmpdir(),"netlify-zip-execution-"));
   const only=process.argv.find(value=>value.startsWith("--only="))?.slice(7);
@@ -403,6 +504,10 @@ async function main() {
     const today = read('today');
     fs.writeFileSync(path.join(base,'quality-fixtures.json'),JSON.stringify({instant:read('instant'),period:read('period'),snapshot:read('snapshot'),
       today:{...today,history:today.items}})); // Current stored observations suffice; historical source remains untouched.
+  }
+  if (naverStatusFixtures) {
+    const saved = JSON.parse(fs.readFileSync(path.resolve(naverStatusFixtures), 'utf8'));
+    fs.writeFileSync(path.join(base, 'naver-status-fixtures.json'), JSON.stringify(saved));
   }
   fs.copyFileSync(__filename,path.join(base,"verify.cjs"));
   const env={...process.env};delete env.NODE_PATH;delete env.NODE_OPTIONS;

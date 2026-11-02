@@ -64,7 +64,7 @@ test("plan retains remote static SHA only and permits explicit UI/helper files",
   assert.equal(body.files["existing.txt"], "d".repeat(40));
   assert.equal(body.draft, false);
   assert.equal(body.branch, "main");
-  assert.deepEqual([...uploadFiles.values()].map(file => file.name).sort(), ["_headers", "index.html", "netlify.toml", "shared/kst-time-presentation.js", "shared/result-growth-presentation.js"]);
+  assert.deepEqual([...uploadFiles.values()].map(file => file.name).sort(), ["_headers", "index.html", "netlify.toml", "shared/kst-time-presentation.js", "shared/naver-status-presentation.js", "shared/result-growth-presentation.js"]);
   assert.equal(plan.basePublishedId, healthy);
   assert.equal(calls.length, 2);
   await assert.rejects(makePlan(args, async () => ({ published_deploy: { id: "changed" } }), verified, null), /Published deploy changed/);

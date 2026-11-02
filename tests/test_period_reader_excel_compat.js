@@ -135,6 +135,7 @@ function uiRuntime(runtime, fixtures) {
   };
   node("collectionStart").value = fixtures.period.startDate; node("collectionEnd").value = fixtures.period.endDate;
   const context = vm.createContext({ ResultGrowthPresentation: require("../shared/result-growth-presentation"),
+    NaverStatusPresentation: require('../shared/naver-status-presentation'),
     state: { currentAnalysisJob: fixtures.instant, currentPeriodAnalysisJob: null, periodResultQuery: "", marketDiscoveryRows: [] },
     $: node, escapeHtml: value => String(value ?? ""), formatHistoryDate: value => value,
     surgeSignalSummary: () => "", periodSourceEvidence: source => source?.availability === "no_data" ? "데이터 없음" : "기간 근거",

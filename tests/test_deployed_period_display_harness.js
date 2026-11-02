@@ -5,7 +5,8 @@ const path = require("node:path");
 const { verifyDisplay: verifySuppliedDisplay } = require("../scripts/verify-deployed-period-display.cjs");
 const growthScript = fs.readFileSync("shared/result-growth-presentation.js", "utf8");
 const kstScript = fs.readFileSync("shared/kst-time-presentation.js", "utf8");
-const verifyDisplay = options => verifySuppliedDisplay({ growthScript, kstScript, ...options });
+const naverScript = fs.readFileSync("shared/naver-status-presentation.js", "utf8");
+const verifyDisplay = options => verifySuppliedDisplay({ growthScript, kstScript, naverScript, ...options });
 const html = fs.readFileSync(path.join(__dirname, "../index.html"), "utf8");
 
 function fixture(count = 439) {
@@ -35,10 +36,15 @@ test("deployed HTML display harness uses actual render functions and saved rows 
   assert.equal(report.suppliedWorkbook.verified, false); assert.equal(report.actualNetworkRequests, 0);
   assert.match(report.verificationKind, /NOT a logged-in browser visual test/);
   assert.match(report.kstScriptSha256, /^[a-f0-9]{64}$/);
+  assert.match(report.naverScriptSha256, /^[a-f0-9]{64}$/);
 });
 
 test("display harness requires supplied deployed KST asset instead of silently substituting workspace code", async () => {
   await assert.rejects(verifyDisplay({ html, period: fixture(2), kstScript: undefined }), /Supply the same deployed .*kst-time-presentation/);
+});
+
+test("display harness requires supplied NAVER status asset instead of silently substituting workspace code", async () => {
+  await assert.rejects(verifyDisplay({ html, period: fixture(2), naverScript: undefined }), /Supply the same deployed .*naver-status-presentation/);
 });
 
 test("display harness refuses mismatched snapshot or incomplete Job instead of manufacturing completion", async () => {
@@ -58,11 +64,15 @@ test("saved Instant response remains unchanged and result generation chooses the
   assert.equal(report.instantInputKind, "saved supplied Instant response"); assert.equal(JSON.stringify(instant), before);
 });
 
-test("optional saved workbook comparison checks existing summary, period metadata and row values without inventing embedded Job ID", async () => {
+test("optional saved workbook comparison checks the exact embedded Period Job, summary, dates and row values", async () => {
   const period = require("../netlify/functions/result-quality-projection").projectJob(fixture(12));
   const { toBuffer } = require("../netlify/functions/unified-excel.js");
   const excel = await toBuffer({ generatedAt: "2026-10-16T10:00:00Z", instantJob: { results: [] }, periodJob: period, periodRequest: period });
   const report = await verifyDisplay({ html, period, excel });
-  assert.equal(report.suppliedWorkbook.verified, true); assert.equal(report.suppliedWorkbook.jobIdEmbedded, false);
+  assert.equal(report.suppliedWorkbook.verified, true); assert.equal(report.suppliedWorkbook.jobIdEmbedded, true);
+  assert.equal(report.suppliedWorkbook.comparedJobId, period.jobId);
+  const { zipEntries, workbookCells } = require("../scripts/verify-packaged-functions.cjs");
+  const files = new Map(zipEntries(excel).map(entry => [entry.name, entry.bytes.toString("utf8")]));
+  assert.equal(workbookCells(files, "07_선택기간분석").get("E4"), period.jobId);
   assert.equal(report.suppliedWorkbook.valuesAndOrderMatch, true); assert.equal(report.suppliedWorkbook.resultCount, 12);
 });

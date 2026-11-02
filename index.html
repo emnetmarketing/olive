@@ -1581,14 +1581,14 @@
           <div id="trendCacheSummary" class="muted" style="margin-top:6px;">Trend 캐시/호출 예산을 확인하는 중입니다.</div>
           <div id="marketDiscoveryNewList" style="display:none;margin-top:14px;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <div><strong>최근 발견 키워드 TOP 100</strong><br><span class="muted">최근 새롭게 발견된 후보 중 우선 검증 가치가 높은 키워드이며, 급등 확정 결과는 아닙니다.</span></div>
+              <div><strong>최근 발견 키워드 TOP 100</strong><br><span class="muted">발견 시점으로 필터링한 후보 목록이며, 네이버 급등 확정 결과가 아닙니다. ‘최근 24시간’은 발견 범위이지 네이버 수집 기간이 아닙니다.</span></div>
               <select id="marketDiscoveryWindow" style="width:auto;min-width:130px;">
                 <option value="today">오늘 처음 발견</option><option value="24h" selected>최근 24시간</option>
                 <option value="3d">최근 3일</option><option value="7d">최근 7일</option><option value="all">전체</option>
               </select>
             </div>
             <div class="table-wrap" style="max-height:420px;margin-top:8px;overflow:auto;">
-              <table><thead><tr><th>순위</th><th>키워드</th><th>발견 소스</th><th>최초/최근 발견</th><th>신뢰도</th><th>브랜드·제품 문맥</th><th>월간검색량</th><th>보호 슬롯</th><th>Trend 상태</th></tr></thead>
+              <table><thead><tr><th>순위</th><th>키워드</th><th>발견 소스</th><th>최초/최근 발견</th><th>신뢰도</th><th>브랜드·제품 문맥</th><th>월간검색량</th><th>신규 후보 우선 선정</th><th>네이버 데이터 확인 상태</th></tr></thead>
                 <tbody id="marketDiscoveryNewBody"><tr><td colspan="9" class="muted">신규 후보를 불러오는 중입니다.</td></tr></tbody></table>
             </div>
           </div>
@@ -1637,6 +1637,7 @@
         </div>
         <div id="todayEarlySignalMeta" class="muted" style="margin-bottom:8px;">오늘 신호를 불러오는 중입니다.</div>
         <p class="muted">YouTube·Search Ad의 저장된 시장 신호로 포착한 키워드입니다. 신호 기준일과 소스 수집 성공 시각을 확인해주세요. 근거의 ‘오늘·최근’은 표시된 신호 기준일 기준이며, NAVER 당일 검색 급등 확정 결과는 아닙니다.</p>
+        <p class="muted">전일 NAVER 상태는 표시된 기준일의 저장 근거로 확인합니다. 누적 과거 급등 이력과 구분하며, ‘확인 전’은 급등 아님 또는 수집 대기를 뜻하지 않습니다.</p>
         <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
           <thead><tr><th>키워드</th><th>신호 강도</th><th>점수</th><th>발견 시각</th><th>주요 탐지 근거</th><th>상품·브랜드</th><th>Source</th><th>전일 NAVER 상태</th></tr></thead>
           <tbody id="todayEarlySignalBody"><tr><td colspan="8" class="muted">오늘 신호를 불러오는 중입니다.</td></tr></tbody>
@@ -1683,8 +1684,9 @@
 
       <section class="panel" id="periodAnalysisPanel">
         <h2>선택 기간 분석 결과</h2>
+        <div id="periodStoredResultMeta" class="muted" hidden></div>
         <div id="periodAnalysisMeta" class="muted">선택한 기간의 분석 결과가 아직 없습니다.</div>
-        <p class="muted">저장된 기간 데이터가 있으면 즉시 분석합니다. 데이터가 부족한 경우 필요한 NAVER Trend 데이터만 자동 수집한 뒤 결과를 표시합니다. 자동 최신 결과에는 영향을 주지 않습니다.</p>
+        <p class="muted">저장된 과거 기간 결과는 요청 기간과 실제 사용 데이터 기간을 구분해 확인해주세요. 선택한 기간과 일치하는 완료 결과만 아래 표에 표시하며, 오늘·어제 자동 최신 결과와는 별개입니다. 새 기간 분석을 실행하면 저장된 기간 데이터를 우선 사용하고, 부족한 경우 필요한 NAVER Trend 데이터만 자동 수집합니다.</p>
         <h3>TOP 10</h3>
         <div class="table-wrap"><table>
           <thead><tr><th>순위</th><th>키워드</th><th>NAVER 추정 급등량</th><th>상승률</th><th>기간 신뢰도</th><th>기간 신뢰 근거</th><th>상품·브랜드</th><th>YouTube 기간 변화</th><th>Search Ad 기간 변화</th><th>데이터 상태</th><th>NAVER 기준일</th></tr></thead>
@@ -1790,6 +1792,7 @@
 
   <script src="/shared/result-growth-presentation.js"></script>
   <script src="/shared/kst-time-presentation.js"></script>
+  <script src="/shared/naver-status-presentation.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const state = { results: [], autoTimer: null, autoCollecting: false, nextRunAt: null, currentUser: null, settingsSaveTimer: null,
@@ -2573,6 +2576,15 @@
     function renderPeriodResultTables() {
       const job = state.currentPeriodAnalysisJob;
       const rows = job?.results || [];
+      const storedMeta = $("periodStoredResultMeta");
+      if (storedMeta) {
+        const completed = job?.mode === "period" && job.state === "completed";
+        storedMeta.hidden = !completed;
+        const view = completed ? NaverStatusPresentation.periodView(job) : null;
+        storedMeta.textContent = view ? [view.title, view.requested, view.actual,
+          `게시 ${formatHistoryDate(job.publishedAt || job.completedAt)}`, view.note,
+          "현재 선택 기간과 일치할 때만 상세 결과를 표시합니다."].filter(Boolean).join(" · ") : "";
+      }
       const matches = periodSelectionMatchesJob(job);
       const empty = '<tr><td colspan="11" class="muted">이 기간과 정확히 일치하는 완료 결과가 없습니다.</td></tr>';
       if (!matches) {
@@ -3115,10 +3127,6 @@
       } catch (error) { showApiErrors({ "최신 데이터 수집": error.message }); }
       finally { $("latestDataCollectionBtn").disabled = !canEdit(); }
     }
-    const TREND_STATUS_LABELS = { completed: "정상 cache 사용 가능", pending: "Trend 조회 대기",
-      provider_quota_wait: "NAVER API 429/공식 quota 제한", internal_budget_wait: "내부 일일 budget 소진 대기",
-      cache_window_unavailable: "요청 기간 cache window 부족", fast_path_cache_wait: "Fast Path cache 대기",
-      "not-selected": "보호 슬롯 대기", "not-fetched": "Trend 미조회" };
     async function loadMarketDiscoveryNewList() {
       if (!canOperate()) return;
       const windowName = $("marketDiscoveryWindow")?.value || "24h";
@@ -3127,15 +3135,20 @@
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         const rows = payload.items || [];
         state.marketDiscoveryRows = rows;
-        $("marketDiscoveryNewBody").innerHTML = rows.length ? rows.map((item) => `<tr>
+        $("marketDiscoveryNewBody").innerHTML = rows.length ? rows.map((item) => {
+          const view = NaverStatusPresentation.discoveryView(item);
+          const naverDetails = ["selection", "data", "collection", "assessment", "dates", "job", "note"]
+            .filter((key) => view[key]).map((key) => `<div data-naver-status="${key}">${escapeHtml(view[key])}</div>`).join("");
+          return `<tr>
           <td>${Number(item.rank)}</td><td><strong>${escapeHtml(item.keyword)}</strong></td>
           <td>${escapeHtml((item.discoverySource || []).join(" + ") || "-")}</td>
           <td>${item.discoveredAt ? formatHistoryDate(item.discoveredAt) : "-"}<br><small>${item.lastSeenAt ? formatHistoryDate(item.lastSeenAt) : "-"}</small></td>
           <td title="${escapeHtml(item.sourceConfidenceQuality?.warning || '')}">${item.sourceConfidence == null ? '확인 불가' : Number(item.sourceConfidence)}</td><td>${escapeHtml(earlyBrandContextSummary(item))}</td>
           <td>${item.monthlyTotalSearches == null ? escapeHtml(item.monthlySearchStatus || "ratio-only") : Number(item.monthlyTotalSearches).toLocaleString("ko-KR")}</td>
-          <td>${item.selectedForProtectedSlot ? `#${Number(item.protectedSlotRank)}` : "-"}</td>
-          <td>${escapeHtml(TREND_STATUS_LABELS[item.trendStatus] || item.trendStatus || "Trend 미조회")}${item.trendFetchedAt ? `<br><small>${formatHistoryDate(item.trendFetchedAt)}</small>` : ""}</td>
-        </tr>`).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
+          <td>${escapeHtml(view.priority)}</td>
+          <td>${naverDetails}</td>
+        </tr>`;
+        }).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
       } catch (error) { $("marketDiscoveryNewBody").innerHTML = `<tr><td colspan="9" class="muted">신규 후보 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
     }
     function earlyBrandContextSummary(item) {
@@ -3156,7 +3169,7 @@
           <td>${escapeHtml((item.reasons || []).join(" · ") || "-")}</td>
           <td>${escapeHtml(earlyBrandContextSummary(item))}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
           <td>${escapeHtml((item.sources || []).join(" + ") || "-")}</td>
-          <td>${item.previousNaverState?.everSurged ? `이전 상승 · +${Number(item.previousNaverState.estimatedSurgeCount || 0).toLocaleString("ko-KR")}` : "확인 전"}</td>
+          <td>${escapeHtml(NaverStatusPresentation.previousDayView(item))}</td>
         </tr>`).join("") : '<tr><td colspan="8" class="muted">표시된 기준일에 저장된 급상승 신호가 없습니다. 데이터 없음은 시장 신호가 없다는 뜻이 아닙니다.</td></tr>';
       } catch (error) {
         $("todayEarlySignalMeta").textContent = `상태 갱신 실패 · 저장된 신호의 최신성 확인 불가: ${error.message}`;

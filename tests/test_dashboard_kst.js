@@ -7,6 +7,7 @@ const { extractFunction } = require("../scripts/verify-deployed-period-display.c
 
 const html = fs.readFileSync("index.html", "utf8");
 const helper = fs.readFileSync("shared/kst-time-presentation.js", "utf8");
+const statusHelper = fs.readFileSync("shared/naver-status-presentation.js", "utf8");
 const stamp = "2026-11-01T15:02:03.456Z";
 const shown = "2026-11-02 00:02:03";
 
@@ -23,13 +24,14 @@ function runtime(names = [], payload = {}) {
     document: { querySelectorAll: () => [] }, legacyDownloadHistory: () => [],
     fetch: async route => { requests.push(route); return new Response(JSON.stringify(payload)); } });
   vm.runInContext(helper, context);
+  vm.runInContext(statusHelper, context);
   for (const name of ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "formatDateTime", "formatFileDate", "formatDuration", "sourceFreshnessLabel", ...names])
     vm.runInContext(extractFunction(html, name), context);
   return { context, node, requests };
 }
 
 test("dashboard loads the shared KST formatter before application code and explains its timezone", () => {
-  assert.match(html, /<script src="\/shared\/kst-time-presentation\.js"><\/script>\s*<script>/);
+  assert.match(html, /<script src="\/shared\/kst-time-presentation\.js"><\/script>\s*<script src="\/shared\/naver-status-presentation\.js"><\/script>\s*<script>/);
   assert.match(html, /모든 시각은 한국시간\(KST\)으로 표시합니다/);
   assert.match(html, /마지막 분석 시간 · 한국시간\(KST\)/);
   assert.match(html, /\$\("statLastRun"\)\.innerHTML = formatDateTime\(completedAt\)/);
@@ -106,7 +108,8 @@ test("NAVER summary preserves target, actual dates and counts while rendering so
 
 test("discovered, last-seen and Trend-fetch row timestamps use KST with no additional requests", async () => {
   const payload = { items: [{ keyword: "fixture", rank: 1, discoveredAt: stamp,
-    lastSeenAt: "2026-11-02T01:00:01Z", trendFetchedAt: "2026-11-02T02:00:02Z", trendStatus: "completed" }] };
+    lastSeenAt: "2026-11-02T01:00:01Z", trendFetchedAt: "2026-11-02T02:00:02Z", trendStatus: "completed",
+    naverStatus: { data: { state: "target-observed", actualDataDate: "2026-11-01", fetchedAt: "2026-11-02T02:00:02Z" } } }] };
   const rt = runtime(["earlyBrandContextSummary", "loadMarketDiscoveryNewList"], payload);
   const before = JSON.stringify(payload);
   await rt.context.loadMarketDiscoveryNewList();

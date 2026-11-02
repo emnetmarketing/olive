@@ -89,7 +89,7 @@ function verifyExcel(bytes, job) {
     periodAndWindowMatch: true, valuesAndOrderMatch: true, sha256: sha(bytes) };
 }
 
-async function verifyDisplay({ html, period, instant, status, snapshot, partial, excel, growthScript, kstScript, provenance = "unspecified local saved inputs" }) {
+async function verifyDisplay({ html, period, instant, status, snapshot, partial, excel, growthScript, kstScript, naverScript, provenance = "unspecified local saved inputs" }) {
   assert.equal(period.mode, "period"); assert.equal(period.state, "completed");
   assert.ok(period.jobId && period.startDate && period.endDate && Array.isArray(period.results));
   if (period.resultCount != null) assert.equal(period.resultCount, period.results.length);
@@ -143,6 +143,11 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
   if (html.includes("KstTimePresentation.")) {
     assert.ok(kstScript, "Supply the same deployed /shared/kst-time-presentation.js asset; do not substitute a different source version");
     vm.runInContext(kstScript, context, { filename: "supplied-kst-time-presentation.js" });
+  }
+  if (html.includes("NaverStatusPresentation.")) {
+    assert.ok(naverScript, "Supply the same deployed /shared/naver-status-presentation.js asset; do not substitute a different source version");
+    assert.ok(kstScript, "NAVER status presentation requires the same deployed KST asset");
+    vm.runInContext(naverScript, context, { filename: "supplied-naver-status-presentation.js" });
   }
   const functions = ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "surgeSignalSummary", "periodSelectionMatchesJob",
     ...(html.includes("function storedPeriodConfidenceDisplay(") ? ["storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay"] : []),
@@ -204,7 +209,8 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
   return {
     verificationKind: "Actual supplied HTML functions plus saved API responses, executed offline in a minimal DOM; NOT a logged-in browser visual test",
     provenance, htmlSha256: sha(html), growthScriptSha256: growthScript ? sha(growthScript) : null,
-    kstScriptSha256: kstScript ? sha(kstScript) : null, jobId: period.jobId, selectedPeriod: [period.startDate, period.endDate],
+    kstScriptSha256: kstScript ? sha(kstScript) : null, naverScriptSha256: naverScript ? sha(naverScript) : null,
+    jobId: period.jobId, selectedPeriod: [period.startDate, period.endDate],
     requiredWindow: [period.queryStartDate, period.endDate], resultCount: period.results.length, rowsDigest: digest(period.results),
     actualDataRange: [period.actualDataStartDate || null, period.actualDataEndDate || period.latestDataDate || null],
     metadata: originalMeta, top10OrderMatches: true, allRowsOrderMatches: true, numericAndEvidenceValuesMatch: true,
@@ -224,12 +230,13 @@ function readJson(file) {
 }
 async function main() {
   const [htmlPath, periodPath, reportPath, ...flags] = process.argv.slice(2);
-  assert.ok(htmlPath && periodPath && reportPath, "Usage: node verify-deployed-period-display.cjs deployed-index.html period-latest.json report.json [--instant=...] [--status=...] [--snapshot=...] [--partial=...] [--excel=...] [--growth-script=...] [--kst-script=...] [--provenance=...]");
+  assert.ok(htmlPath && periodPath && reportPath, "Usage: node verify-deployed-period-display.cjs deployed-index.html period-latest.json report.json [--instant=...] [--status=...] [--snapshot=...] [--partial=...] [--excel=...] [--growth-script=...] [--kst-script=...] [--naver-script=...] [--provenance=...]");
   const options = Object.fromEntries(flags.map(flag => { const index = flag.indexOf("="); assert.ok(index > 2); return [flag.slice(2, index), flag.slice(index + 1)]; }));
   const report = await verifyDisplay({ html: fs.readFileSync(htmlPath, "utf8").replace(/^\uFEFF/, ""), period: readJson(periodPath),
     ...Object.fromEntries(["instant", "status", "snapshot", "partial"].filter(name => options[name]).map(name => [name, readJson(options[name])])),
     excel: options.excel ? fs.readFileSync(options.excel) : undefined, growthScript: options["growth-script"] ? fs.readFileSync(options["growth-script"], "utf8") : undefined,
     kstScript: options["kst-script"] ? fs.readFileSync(options["kst-script"], "utf8") : undefined,
+    naverScript: options["naver-script"] ? fs.readFileSync(options["naver-script"], "utf8") : undefined,
     provenance: options.provenance || "saved responses supplied by caller; provenance must be confirmed separately" });
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ report: path.resolve(reportPath), jobId: report.jobId, resultCount: report.resultCount,

@@ -5,6 +5,7 @@ const { connect: connectSnapshot, readLatest: readLatestSnapshot } = require("./
 const earlyCache = require("./today-early-signal-cache");
 const { toBuffer } = require("./unified-excel");
 const { selectCompletedInstant } = require("./instant-selection-policy");
+const naver = require('./naver-observation-context');
 const json = (statusCode, body) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 const compactDate = (value) => String(value || "").replaceAll("-", "");
 function filenameFor(job) {
@@ -23,7 +24,7 @@ async function newest(mode) {
   return jobs.filter(Boolean).sort((a, b) => Date.parse(b.completedAt || 0) - Date.parse(a.completedAt || 0))[0] || null;
 }
 exports.handler = async (event) => {
-  connect(event); connectAnalysis(event); connectSnapshot(event); earlyCache.connect(event);
+  connect(event); connectAnalysis(event); connectSnapshot(event); earlyCache.connect(event); naver.connect(event);
   try {
     if (event.httpMethod === "GET" && event.queryStringParameters?.downloadId) {
       const id = String(event.queryStringParameters.downloadId); const file = await readFile(id);
@@ -40,9 +41,15 @@ exports.handler = async (event) => {
       const periodRequest = { startDate: String(input.periodStartDate || "") || null, endDate: String(input.periodEndDate || "") || null };
       let periodJob = input.periodJobId ? await readJob(String(input.periodJobId)).catch(() => null) : null;
       if (periodJob?.mode !== "period" || periodJob?.state !== "completed" || periodJob.startDate !== periodRequest.startDate || periodJob.endDate !== periodRequest.endDate) periodJob = null;
-      const early = await earlyCache.readCache(); const generatedAt = new Date().toISOString();
+      const savedEarly = await earlyCache.readCache(); const generatedAt = new Date().toISOString();
+      const suppliedDiscoveries = Array.isArray(input.discoveries) ? input.discoveries.slice(0, 100) : [];
+      // Freeze the same exported Instant Job. Never trust a client-supplied status from another Job.
+      const context = await naver.loadNaverObservationContext({ job: instantJob,
+        keys: [...(savedEarly?.items || []), ...suppliedDiscoveries].map(item => item.keyword) });
+      const early = naver.projectEarlyNaverStatus(savedEarly, context);
+      const discoveries = suppliedDiscoveries.map(item => ({ ...item, naverStatus: context.resolve(item.keyword) }));
       const buffer = await toBuffer({ generatedAt, instantJob, periodJob, periodRequest, early,
-        discoveries: Array.isArray(input.discoveries) ? input.discoveries.slice(0, 100) : [] });
+        discoveries });
       const id = crypto.randomUUID(); const filename = unifiedFilename(new Date(generatedAt), periodRequest);
       await writeFile(id, buffer);
       const item = await appendHistory({ id, mode: "unified", downloadType: "전체 결과 통합 Excel", dataDate: instantJob.latestDataDate || null,

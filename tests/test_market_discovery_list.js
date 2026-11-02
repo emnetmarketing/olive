@@ -23,5 +23,7 @@ test("dashboard exposes automatic top list, novelty filters, and collapsed detai
   assert.match(html, /최근 24시간/);
   assert.match(html, /id="marketDiscoveryDiagnostic"[\s\S]*<summary><strong>관리자 상세 진단/);
   assert.match(html, /market-discovery-list/);
-  assert.match(html, /TREND_STATUS_LABELS/);
+  assert.match(html, /NaverStatusPresentation\.discoveryView/);
+  assert.match(html, /네이버 데이터 확인 상태/);
+  assert.doesNotMatch(html, /보호 슬롯 대기/);
 });

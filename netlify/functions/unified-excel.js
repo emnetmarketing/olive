@@ -4,6 +4,7 @@ const { projectStoredResultConfidence, projectStoredPeriodResult } = require("./
 const { growthView } = require("../../shared/result-growth-presentation");
 const { projectResult } = require("./result-quality-projection");
 const { projectBrandContext } = require("./brand-context");
+const { discoveryView, previousDayView, periodView } = require('../../shared/naver-status-presentation');
 const { toKstExcelDate, toDateOnlyExcelDate: asDate, EXCEL_TIMESTAMP_FORMAT } = require("../../shared/kst-time-presentation");
 
 const gradeLabels = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
@@ -50,18 +51,21 @@ function earlyRow(row) {
       row.relatedProductLine || row.relatedProductType, row.relatedProduct].filter(Boolean)),
     sources: text(row.sources), youtubeChange: yt ? `현재 ${yt.current} / 이전 ${yt.previous} / Δ ${yt.delta}` : "",
     searchAdChange,
-    previousNaver: row.previousNaverState ? text([row.previousNaverState.resultType, row.previousNaverState.estimatedSurgeCount]) : "",
+    previousNaver: previousDayView(row),
     earlySignalDate: asDate(row.earlySignalDate) };
 }
 
 function discoveryRow(row) {
   row = projectBrandContext(row);
+  const view = discoveryView(row), status = row.naverStatus || {};
   return { rank: Number(row.rank || 0), keyword: row.keyword, sources: text(row.discoverySource), discoveredAt: toKstExcelDate(row.discoveredAt),
     lastSeenAt: toKstExcelDate(row.lastSeenAt), confidence: row.sourceConfidence == null ? null : Number(row.sourceConfidence), brand: row.relatedBrand || "",
     confidenceStatus: row.sourceConfidenceQuality?.warning || "", brandStatus: row.brandContextStatus === "unverified" ? `${row.relatedExpression || "일반 표현"} · 브랜드 미확인` : "",
     productContext: row.relatedProductLine || row.relatedProductType || "", monthlySearchStatus: row.monthlySearchStatus || "",
     monthlyTotalSearches: row.monthlyTotalSearches == null ? null : Number(row.monthlyTotalSearches), marketDiscoveryRank: Number(row.marketDiscoveryRank || 0),
-    protectedSlot: row.selectedForProtectedSlot ? "Y" : "N", trendStatus: row.trendStatus || "" };
+    protectedSlot: view.priority, trendStatus: view.data, actualSelection: view.selection, collectionStatus: view.collection,
+    assessmentStatus: view.assessment, dataDate: asDate(status.data?.actualDataDate), fetchedAt: toKstExcelDate(status.data?.fetchedAt),
+    instantJobId: status.jobId || '확인 불가', targetDate: asDate(status.targetDataDate), requiredWindow: status.requiredWindow || '확인 불가' };
 }
 
 const resultColumns = [
@@ -136,6 +140,11 @@ function addPeriodSheet(workbook, job, request) {
   ];
   const sheet = workbook.addWorksheet("07_선택기간분석", { views: [{ state: "frozen", ySplit: 12 }] });
   meta.forEach((row) => sheet.addRow(row)); sheet.getCell(5, 2).numFmt = "0.0%";
+  // Keep the established header/data row positions and all original result cells.
+  const stored = periodView(job);
+  [['결과 구분', job ? stored.title : '저장된 기간 결과 없음'], ['실제 확보 시작일', job?.actualDataStartDate || job?.sourceFreshness?.actualStartDate || '확인 불가'],
+    ['실제 확보 종료일', job?.actualDataEndDate || job?.sourceFreshness?.actualDataDate || '확인 불가'], ['Period Job', job?.jobId || '없음']]
+    .forEach(([label, value], index) => { sheet.getCell(index + 1, 4).value = label; sheet.getCell(index + 1, 5).value = value; });
   sheet.addRow([]); const headerRow = sheet.addRow(resultColumns.map(([, header]) => header));
   headerRow.eachCell((cell) => { cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } }; });
   sheet.autoFilter = { from: { row: 11, column: 1 }, to: { row: 11, column: periodResultColumns.length } };
@@ -168,7 +177,13 @@ async function buildWorkbook(data) {
     { item: "선택 분석 종료일", value: data.periodRequest?.endDate || data.periodJob?.endDate || "" },
     { item: "선택 기간 coverage", value: Number(data.periodJob?.trendCoveragePct || 0) / 100 },
     { item: "선택 기간 결과 건수", value: Number(data.periodJob?.results?.length || 0) },
-    { item: "선택 기간 분석 상태", value: periodStatus(data.periodJob, data.periodRequest) }
+    { item: "선택 기간 분석 상태", value: periodStatus(data.periodJob, data.periodRequest) },
+    { item: '선택 기간 결과 구분', value: data.periodJob ? '저장된 과거 기간 결과 · 최신 Instant와 별도' : '저장된 기간 결과 없음' },
+    { item: '선택 기간 실제 확보 시작일', value: asDate(data.periodJob?.actualDataStartDate || data.periodJob?.sourceFreshness?.actualStartDate) },
+    { item: '선택 기간 실제 확보 종료일', value: asDate(data.periodJob?.actualDataEndDate || data.periodJob?.sourceFreshness?.actualDataDate) },
+    { item: '선택 기간 Period Job', value: data.periodJob?.jobId || '' },
+    { item: '최근 발견 필터 안내', value: '키워드 발견 시점 기준 · NAVER 분석 기간·데이터 최신성을 뜻하지 않음' },
+    { item: 'NAVER 상태 기준 Instant Job', value: instant.jobId || '' }
   ];
   const summary = addSheet(workbook, "00_요약", [["item", "항목", 55], ["value", "값", 28]], summaryRows);
   summaryRows.forEach((row, index) => {
@@ -179,7 +194,7 @@ async function buildWorkbook(data) {
   });
   addSheet(workbook, "01_오늘 급상승 신호", [["keyword", "키워드", 24], ["strength", "신호 강도", 14], ["score", "Early Signal Score", 18, "0"],
     ["detectedAt", "발견 시각 (한국시간(KST))", 29, EXCEL_TIMESTAMP_FORMAT], ["reasons", "주요 탐지 근거", 42], ["productBrand", "상품/브랜드", 32], ["sources", "Source", 24],
-    ["youtubeChange", "YouTube 변화", 28], ["searchAdChange", "Search Ad 변화", 28], ["previousNaver", "전일 NAVER 상태", 22], ["earlySignalDate", "Early Signal 날짜", 18, "yyyy-mm-dd"]], early.map(earlyRow));
+    ["youtubeChange", "YouTube 변화", 28], ["searchAdChange", "Search Ad 변화", 28], ["previousNaver", "전일 NAVER 상태", 60], ["earlySignalDate", "Early Signal 날짜", 18, "yyyy-mm-dd"]], early.map(earlyRow));
   addSheet(workbook, "02_어제 급등 확인", resultColumns, results.map(resultRow));
   addSheet(workbook, "03_상품 직접 매칭", resultColumns, results.filter((r) => r.resultType === "product_match").map(resultRow));
   addSheet(workbook, "04_브랜드_카테고리", resultColumns, results.filter((r) => r.resultType === "brand_or_category_signal").map(resultRow));
@@ -187,7 +202,10 @@ async function buildWorkbook(data) {
   addSheet(workbook, "06_최근 발견 키워드", [["rank", "순위", 8, "0"], ["keyword", "키워드", 24], ["sources", "발견 소스", 24],
     ["discoveredAt", "최초 발견 (한국시간(KST))", 29, EXCEL_TIMESTAMP_FORMAT], ["lastSeenAt", "마지막 발견 (한국시간(KST))", 29, EXCEL_TIMESTAMP_FORMAT], ["confidence", "sourceConfidence", 17, "0"],
     ["brand", "관련 브랜드", 18], ["productContext", "제품군/제품라인", 24], ["monthlySearchStatus", "월간검색량 상태", 18],
-    ["monthlyTotalSearches", "월간검색량", 14, "#,##0"], ["marketDiscoveryRank", "후보 순위", 12, "0"], ["protectedSlot", "500 보호 슬롯", 14], ["trendStatus", "Trend 상태", 20], ["confidenceStatus", "출처 신뢰도 확인 상태", 48], ["brandStatus", "브랜드 확인 상태", 36]], discoveries.map(discoveryRow));
+    ["monthlyTotalSearches", "월간검색량", 14, "#,##0"], ["marketDiscoveryRank", "후보 순위", 12, "0"], ["protectedSlot", "신규 후보 우선 선정", 48], ["trendStatus", "네이버 데이터 확인 상태", 48], ["confidenceStatus", "출처 신뢰도 확인 상태", 48], ["brandStatus", "브랜드 확인 상태", 36],
+    ['actualSelection', '실제 Instant 분석 대상', 36], ['collectionStatus', '수집 상태', 48], ['assessmentStatus', '급등 판정', 48],
+    ['dataDate', 'NAVER 데이터 기준일', 20, 'yyyy-mm-dd'], ['fetchedAt', '마지막 수집 (한국시간(KST))', 29, EXCEL_TIMESTAMP_FORMAT],
+    ['instantJobId', '기준 Instant Job', 42], ['targetDate', 'NAVER 목표일', 18, 'yyyy-mm-dd'], ['requiredWindow', '필요 분석 기간', 28]], discoveries.map(discoveryRow));
   if (data.periodJob?.jobId || (data.periodRequest?.startDate && data.periodRequest?.endDate)) addPeriodSheet(workbook, data.periodJob, data.periodRequest);
   return workbook;
 }

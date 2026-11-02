@@ -1,6 +1,5 @@
 const { connect, readCache } = require("./market-discovery-cache");
-const { connect: connectTrend, readCache: readTrendCache } = require("./trend-series-cache");
-const { readDiagnosticIndex } = require("./trend-analysis-cache");
+const naver = require('./naver-observation-context');
 const { normalizedKeyword } = require("./market-discovery-core");
 const { projectBrandContext } = require('./brand-context');
 const { selectWithMarketDiscovery } = require("./trend-analysis-background")._test;
@@ -24,23 +23,21 @@ function inWindow(item, windowName, now = Date.now()) {
 }
 
 exports.handler = async (event) => {
-  connect(event); connectTrend(event);
+  connect(event); naver.connect(event);
   if (event.httpMethod !== "GET") return json(405, { error: "GET 요청만 허용됩니다." });
   try {
     const windowName = String(event.queryStringParameters?.window || "24h"); const limit = Math.min(100, Math.max(1, Number(event.queryStringParameters?.limit || 100)));
-    const [market, trend, diagnostic] = await Promise.all([readCache(), readTrendCache(), readDiagnosticIndex()]);
+    const market = await readCache();
     const marketItems = market?.items || [];
     const selection = selectWithMarketDiscovery([], marketItems, new Map(), 500, 500);
     const protectedItems = [...selection.selected, ...selection.ratioOnly];
     const protectedRanks = new Map(protectedItems.map((item, index) => [normalizedKeyword(item.keyword), index + 1]));
-    const traces = new Map((diagnostic?.items || []).map((item) => [item.normalizedKeyword, item]));
-    const rows = marketItems.filter((item) => inWindow(item, windowName)).sort((a, b) => discoverySortScore(b) - discoverySortScore(a)).slice(0, limit)
+    const displayed = marketItems.filter((item) => inWindow(item, windowName)).sort((a, b) => discoverySortScore(b) - discoverySortScore(a)).slice(0, limit);
+    const context = await naver.loadNaverObservationContext({ keys: displayed.map(item => item.keyword) });
+    const rows = displayed
       .map((storedItem, index) => {
         const item = projectBrandContext(storedItem);
-        const key = normalizedKeyword(item.keyword); const trendRecord = trend.entries.get(key)?.search || null; const trace = traces.get(key) || null;
-        let trendStatus = trendRecord ? "completed" : protectedRanks.has(key) ? "pending" : "not-selected";
-        if (trace?.searchTrendStatus === "pending-cache") trendStatus = trace.trendWaitReason || "fast_path_cache_wait";
-        else if (trace?.searchTrendStatus === "valid" || trace?.searchTrendStatus === "empty") trendStatus = "completed";
+        const key = normalizedKeyword(item.keyword), naverStatus = context.resolve(key);
         return { rank: index + 1, keyword: item.keyword, normalizedKeyword: key, discoverySource: item.discoverySource || [],
           discoveredAt: item.discoveredAt || null, lastSeenAt: item.lastSeenAt || null, sourceConfidence: item.sourceConfidence == null ? null : Number(item.sourceConfidence),
           sourceConfidenceQuality: item.sourceConfidenceQuality || null,
@@ -49,11 +46,14 @@ exports.handler = async (event) => {
           monthlySearchStatus: item.monthlySearchStatus || "not-requested", monthlyTotalSearches: item.monthlyTotalSearches ?? null,
           marketDiscoveryRank: marketItems.findIndex((candidate) => candidate.normalizedKeyword === key) + 1,
           selectedForProtectedSlot: protectedRanks.has(key), protectedSlotRank: protectedRanks.get(key) || null,
-          trendStatus, trendWaitReason: trace?.trendWaitReason || null, trendFetchedAt: trendRecord?.fetchedAt || trace?.trendFetchedAt || null,
-          selectedForAnalysis: Boolean(trace), lastTrendResult: trace ? { status: trace.searchTrendStatus, finalIncluded: trace.finalIncluded,
-            resultType: trace.resultType, exclusionReason: trace.exclusionReason } : null };
+          naverStatus, trendStatus: naverStatus.data.state, trendWaitReason: naverStatus.collection.state,
+          trendFetchedAt: naverStatus.data.fetchedAt,
+          selectedForAnalysis: naverStatus.selection.state === 'unknown' ? null : naverStatus.selection.state === 'selected',
+          lastTrendResult: naverStatus.assessment };
       });
-    return json(200, { ok: true, window: windowName, totalMarketDiscovery: marketItems.length, matchingCount: rows.length, items: rows });
+    return json(200, { ok: true, window: windowName, windowMeaning: 'keyword-discovery-time',
+      instantJobId: context.jobId, targetDataDate: context.targetDataDate,
+      totalMarketDiscovery: marketItems.length, matchingCount: rows.length, items: rows });
   } catch (error) { return json(500, { error: `신규 발견 후보 조회 실패: ${error.message}` }); }
 };
 
