@@ -1320,6 +1320,61 @@
         max-width: 100%;
       }
     }
+    /* Keep the eight comparison lists compact. The detail dialog is outside the table. */
+    .workspace,.workspace>.panel,.cmp-scroll { min-width:0; }
+    .cmp-toolbar,.cmp-density { display:flex;align-items:center;flex-wrap:wrap;gap:8px; }
+    .cmp-toolbar { justify-content:space-between;margin-bottom:14px; }
+    .cmp-toolbar h2 { margin:0; }
+    .cmp-density { color:#455a53;font-size:13px; }
+    .cmp-density button,.cmp-table button,#cmpDetailClose {
+      width:auto;min-height:34px;margin:0;padding:5px 10px;line-height:1.25;
+      border:1px solid #b9cbc4;border-radius:7px;background:white;color:#215843;
+      font-size:13px;font-weight:650;white-space:nowrap;cursor:pointer;
+    }
+    .cmp-density button[aria-pressed=true] { color:#fff;background:#225b45;border-color:#225b45; }
+    :is(.cmp-table,.cmp-density,#cmpDetailDialog) button:focus-visible { outline:3px solid #136b92;outline-offset:1px; }
+    .cmp-scroll { max-width:100%;overflow:auto;overscroll-behavior-x:contain;isolation:isolate; }
+    table.cmp-table { width:100%;min-width:940px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums;color:#243d32; }
+    .cmp-table :is(th,td) { padding:4px 7px;line-height:1.32;vertical-align:middle;overflow-wrap:normal;word-break:keep-all; }
+    .cmp-table th { position:sticky;top:0;z-index:3;white-space:normal;background:#edf3f0;color:#334a40;height:36px; }
+    .cmp-table td { height:45px;background:#fff; }
+    .cmp-table tr:nth-child(even) td { background:#f8faf9; }
+    .cmp-table tbody tr:hover td { background:#f1f6f4; }
+    .cmp-table :is(th,td):last-child { position:sticky;right:0;width:66px;text-align:center;box-shadow:-1px 0 #d9e3de;z-index:1; }
+    :is(.cmp-surge,.cmp-early) :is(th,td):first-child,
+    :is(.cmp-period,.cmp-discovery) :is(th,td):nth-child(2) { width:124px;position:sticky;left:0;z-index:1;box-shadow:1px 0 #d9e3de; }
+    :is(.cmp-period,.cmp-discovery) :is(th,td):first-child { width:42px;text-align:center; }
+    .cmp-table thead tr th:first-child,.cmp-table thead tr th:nth-child(2),.cmp-table thead tr th:last-child { z-index:4; }
+    .cmp-table .cmp-key,.cmp-table .cmp-product,.cmp-table .cmp-reason {
+      display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;word-break:normal;
+    }
+    .cmp-table .cmp-reason { -webkit-line-clamp:1; }
+    .cmp-table .cmp-number { text-align:right;font-variant-numeric:tabular-nums; }
+    .cmp-table .cmp-date { white-space:nowrap;font-variant-numeric:tabular-nums; }
+    .cmp-table .cmp-badge { display:inline-block;vertical-align:middle;padding:1px 4px;margin:0 2px 1px 0;border-radius:4px;background:#eaf1ed;color:#284b3e;white-space:nowrap;font-size:12px; }
+    .cmp-table small { line-height:1.25; }
+    .cmp-table .pill { white-space:normal;padding:1px 4px; }
+    .cmp-period :is(th,td):nth-child(6) { width:18%; }
+    .cmp-discovery :is(th,td):nth-last-child(2) { width:17%; }
+    html[data-cmp-density=relaxed] .cmp-table td { padding:10px 8px; }
+    html[data-cmp-density=relaxed] .cmp-table .cmp-reason { -webkit-line-clamp:2; }
+    #cmpDetailDialog { position:fixed;inset:0 0 0 auto;width:min(570px,100%);height:100%;height:100dvh;max-height:none;max-width:100%;margin:0;padding:0;border:0;color:#253b31;background:white;box-shadow:-10px 0 48px #122c2233; }
+    #cmpDetailDialog[open] { display:flex;flex-direction:column; }
+    #cmpDetailDialog::backdrop { background:#17362a66; }
+    #cmpDetailDialog header { position:static;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px;background:#f1f6f3;border-bottom:1px solid #d8e4dc;color:inherit; }
+    #cmpDetailTitle { margin:3px 0 0;font-size:21px;overflow-wrap:anywhere; }
+    #cmpDetailContent { flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:18px 22px;overflow-wrap:anywhere; }
+    #cmpDetailContent :is(.cmp-key,.cmp-product,.cmp-reason) { display:block;overflow:visible; }
+    #cmpDetailContent dl { margin:0; }
+    #cmpDetailContent dt,#cmpDetailContent h4 { font-weight:700;color:#36594a;margin:16px 0 4px; }
+    #cmpDetailContent dd { margin:0;line-height:1.55; }
+    #cmpDetailContent ul { padding-left:20px; }
+    #cmpDetailContent [data-cmp-job] { border-top:1px solid #dbe5df;margin-top:20px;padding-top:14px;font-size:13px; }
+    @media(max-width:700px) {
+      .cmp-table button,.cmp-density button,#cmpDetailClose { min-height:44px; }
+      .cmp-table :is(th,td):last-child { width:62px; }
+      #cmpDetailContent { padding:14px 16px; }
+    }
   </style>
 </head>
 <body class="locked">
@@ -1561,7 +1616,12 @@
 
     <div class="workspace">
       <section class="panel">
-        <h2>모니터링 요약</h2>
+        <div class="cmp-toolbar"><h2>모니터링 요약</h2>
+          <div class="cmp-density" role="group" aria-label="결과 목록 표시 방식"><span>목록 보기</span>
+            <button type="button" data-cmp-density="compact" aria-pressed="true">간결하게 보기</button>
+            <button type="button" data-cmp-density="relaxed" aria-pressed="false">여유 있게 보기</button>
+          </div>
+        </div>
         <div id="dataStatusSummary" class="api-errors visible" style="margin-bottom:16px;">자동 수집 데이터 상태를 확인하는 중입니다.</div>
         <div id="searchAdCachePanel" class="api-errors visible" style="margin-bottom:16px;">
           <strong>Search Ad 상품 캐시</strong><br>
@@ -1587,8 +1647,8 @@
                 <option value="3d">최근 3일</option><option value="7d">최근 7일</option><option value="all">전체</option>
               </select>
             </div>
-            <div class="table-wrap" style="max-height:420px;margin-top:8px;overflow:auto;">
-              <table><thead><tr><th>순위</th><th>키워드</th><th>발견 소스</th><th>최초/최근 발견</th><th>신뢰도</th><th>브랜드·제품 문맥</th><th>월간검색량</th><th>신규 후보 우선 선정</th><th>네이버 데이터 확인 상태</th></tr></thead>
+            <div class="table-wrap cmp-scroll" style="max-height:420px;margin-top:8px;overflow:auto;">
+              <table class="cmp-table cmp-discovery" data-cmp-scope="discovery"><thead><tr><th>순위</th><th>키워드</th><th>발견 출처</th><th>최초 발견 (KST)</th><th>후보 신뢰도</th><th>월간검색량</th><th>신규 후보 우선 선정</th><th>네이버 데이터 확인 상태</th><th>상세</th></tr></thead>
                 <tbody id="marketDiscoveryNewBody"><tr><td colspan="9" class="muted">신규 후보를 불러오는 중입니다.</td></tr></tbody></table>
             </div>
           </div>
@@ -1639,9 +1699,9 @@
         <div id="todayEarlySignalMeta" class="muted" style="margin-bottom:8px;">오늘 신호를 불러오는 중입니다.</div>
         <p class="muted">YouTube·Search Ad의 저장된 시장 신호로 포착한 키워드입니다. 신호 기준일과 소스 수집 성공 시각을 확인해주세요. 근거의 ‘오늘·최근’은 표시된 신호 기준일 기준이며, NAVER 당일 검색 급등 확정 결과는 아닙니다.</p>
         <p class="muted">전일 NAVER 상태는 표시된 기준일의 저장 근거로 확인합니다. 누적 과거 급등 이력과 구분하며, ‘확인 전’은 급등 아님 또는 수집 대기를 뜻하지 않습니다.</p>
-        <div class="table-wrap" style="max-height:480px;overflow:auto;"><table>
-          <thead><tr><th>키워드</th><th>신호 강도</th><th>점수</th><th>발견 시각</th><th>주요 탐지 근거</th><th>상품·브랜드</th><th>Source</th><th>전일 NAVER 상태</th></tr></thead>
-          <tbody id="todayEarlySignalBody"><tr><td colspan="8" class="muted">오늘 신호를 불러오는 중입니다.</td></tr></tbody>
+        <div class="table-wrap cmp-scroll" style="max-height:480px;overflow:auto;"><table class="cmp-table cmp-early" data-cmp-scope="early">
+          <thead><tr><th>키워드</th><th>신호 강도·점수</th><th>발견 시각 (KST)</th><th>핵심 탐지 근거</th><th>상품·브랜드</th><th>전일 NAVER 상태</th><th>상세</th></tr></thead>
+          <tbody id="todayEarlySignalBody"><tr><td colspan="7" class="muted">오늘 신호를 불러오는 중입니다.</td></tr></tbody>
         </table></div>
       </section>
 
@@ -1659,25 +1719,13 @@
         <div class="section-head">
           <h2>상품 직접 매칭 급등</h2>
         </div>
-        <div class="table-wrap">
-          <table>
+        <div class="table-wrap cmp-scroll">
+          <table class="cmp-table cmp-surge cmp-direct">
             <thead>
-              <tr>
-                <th>급등 키워드</th>
-                <th>추정 최신/최대/기준</th>
-                <th>추정 급등수</th>
-                <th>급등 이력</th>
-                <th>출처</th>
-                <th>대표 매칭 상품</th>
-                <th>추가 매칭 상품</th>
-                <th>동일 강도 후보</th>
-                <th>일치율</th>
-                <th>매칭 판단</th>
-                <th>판단 근거</th>
-              </tr>
+              <tr><th>키워드</th><th>추정 급등량</th><th>상승률</th><th>신뢰도</th><th>대표 상품</th><th>일치율 · 판정</th><th>실제 기준일</th><th>최근 이력</th><th>상세</th></tr>
             </thead>
             <tbody id="resultBody">
-              <tr><td colspan="11" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
+              <tr><td colspan="9" class="muted">분석 실행 후 결과가 표시됩니다.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1690,9 +1738,9 @@
         <div id="periodPreviousJobNotice" class="muted" hidden></div>
         <p class="muted">저장된 과거 기간 결과는 요청 기간과 실제 사용 데이터 기간을 구분해 확인해주세요. 선택한 기간과 일치하는 완료 결과만 아래 표에 표시하며, 오늘·어제 자동 최신 결과와는 별개입니다. 새 기간 분석을 실행하면 저장된 기간 데이터를 우선 사용하고, 부족한 경우 필요한 NAVER Trend 데이터만 자동 수집합니다.</p>
         <h3>TOP 10</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>순위</th><th>키워드</th><th>NAVER 추정 급등량</th><th>상승률</th><th>기간 신뢰도</th><th>기간 신뢰 근거</th><th>상품·브랜드</th><th>YouTube 기간 변화</th><th>Search Ad 기간 변화</th><th>데이터 상태</th><th>NAVER 기준일</th></tr></thead>
-          <tbody id="periodAnalysisTopBody"><tr><td colspan="11" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
+        <div class="table-wrap cmp-scroll"><table class="cmp-table cmp-period">
+          <thead><tr><th>순위</th><th>키워드</th><th>NAVER 추정 급등량</th><th>상승률</th><th>기간 신뢰도</th><th>대표 상품·브랜드</th><th>NAVER 기준일</th><th>데이터 상태</th><th>상세</th></tr></thead>
+          <tbody id="periodAnalysisTopBody"><tr><td colspan="9" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
         </table></div>
         <details id="periodAllResultsDetails" class="period-all-results">
           <summary id="periodAllResultsSummary">전체 결과 보기 (0건)</summary>
@@ -1700,9 +1748,9 @@
             <input id="periodResultSearch" type="search" placeholder="기간 결과 내 키워드 검색" aria-label="기간 결과 내 키워드 검색">
             <span id="periodResultSearchMeta" class="muted"></span>
           </div>
-          <div class="table-wrap" style="max-height:560px;overflow:auto;"><table>
-            <thead><tr><th>순위</th><th>키워드</th><th>NAVER 추정 급등량</th><th>상승률</th><th>기간 신뢰도</th><th>기간 신뢰 근거</th><th>상품·브랜드</th><th>YouTube 기간 변화</th><th>Search Ad 기간 변화</th><th>데이터 상태</th><th>NAVER 기준일</th></tr></thead>
-            <tbody id="periodAnalysisBody"><tr><td colspan="11" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
+          <div class="table-wrap cmp-scroll" style="max-height:560px;overflow:auto;"><table class="cmp-table cmp-period">
+            <thead><tr><th>순위</th><th>키워드</th><th>NAVER 추정 급등량</th><th>상승률</th><th>기간 신뢰도</th><th>대표 상품·브랜드</th><th>NAVER 기준일</th><th>데이터 상태</th><th>상세</th></tr></thead>
+            <tbody id="periodAnalysisBody"><tr><td colspan="9" class="muted">선택 기간 분석 결과가 여기에 표시됩니다.</td></tr></tbody>
           </table></div>
         </details>
       </section>
@@ -1712,9 +1760,9 @@
           <h2>브랜드/카테고리 관련 급등</h2>
           <p class="muted">급등 기준은 통과했지만 특정 상품 하나를 식별하기 어려운 브랜드·카테고리 신호입니다.</p>
         </div></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>급등 검색어</th><th>추정 급등수</th><th>분류</th><th>관련 브랜드</th><th>관련 상품 수</th><th>참고 상품</th><th>상품 일치율</th><th>판단</th><th>판단 근거</th><th>최신 기준일</th></tr></thead>
-          <tbody id="brandSignalBody"><tr><td colspan="10" class="muted">브랜드/카테고리 관련 급등 결과가 없습니다.</td></tr></tbody>
+        <div class="table-wrap cmp-scroll"><table class="cmp-table cmp-surge">
+          <thead><tr><th>키워드</th><th>추정 급등량</th><th>상승률</th><th>신뢰도</th><th>관련 브랜드 · 참고 상품</th><th>일치율 · 분류</th><th>실제 기준일</th><th>상세</th></tr></thead>
+          <tbody id="brandSignalBody"><tr><td colspan="8" class="muted">브랜드/카테고리 관련 급등 결과가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
 
@@ -1723,9 +1771,9 @@
           <h2>기타 뷰티/건강 관련 급등</h2>
           <p class="muted">성분·제품라인·제품군 수준의 관련성은 확인되지만 특정 상품 하나를 식별하기 어려운 신호입니다.</p>
         </div></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>급등 검색어</th><th>추정 급등수</th><th>분류</th><th>관련 브랜드</th><th>관련 상품 수</th><th>참고 상품</th><th>상품 일치율</th><th>판단</th><th>판단 근거</th><th>최신 기준일</th></tr></thead>
-          <tbody id="domainSignalBody"><tr><td colspan="10" class="muted">기타 뷰티/건강 관련 급등 결과가 없습니다.</td></tr></tbody>
+        <div class="table-wrap cmp-scroll"><table class="cmp-table cmp-surge">
+          <thead><tr><th>키워드</th><th>추정 급등량</th><th>상승률</th><th>신뢰도</th><th>제품군 · 참고 상품</th><th>일치율 · 분류</th><th>실제 기준일</th><th>상세</th></tr></thead>
+          <tbody id="domainSignalBody"><tr><td colspan="8" class="muted">기타 뷰티/건강 관련 급등 결과가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
 
@@ -1734,9 +1782,9 @@
           <h2>저강도 선행 신호</h2>
           <p class="muted">절대·상대 급등 기준 전 단계에서 브랜드와 제품 문맥이 함께 확인된 초기 관심 상승 신호입니다.</p>
         </div></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>검색어</th><th>Peak 날짜</th><th>Peak 증가량</th><th>상대 상승률</th><th>관련 브랜드</th><th>제품군/제품라인</th><th>상품 일치율</th><th>대표/참고 상품</th><th>판단</th><th>판단 근거</th></tr></thead>
-          <tbody id="lowIntensitySignalBody"><tr><td colspan="10" class="muted">저강도 선행 신호가 없습니다.</td></tr></tbody>
+        <div class="table-wrap cmp-scroll"><table class="cmp-table cmp-surge">
+          <thead><tr><th>키워드</th><th>최대 증가량 · 날짜</th><th>상대 상승률</th><th>신뢰도</th><th>브랜드 · 참고 상품</th><th>일치율 · 판정</th><th>실제 기준일</th><th>상세</th></tr></thead>
+          <tbody id="lowIntensitySignalBody"><tr><td colspan="8" class="muted">저강도 선행 신호가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
 
@@ -1745,14 +1793,19 @@
           <h2>Ratio-only 시장 신호</h2>
           <p class="muted">월간검색량이 제공되지 않아 절대 검색량을 만들지 않고, 강한 상품·시장 근거와 Search Trend ratio 변화만 표시합니다.</p>
         </div></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>검색어</th><th>Peak 날짜</th><th>Peak ratio</th><th>Baseline ratio</th><th>상대 ratio 상승</th><th>관련 브랜드</th><th>제품 문맥</th><th>참고 상품</th><th>판단</th><th>근거</th></tr></thead>
-          <tbody id="ratioOnlySignalBody"><tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr></tbody>
+        <div class="table-wrap cmp-scroll"><table class="cmp-table cmp-surge">
+          <thead><tr><th>키워드</th><th>최대 / 기준 ratio</th><th>ratio 상승률</th><th>신뢰도</th><th>브랜드 · 참고 상품</th><th>일치율 · 판정</th><th>실제 기준일</th><th>상세</th></tr></thead>
+          <tbody id="ratioOnlySignalBody"><tr><td colspan="8" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr></tbody>
         </table></div>
       </section>
     </div>
   </main>
 
+  <dialog id="cmpDetailDialog" aria-labelledby="cmpDetailTitle">
+    <header><div><small id="cmpDetailScope"></small><h2 id="cmpDetailTitle"></h2></div>
+      <button type="button" id="cmpDetailClose" autofocus>닫기</button></header>
+    <div id="cmpDetailContent" tabindex="0"></div>
+  </dialog>
   <div id="accessModal" class="modal-overlay" hidden>
     <div class="modal-card">
       <div class="modal-header">
@@ -2434,11 +2487,11 @@
       ["statSearchAd", "statDatalab", "statShoppingInsight", "statNews", "statMatches"].forEach((id) => { $(id).textContent = "0"; });
       $("statLastRun").textContent = "-";
       $("trendChart").innerHTML = `<div class="trend-empty">${escapeHtml(message)}</div>`;
-      $("resultBody").innerHTML = `<tr><td colspan="11" class="muted">${escapeHtml(message)}</td></tr>`;
-      $("brandSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
-      $("domainSignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
-      $("lowIntensitySignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
-      $("ratioOnlySignalBody").innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("resultBody").innerHTML = `<tr><td colspan="9" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("brandSignalBody").innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("domainSignalBody").innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("lowIntensitySignalBody").innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(message)}</td></tr>`;
+      $("ratioOnlySignalBody").innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(message)}</td></tr>`;
     }
 
     function showApiErrors(errors = {}) {
@@ -2549,7 +2602,7 @@
         activePeriodOneClick = { active: true, phase: "initial-fast", startDate: context.startDate,
           endDate: context.endDate, collectionAttempted: false };
         $("periodAnalysisMeta").textContent = "선택 기간 분석 준비 중 · exact-window cache를 확인하고 있습니다.";
-        $("periodAnalysisBody").innerHTML = '<tr><td colspan="10" class="muted">분석 중입니다.</td></tr>';
+        $("periodAnalysisBody").innerHTML = '<tr><td colspan="9" class="muted">분석 중입니다.</td></tr>';
       }
       showApiErrors();
       if (mode === "period") {
@@ -2630,6 +2683,60 @@
       analysisStatusReadVersion += 1;
     }
 
+    function comparisonRow({ scope, key, keyword, cells, detail, jobId, history }) {
+      // Keep the complete view with its own row, not a shared mutable "last selected" object.
+      const esc = escapeHtml;
+      const period = scope === "period" ? ` data-period-keyword="${esc(String(keyword || "").toLowerCase())}"` : "";
+      return `<tr data-cmp-scope="${esc(scope)}" data-cmp-key="${esc(key ?? keyword)}" data-cmp-keyword="${esc(keyword)}"${period}>${cells.join("")}<td><button type="button" data-cmp-open aria-label="${esc(keyword)} 상세" aria-haspopup="dialog" aria-controls="cmpDetailDialog">상세</button><template data-cmp-detail>${detail || ""}${history ? `<section data-cmp-history-target><h4>급등 이력</h4>${history}</section>` : ""}${jobId ? `<p data-cmp-job>분석 작업 ID: ${esc(jobId)}</p>` : ""}</template></td></tr>`;
+    }
+
+    function initComparisonTables() {
+      const dialog = document.getElementById("cmpDetailDialog");
+      if (!dialog || typeof dialog.showModal !== "function") return;
+      const content = document.getElementById("cmpDetailContent"), close = document.getElementById("cmpDetailClose");
+      const setting = "olive.resultTableDensity.v1";
+      let restore = null;
+      function density(value) {
+        const selected = value === "relaxed" ? "relaxed" : "compact";
+        document.documentElement.dataset.cmpDensity = selected;
+        document.querySelectorAll("button[data-cmp-density]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.cmpDensity === selected)));
+      }
+      try { density(localStorage.getItem(setting)); } catch { density("compact"); }
+      document.addEventListener("click", event => {
+        const trigger = event.target.closest?.("button[data-cmp-density],button[data-cmp-open],button[data-cmp-history]");
+        if (!trigger) return;
+        if (trigger.hasAttribute("data-cmp-density")) {
+          density(trigger.dataset.cmpDensity);
+          try { localStorage.setItem(setting, trigger.dataset.cmpDensity); } catch { /* Choice remains active in this tab. */ }
+          return;
+        }
+        const row = trigger.closest("tr[data-cmp-keyword]"), source = row?.querySelector("template[data-cmp-detail]");
+        if (!source) return;
+        const wrap = row.closest(".cmp-scroll");
+        restore = { trigger, wrap, left:wrap?.scrollLeft, top:wrap?.scrollTop, x:window.scrollX, y:window.scrollY };
+        const listTitle = row.dataset.cmpScope === "discovery" ? "최근 발견 키워드 TOP 100" : row.closest("section.panel")?.querySelector("h2")?.textContent;
+        document.getElementById("cmpDetailScope").textContent = (listTitle || "결과") + " · 상세";
+        document.getElementById("cmpDetailTitle").textContent = row.dataset.cmpKeyword;
+        content.replaceChildren(source.content.cloneNode(true));
+        dialog.showModal(); close.focus({ preventScroll:true }); content.scrollTop = 0;
+        if (trigger.hasAttribute("data-cmp-history")) content.querySelector("[data-cmp-history-target]")?.scrollIntoView({ block:"start" });
+      });
+      close.addEventListener("click", () => dialog.close());
+      dialog.addEventListener("click", event => {
+        const rect = dialog.getBoundingClientRect();
+        if (event.target === dialog && (event.clientX < rect.left || event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom)) dialog.close();
+      });
+      dialog.addEventListener("close", () => {
+        content.replaceChildren();
+        if (restore) {
+          restore.trigger.focus({ preventScroll:true });
+          if (restore.wrap) { restore.wrap.scrollTop = restore.top; restore.wrap.scrollLeft = restore.left; }
+          window.scrollTo({ left:restore.x, top:restore.y, behavior:"instant" });
+          restore = null;
+        }
+      });
+    }
+
     function periodSelectionMatchesJob(job) {
       return Boolean(job?.jobId && job.startDate === $("collectionStart").value && job.endDate === $("collectionEnd").value);
     }
@@ -2659,13 +2766,40 @@
       const surge = row.estimatedSurgeCount == null ? "계산 불가" : `+${Number(row.estimatedSurgeCount).toLocaleString("ko-KR")}`;
       const growth = ResultGrowthPresentation.growthView(row), rise = growth.rateLabel;
       const display = storedPeriodConfidenceDisplay(row), reasons = display.reasons;
-      return `<tr data-period-keyword="${escapeHtml(String(row.keyword || "").toLowerCase())}">
-        <td>${index + 1}</td><td><strong>${escapeHtml(row.keyword)}</strong><br><small class="muted">${surgeSignalSummary(row)}</small></td>
-        <td><span class="period-metric">${escapeHtml(surge)}</span></td><td><span class="period-metric">${escapeHtml(rise)}</span>${growth.roundedToZero ? `<br><small>원본 기준 ${escapeHtml(growth.baselineLabel)}</small>` : ""}</td>
-        <td>${periodConfidenceSummary(row)}</td><td>${reasons.length ? escapeHtml(reasons.slice(0, 5).join(" · ")) : '<span class="muted">확인된 기간 신뢰 근거 없음</span>'}${display.scoreWarning ? `<br><small class="muted">${escapeHtml(display.scoreWarning)}</small>` : ""}${row.qualityProjection?.displayWarning ? `<br><small class="muted">${escapeHtml(row.qualityProjection.displayWarning)}</small>` : ""}</td>
-        <td>${periodRelationSummary(row)}</td><td>${periodSourceEvidence(row.periodMarketEvidence?.youtube, "YouTube")}</td>
-        <td>${periodSourceEvidence(display.searchAd, "Search Ad")}</td><td>${escapeHtml(periodDataStatus(row.periodMarketEvidence))}</td>
-        <td>${escapeHtml(row.latestDataDate || state.currentPeriodAnalysisJob?.latestDataDate || "-")}</td></tr>`;
+      const h = escapeHtml, job = state.currentPeriodAnalysisJob || {}, ev = row.periodMarketEvidence;
+      const status = periodDataStatus(ev), confidence = periodConfidenceSummary(row), related = row.relatedSignal || {};
+      const gap = !ev || ev.dataAvailability === "no_data" ? "기간 근거 없음" : ev.dataGaps?.length || ev.dataAvailability === "partial" ? "일부 근거 부족" : ev.dataAvailability ? "기간 근거 있음" : "기간 근거 미확인";
+      const product = row.match?.item?.product || row.match?.item?.brand || related.relatedBrand || related.relatedProductContext || related.relatedProductLine || related.relatedProductType;
+      const extra = row.match?.additionalMatches || [], date = row.latestDataDate;
+      const info = (label, html) => `<dt>${h(label)}</dt><dd>${html}</dd>`;
+      const detail = '<dl>' + [
+        info("저장된 기간 결과", h([job.startDate, job.endDate].filter(Boolean).join(" ~ ") || "확인 불가")),
+        info("발견 출처", h((Array.isArray(row.discoverySource) ? row.discoverySource.join(" · ") : row.discoverySource) || "확인 불가")),
+        info("분석 대상", "이 기간 결과에 포함 · 신규 우선 선정 여부는 별도"),
+        info("NAVER 기준일", h(date || "행 기준일 확인 불가")),
+        ...(row.trendFetchedAt ? [info("마지막 수집 (한국시간 KST)", h(formatHistoryDate(row.trendFetchedAt)))] : []),
+        info("추정 급등량 · 상승률", h(surge + " · " + rise)), info("상승률 기준값", h(growth.baselineLabel + " · " + growth.statusLabel)),
+        info("신호 구분", surgeSignalSummary(row)), info("기간 신뢰도", confidence),
+        info("기간 신뢰 근거", h([...(reasons.length ? reasons : ["확인된 기간 신뢰 근거 없음"]), display.scoreWarning, row.qualityProjection?.displayWarning].filter(Boolean).join(" · "))),
+        info("상품·브랜드", periodRelationSummary(row)),
+        ...[["매칭 판정",row.match?.judgment],["매칭 근거",row.match?.reason],["관련성 판정",related.judgment]].filter(([,v])=>v).map(([k,v])=>info(k,h(v))),
+        ...[["성분",row.match?.signals?.ingredientMatches],["농도",row.match?.signals?.concentrationMatches],["제품군",row.match?.signals?.typeMatches],["제품 라인",row.match?.signals?.productLineMatches]].filter(([,v])=>Array.isArray(v) && v.length).map(([k,v])=>info(k,h(v.join(" · ")))),
+        ...(related.referenceProducts?.length ? [info("저장된 참고 상품", '<ol>'+related.referenceProducts.map(x=>'<li>'+h([x.product || x.item?.product, x.brand || x.item?.brand, x.account || x.item?.account].filter(Boolean).join(" · ") || "상품명 미확인")+'</li>').join("")+'</ol>')] : []),
+        ...[["제품군", related.relatedProductType], ["제품 라인", related.relatedProductLine], ["성분", related.relatedIngredient], ["연관 문맥", related.relatedProductContext], ["판단 근거", related.reason]].filter(([,v]) => typeof v === "string" && v).map(([k,v]) => info(k,h(v))),
+        ...(extra.length ? [info("추가 매칭 상품 (" + extra.length + "개)", '<ol>' + extra.map(x => '<li>' + h([x.item?.product || x.candidate || "상품명 미확인", x.item?.account, x.score == null ? "" : Number(x.score) + "%"].filter(Boolean).join(" · ")) + '</li>').join("") + '</ol>')] : []),
+        info("YouTube 기간 변화", periodSourceEvidence(ev?.youtube, "YouTube")), info("Search Ad 기간 변화", periodSourceEvidence(display.searchAd, "Search Ad")),
+        info("데이터 상태", h(status))].join("") + '</dl>';
+      const history = row.surgeHistoryState || row.surgeHistory;
+      const historyHtml = history ? formatSurgeHistory(history) + (history.recentHistory || []).map(x => `<div>${h(x.date)} · ${h(x.estimatedSurgeCount == null ? "증가량 확인 불가" : Number(x.estimatedSurgeCount).toLocaleString("ko-KR"))}</div>`).join("") : "";
+      return comparisonRow({scope:"period", key:index, keyword:row.keyword, jobId:job.jobId, detail, history:historyHtml, cells:[
+        `<td>${index+1}</td>`, `<td><strong class="cmp-key">${h(row.keyword)}</strong></td>`,
+        `<td class="cmp-number">${h(surge)}</td>`,
+        `<td class="cmp-number">${h(growth.status === "unavailable" ? "비교 불가 · 자료 부족" : rise)}${growth.roundedToZero ? `<small class="cmp-reason">원본 기준 ${h(growth.baselineLabel)}</small>` : ""}</td>`,
+        `<td>${row.qualityProjection?.displayWarning && row.periodMarketConfidenceScore === null ? '점수 확인 불가' : confidence}</td>`,
+        `<td><span class="cmp-product">${h((row.resultType === "unverified_context_signal" ? "미검증 후보 · " : "") + (product || "확인된 연결 없음"))}</span><small class="cmp-reason">${h([row.match?.score == null ? null : "매칭 " + Number(row.match.score) + "%", extra.length ? "추가 " + extra.length + "개" : ""].filter(Boolean).join(" · "))}</small></td>`,
+        `<td><span class="cmp-date">${h(date || "확인 불가")}</span>${date && job.endDate && date < job.endDate ? '<small class="cmp-reason">종료일 전 자료</small>' : ""}</td>`,
+        `<td><span class="cmp-badge">${h(gap)}</span></td>`
+      ]});
     }
 
     function renderPeriodResultTables() {
@@ -2681,7 +2815,7 @@
           "현재 선택 기간과 일치할 때만 상세 결과를 표시합니다."].filter(Boolean).join(" · ") : "";
       }
       const matches = periodSelectionMatchesJob(job);
-      const empty = '<tr><td colspan="11" class="muted">이 기간과 정확히 일치하는 완료 결과가 없습니다.</td></tr>';
+      const empty = '<tr><td colspan="9" class="muted">이 기간과 정확히 일치하는 완료 결과가 없습니다.</td></tr>';
       if (!matches) {
         $("periodAnalysisTopBody").innerHTML = empty;
         $("periodAnalysisBody").innerHTML = empty;
@@ -2693,7 +2827,7 @@
       const query = state.periodResultQuery.trim().toLowerCase();
       const filtered = query ? rows.filter((row) => String(row.keyword || "").toLowerCase().includes(query)) : rows;
       $("periodAnalysisBody").innerHTML = filtered.length ? filtered.map((row) => periodResultRow(row, rows.indexOf(row))).join("")
-        : '<tr><td colspan="11" class="muted">검색 조건과 일치하는 키워드가 없습니다.</td></tr>';
+        : '<tr><td colspan="9" class="muted">검색 조건과 일치하는 키워드가 없습니다.</td></tr>';
       $("periodAllResultsSummary").textContent = `전체 결과 보기 (${rows.length.toLocaleString("ko-KR")}건)`;
       $("periodResultSearchMeta").textContent = query ? `${filtered.length.toLocaleString("ko-KR")}건 검색됨` : `총 ${rows.length.toLocaleString("ko-KR")}건`;
     }
@@ -3322,20 +3456,7 @@
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         const rows = payload.items || [];
         state.marketDiscoveryRows = rows;
-        $("marketDiscoveryNewBody").innerHTML = rows.length ? rows.map((item) => {
-          const view = NaverStatusPresentation.discoveryView(item);
-          const naverDetails = ["selection", "data", "collection", "assessment", "dates", "job", "note"]
-            .filter((key) => view[key]).map((key) => `<div data-naver-status="${key}">${escapeHtml(view[key])}</div>`).join("");
-          return `<tr>
-          <td>${Number(item.rank)}</td><td><strong>${escapeHtml(item.keyword)}</strong></td>
-          <td>${escapeHtml((item.discoverySource || []).join(" + ") || "-")}</td>
-          <td>${item.discoveredAt ? formatHistoryDate(item.discoveredAt) : "-"}<br><small>${item.lastSeenAt ? formatHistoryDate(item.lastSeenAt) : "-"}</small></td>
-          <td title="${escapeHtml(item.sourceConfidenceQuality?.warning || '')}">${item.sourceConfidence == null ? '확인 불가' : Number(item.sourceConfidence)}</td><td>${escapeHtml(earlyBrandContextSummary(item))}</td>
-          <td>${item.monthlyTotalSearches == null ? escapeHtml(item.monthlySearchStatus || "ratio-only") : Number(item.monthlyTotalSearches).toLocaleString("ko-KR")}</td>
-          <td>${escapeHtml(view.priority)}</td>
-          <td>${naverDetails}</td>
-        </tr>`;
-        }).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
+        $("marketDiscoveryNewBody").innerHTML = rows.length ? rows.map(discoveryComparisonRow).join("") : '<tr><td colspan="9" class="muted">선택한 기간에 새롭게 발견된 후보가 없습니다.</td></tr>';
       } catch (error) { $("marketDiscoveryNewBody").innerHTML = `<tr><td colspan="9" class="muted">신규 후보 조회 실패: ${escapeHtml(error.message)}</td></tr>`; }
     }
     function earlyBrandContextSummary(item) {
@@ -3344,23 +3465,89 @@
       return [item.relatedBrand, ...context].filter(Boolean).join(" · ") || "-";
     }
 
+    function sourceComparisonFacts(fields) {
+      return '<dl class="cmp-facts">' + fields.filter(([, value]) => value != null && value !== "")
+        .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd>`).join("") + '</dl>';
+    }
+    function sourceComparisonNames(names) {
+      const labels = { youtube: "YouTube", "searchad-new-query": "검색광고 신규 유입", "product-cache": "상품 캐시" };
+      return (names || []).map(value => labels[value] || value).join(" + ") || "출처 확인 불가";
+    }
+    function sourceComparisonTime(stamp) {
+      const parts = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(stamp);
+      return parts ? `<time datetime="${parts[1]}T${parts[2]}+09:00" aria-label="${stamp} 한국시간">${parts[1]}<br>${parts[2]}</time>` : escapeHtml(stamp);
+    }
+    function sourceNaverBadges(status = {}) {
+      const data = status.data || {}, assess = status.assessment || {}, collection = status.collection || {};
+      const date = KstTimePresentation.formatDateOnly(data.actualDataDate, "");
+      const dateShort = date ? date.slice(5).split("-").map(Number).join("/") : "";
+      const observed = dateShort ? dateShort + " 자료 있음" : "추이 자료 있음";
+      const dataLabel = ({ "target-observed": observed, "cached-before-target": observed,
+        missing: "데이터 미확보", empty: "조회 완료 · 빈 응답", "window-unavailable": "기간 데이터 부족" + (dateShort ? " · " + dateShort + "까지" : ""),
+        invalid: "자료 유효성 미확인" })[data.state] || "자료 확인 불가";
+      const verdict = ({ "surge-confirmed": "상승 확인", "criteria-not-met": "급등 기준 미충족", "not-surged": "급등 아님",
+        "leading-signal": "선행 신호 · 급등 미확정" })[assess.state] || "판정 확인 불가";
+      const collectionLabel = ({ queued: "실제 수집 대기", running: "수집 중", error: "조회 오류",
+        "waiting-target-date": "표본 목표일 미확인", interrupted: "수집 중단 기록", "budget-held": collection.label === "오늘 수집 예산 소진" ? collection.label : "해당 작업 예산 제한",
+        "budget-exhausted": collection.label === "오늘 수집 예산 소진" ? collection.label : "해당 작업 예산 제한" })[collection.state];
+      return [dataLabel, data.state === "cached-before-target" && "목표일 미확인", verdict, collectionLabel].filter(Boolean).map(label => `<span class="cmp-badge">${escapeHtml(label)}</span>`).join(" ");
+    }
+    function discoveryComparisonRow(item, index) {
+      const view = NaverStatusPresentation.discoveryView(item), status = item.naverStatus || {};
+      const naverDetails = ["selection", "data", "collection", "assessment", "dates", "job", "note"]
+        .filter(key => view[key]).map(key => `<div data-naver-status="${key}">${escapeHtml(view[key])}</div>`).join("");
+      const priority = item.selectedForProtectedSlot === true ? "우선 추천" + (item.protectedSlotRank ? " #" + item.protectedSlotRank : "")
+        : item.selectedForProtectedSlot === false ? "우선 미선정" : "추천 확인 불가";
+      const selection = ({ selected: "분석 대상 선정", "not-selected": "분석 대상 아님" })[status.selection?.state] || "선정 확인 불가";
+      const score = item.sourceConfidence == null ? '확인 불가' : Number(item.sourceConfidence);
+      const monthly = item.monthlyTotalSearches == null ? ({ "keywordtool-unavailable": "확인 불가", "not-requested": "미조회" })[item.monthlySearchStatus] || item.monthlySearchStatus || "확인 불가"
+        : Number(item.monthlyTotalSearches).toLocaleString("ko-KR");
+      const first = formatHistoryDate(item.discoveredAt), sources = sourceComparisonNames(item.discoverySource);
+      const detail = sourceComparisonFacts([["발견 출처", sources], ["최초 발견 (한국시간 KST)", first], ["최근 발견 (한국시간 KST)", formatHistoryDate(item.lastSeenAt)],
+        ["후보 신뢰도", score], ["신뢰도 안내", item.sourceConfidenceQuality?.warning], ["브랜드·제품 문맥", earlyBrandContextSummary(item)],
+        ["브랜드 근거", item.brandEvidence?.label], ["월간검색량", monthly], ["검색량 조회 상태", item.monthlySearchStatus],
+        ["신규 후보 우선 선정", view.priority], ["후보 목록 내 순위", item.marketDiscoveryRank],
+        ["판정 기준일", status.assessment?.assessedDataDate], ["제외 사유", status.assessment?.exclusionReason]])
+        + "<h3>네이버 확인 근거</h3>" + naverDetails;
+      return comparisonRow({ scope: "discovery", key: String(item.rank ?? index) + ":" + item.keyword, keyword: item.keyword, jobId: status.jobId, detail, cells: [
+        `<td class="cmp-number">${escapeHtml(String(item.rank ?? "—"))}</td>`, `<td><strong class="cmp-key">${escapeHtml(item.keyword)}</strong></td>`,
+        `<td><span class="cmp-reason">${escapeHtml(sources)}</span></td>`, `<td class="cmp-date">${sourceComparisonTime(first)}</td>`,
+        `<td class="cmp-number">${escapeHtml(String(score))}${item.sourceConfidenceQuality?.warning ? ' <span class="cmp-badge">근거 제한</span>' : ""}</td>`,
+        `<td class="cmp-number">${escapeHtml(String(monthly))}</td>`, `<td><span class="cmp-badge">${escapeHtml(priority)}</span> <span class="cmp-badge">${selection}</span></td>`,
+        `<td>${sourceNaverBadges(status)}</td>` ] });
+    }
+
+    function earlyComparisonRow(item, index, payload) {
+      const strength = ({ strong: "강한 신호", rising: "상승 신호", watch: "관찰 신호" })[item.strength] || "관찰 신호";
+      const score = item.todayEarlySignalScore == null ? "점수 확인 불가" : String(Number(item.todayEarlySignalScore));
+      const reasons = item.reasons || [], context = earlyBrandContextSummary(item), status = item.previousDayNaverStatus || {};
+      const detected = formatHistoryDate(item.detectedAt);
+      const naver = NaverStatusPresentation.discoveryView({ naverStatus: status });
+      const detail = sourceComparisonFacts([["신호 강도·점수", strength + " · " + score], ["점수 안내", item.scoreWarning],
+        ["신호 기준일", item.earlySignalDate || payload.signalDate], ["신호 발견 (한국시간 KST)", detected],
+        ["최초 발견 (한국시간 KST)", item.firstSeenAt && formatHistoryDate(item.firstSeenAt)], ["최근 발견 (한국시간 KST)", item.lastSeenAt && formatHistoryDate(item.lastSeenAt)],
+        ["발견 출처", sourceComparisonNames(item.sources)], ["전체 탐지 근거", reasons.join(" · ") || "저장된 근거 없음"],
+        ["상품·브랜드 문맥", context], ["대표 상품", item.relatedProduct], ["상품 일치율", item.productMatchScore != null ? Number(item.productMatchScore) + "%" : null],
+        ["브랜드 근거", item.brandEvidence?.label], ["전일 NAVER 상태", NaverStatusPresentation.previousDayView(item)],
+        ["분석 대상 선정", naver.selection], ["네이버 자료 확보", naver.data], ["수집 기록", naver.collection],
+        ["급등 판정", naver.assessment], ["판정 기준일", status.assessment?.assessedDataDate],
+        ["마지막 NAVER 수집 (한국시간 KST)", status.data?.fetchedAt && formatHistoryDate(status.data.fetchedAt)], ["전일 판정 제외 사유", status.assessment?.exclusionReason],
+        ["기준 Instant Job", status.jobId]]);
+      return comparisonRow({ scope: "early", key: String(index) + ":" + item.keyword, keyword: item.keyword, jobId: payload.jobId, detail, cells: [
+        `<td><strong class="cmp-key">${escapeHtml(item.keyword)}</strong></td>`, `<td><span class="cmp-badge">${strength}</span> <b class="cmp-number">${escapeHtml(score)}</b>${item.scoreWarning ? ' <span class="cmp-badge">근거 제한</span>' : ""}</td>`,
+        `<td class="cmp-date">${sourceComparisonTime(detected)}</td>`, `<td><span class="cmp-reason">${escapeHtml(reasons.join(" · ") || "저장된 근거 없음")}</span></td>`,
+        `<td><span class="cmp-product">${escapeHtml(context)}</span></td>`, `<td>${sourceNaverBadges(status)}</td>` ] });
+    }
+
     async function loadTodayEarlySignals() {
       try {
         const response = await fetch("/.netlify/functions/today-early-signals", { cache: "no-store" });
         const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         $("todayEarlySignalMeta").textContent = earlySignalFreshnessDisplay(payload);
-        const labels = { strong: "🔥 강한 신호", rising: "↑ 상승 신호", watch: "• 관찰 신호" };
-        $("todayEarlySignalBody").innerHTML = (payload.items || []).length ? payload.items.map((item) => `<tr>
-          <td><strong>${escapeHtml(item.keyword)}</strong></td><td>${escapeHtml(labels[item.strength] || "• 관찰 신호")}</td>
-          <td><strong>${item.todayEarlySignalScore == null ? "점수 확인 불가" : Number(item.todayEarlySignalScore)}</strong>${item.scoreWarning ? `<br><small class="muted">${escapeHtml(item.scoreWarning)}</small>` : ""}</td><td>${item.detectedAt ? formatHistoryDate(item.detectedAt) : "-"}</td>
-          <td>${escapeHtml((item.reasons || []).join(" · ") || "-")}</td>
-          <td>${escapeHtml(earlyBrandContextSummary(item))}${item.productMatchScore ? `<br><small>상품 일치율 ${Number(item.productMatchScore)}%</small>` : ""}</td>
-          <td>${escapeHtml((item.sources || []).join(" + ") || "-")}</td>
-          <td>${escapeHtml(NaverStatusPresentation.previousDayView(item))}</td>
-        </tr>`).join("") : '<tr><td colspan="8" class="muted">표시된 기준일에 저장된 급상승 신호가 없습니다. 데이터 없음은 시장 신호가 없다는 뜻이 아닙니다.</td></tr>';
+        $("todayEarlySignalBody").innerHTML = (payload.items || []).length ? payload.items.map((item, index) => earlyComparisonRow(item, index, payload)).join("") : '<tr><td colspan="7" class="muted">표시된 기준일에 저장된 급상승 신호가 없습니다. 데이터 없음은 시장 신호가 없다는 뜻이 아닙니다.</td></tr>';
       } catch (error) {
         $("todayEarlySignalMeta").textContent = `상태 갱신 실패 · 저장된 신호의 최신성 확인 불가: ${error.message}`;
-        $("todayEarlySignalBody").innerHTML = `<tr><td colspan="8" class="muted">오늘 신호 조회 실패: ${escapeHtml(error.message)}</td></tr>`;
+        $("todayEarlySignalBody").innerHTML = `<tr><td colspan="7" class="muted">오늘 신호 조회 실패: ${escapeHtml(error.message)}</td></tr>`;
       }
     }
     async function refreshMarketDiscovery() {
@@ -3397,34 +3584,8 @@
       const brandSignals = results.filter((row) => row.resultType === "brand_or_category_signal");
       const domainSignals = results.filter((row) => ["domain_related_signal", "unverified_context_signal"].includes(row.resultType));
       const directResults = productResults.filter((row) => row.resultType !== "domain_related_signal");
-      const body = $("resultBody");
-      if (!directResults.length) {
-        body.innerHTML = '<tr><td colspan="11" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
-      } else body.innerHTML = directResults.map((row) => {
-        const source = sourceSummary(row);
-        const item = row.match?.item || {};
-        return `
-          <tr>
-            <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}${row.news?.items?.[0]?.title ? ` · ${escapeHtml(String(row.news.items[0].title).replace(/<[^>]*>/g, ""))}` : ""}</span></td>
-            <td>${row.today.toLocaleString("ko-KR")} / ${Number(row.estimatedPeak || row.today).toLocaleString("ko-KR")} / ${row.yesterday.toLocaleString("ko-KR")}</td>
-            <td>+${row.lift.toLocaleString("ko-KR")}</td>
-            <td>${formatSurgeHistory(row.surgeHistoryState)}</td>
-            <td>${source}</td>
-            <td>
-              <strong>${escapeHtml(item.product || item.brand || "-")}</strong><br>
-              ${row.match?.identificationScope === "ingredient_concentration" ? '<small class="muted">성분+농도 관련 상품 · 브랜드/단일 상품 확정 아님</small><br>' : ""}
-              <span class="muted">${escapeHtml(item.account || "계정 미지정")} · ${escapeHtml(item.campaign || "-")} · ${escapeHtml(item.adGroup || "-")}</span>
-            </td>
-            <td>${(row.match.additionalMatches || []).length
-              ? row.match.additionalMatches.map((candidate) => `<div><strong>${escapeHtml(candidate.item?.product || candidate.candidate || "-")}</strong><br><span class="muted">${escapeHtml(candidate.item?.account || "계정 미지정")} · ${Number(candidate.score || 0)}%</span></div>`).join("")
-              : '<span class="muted">없음</span>'}</td>
-            <td><strong>${Number(row.match.matchingCandidateCount || 1).toLocaleString("ko-KR")}개</strong></td>
-            <td><span class="pill">${row.match.score}%</span></td>
-            <td><strong>${escapeHtml(row.match.judgment || "관련성 낮음")}</strong></td>
-            <td>${escapeHtml(row.match.reason || "식별 가능한 공통 특징 부족")}<br><span class="muted">비교값: ${escapeHtml(row.match.candidate)}</span></td>
-          </tr>
-        `;
-      }).join("");
+      $("resultBody").innerHTML = directResults.map((row, i) => instantComparisonRow(row, i, "resultBody", instantRowDateSummary(row, true))).join("")
+        || '<tr><td colspan="9" class="muted">조건에 맞는 매칭 결과가 없습니다.</td></tr>';
       renderBrandSignals(brandSignals);
       renderDomainSignals(domainSignals);
       renderLowIntensitySignals(lowIntensitySignals);
@@ -3432,11 +3593,7 @@
     }
 
     function renderRatioOnlySignals(results) {
-      const body = $("ratioOnlySignalBody");
-      if (!results.length) { body.innerHTML = '<tr><td colspan="10" class="muted">Ratio-only 시장 신호가 없습니다.</td></tr>'; return; }
-      body.innerHTML = results.map((row) => { const signal = row.relatedSignal || {}; const refs = (signal.referenceProducts || []).slice(0, 3).map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
-        return `<tr><td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td><td>${escapeHtml(row.peakDate || "-")}</td><td>${Number(row.ratioPeak || 0).toFixed(2)}</td><td>${escapeHtml(ResultGrowthPresentation.growthView(row).baselineLabel)}</td><td>${escapeHtml(ResultGrowthPresentation.growthView(row).rateLabel)}</td><td>${escapeHtml(signal.relatedBrand || "-")}</td><td>${escapeHtml(signal.relatedProductContext || "-")}</td><td>${refs || escapeHtml(row.match?.item?.product || "-")}</td><td>${escapeHtml(signal.judgment || "ratio-only 시장 신호")}</td><td>${escapeHtml(signal.reason || "-")}</td></tr>`;
-      }).join("");
+      renderRelatedSignals("ratioOnlySignalBody", results, "Ratio-only 시장 신호가 없습니다.");
     }
 
     function renderBrandSignals(results) {
@@ -3448,56 +3605,94 @@
     }
 
     function renderLowIntensitySignals(results) {
-      const body = $("lowIntensitySignalBody");
-      if (!results.length) {
-        body.innerHTML = '<tr><td colspan="10" class="muted">저강도 선행 신호가 없습니다.</td></tr>';
-        return;
-      }
-      body.innerHTML = results.map((row) => {
-        const signal = row.relatedSignal || {};
-        const references = (signal.referenceProducts || []).slice(0, 3)
-          .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
-        return `<tr>
-          <td><strong>${escapeHtml(row.keyword)}</strong><br>${marketConfidenceSummary(row)}<br>${instantRowDateSummary(row)}</td>
-          <td>${escapeHtml(row.peakDate || row.peakDailyDate || "-")}</td>
-          <td><strong>+${Math.round(Number(row.peakDailyLift || 0)).toLocaleString("ko-KR")}</strong></td>
-          <td>${escapeHtml(ResultGrowthPresentation.growthView(row).rateLabel)}</td>
-          <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
-          <td>${escapeHtml(signal.relatedProductContext || "-")}</td>
-          <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
-          <td>${references || escapeHtml(row.match?.item?.product || "-")}</td>
-          <td><strong>${escapeHtml(signal.judgment || "선행 신호")}</strong></td>
-          <td>${escapeHtml(signal.reason || "-")}</td>
-        </tr>`;
-      }).join("");
+      renderRelatedSignals("lowIntensitySignalBody", results, "저강도 선행 신호가 없습니다.");
     }
 
     function renderRelatedSignals(bodyId, results, emptyMessage) {
-      const body = $(bodyId);
-      if (!results.length) {
-        body.innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(emptyMessage)}</td></tr>`;
-        return;
-      }
-      body.innerHTML = results.map((row) => {
-        const signal = row.relatedSignal || {};
-        const references = (signal.referenceProducts || []).slice(0, 3)
-          .map((item) => escapeHtml(item.product || item.brand || "-")).join("<br>");
-        const unverifiedCandidates = row.resultType === "unverified_context_signal"
-          ? [...new Set([row.match?.item, ...(row.match?.additionalMatches || []).map(entry => entry.item)]
-            .map(item => item?.product || item?.brand).filter(Boolean))].slice(0, 3) : [];
-        return `<tr>
-          <td><strong>${escapeHtml(row.keyword)}</strong><br>${surgeSignalSummary(row)}<br>${marketConfidenceSummary(row)}<br><span class="muted">${escapeHtml(row.category || "unknown")}</span></td>
-          <td><strong>+${Number(row.lift || row.estimatedSurgeCount || 0).toLocaleString("ko-KR")}</strong></td>
-          <td>${escapeHtml(row.resultType === "unverified_context_signal" ? "브랜드 미확인 참고 신호" : signal.signalType === "brand" ? "브랜드 급등" : signal.signalType === "ingredient" ? "성분 관련" : signal.signalType === "product_line" ? "제품/제품라인 관련" : "제품군/카테고리 관련")}</td>
-          <td><strong>${escapeHtml(signal.relatedBrand || "-")}</strong></td>
-          <td>${signal.countScope === "stored_references_only" ? `저장 참고 상품 ${Number(signal.verifiedReferenceCount || 0).toLocaleString("ko-KR")}건 · 전체 수 미재집계` : signal.relatedProductCount == null ? "확인 불가" : `${Number(signal.relatedProductCount).toLocaleString("ko-KR")}건`}</td>
-          <td>${unverifiedCandidates.length ? `<span class="muted">기존 비교 후보(미검증)</span><br>${unverifiedCandidates.map(escapeHtml).join("<br>")}` : references || '<span class="muted">없음</span>'}</td>
-          <td><span class="pill">${Number(row.match?.score || 0)}%</span></td>
-          <td><strong>${escapeHtml(signal.judgment || row.match?.judgment || "관련 신호")}</strong></td>
-          <td>${escapeHtml(signal.reason || row.match?.reason || "-")}</td>
-          <td>${instantRowDateSummary(row)}</td>
-        </tr>`;
-      }).join("");
+      $(bodyId).innerHTML = results.map((row, i) => instantComparisonRow(row, i, bodyId, instantRowDateSummary(row, true))).join("")
+        || `<tr><td colspan="8" class="muted">${escapeHtml(emptyMessage)}</td></tr>`;
+    }
+
+    // Presentation only. Do not truncate stored strings, reorder candidates, or derive new analysis scores here.
+    function instantComparisonRow(row, index, scope, rowDate) {
+      const job = state.currentAnalysisJob || {}, match = row.match || {}, signal = row.relatedSignal || {};
+      const direct = scope === "resultBody", low = scope === "lowIntensitySignalBody", ratio = scope === "ratioOnlySignalBody";
+      const sourceRatio = ratio || row.qualityProjection?.sourceResultType === "ratio_only_market_signal";
+      const unverified = row.resultType === "unverified_context_signal";
+      const growth = ResultGrowthPresentation.growthView(row), confidence = storedInstantConfidenceDisplay(row);
+      const grades = { very_strong: "매우 강함", strong: "강함", medium: "보통", reference: "참고" };
+      const h = value => escapeHtml(String(value ?? "확인 불가"));
+      const num = value => value == null || value === "" || !Number.isFinite(Number(value)) ? "확인 불가" : Number(value).toLocaleString("ko-KR");
+      const signed = value => (Number(value) > 0 ? "+" : "") + num(value);
+      const badge = label => `<span class="cmp-badge">${h(label)}</span>`;
+      const line = label => label ? `<small class="cmp-reason">${h(label)}</small>` : "";
+      const fact = (label, contents) => `<dt>${h(label)}</dt><dd>${contents}</dd>`;
+      const list = values => values.length ? `<ul>${values.map(v => `<li>${v}</li>`).join("")}</ul>` : "없음";
+      const product = item => item?.product || item?.brand || "";
+      const productInfo = (item, entry = {}) => [product(item) || entry.candidate, item?.brand && item.brand !== product(item) ? item.brand : null,
+        item?.account, item?.campaign, item?.adGroup, entry.score != null ? num(entry.score) + "%" : null, entry.judgment, entry.reason]
+        .filter(Boolean).map(h).join(" · ");
+      const additional = match.additionalMatches || [], refs = signal.referenceProducts || [];
+      const representative = direct || unverified ? product(match.item) : (product(refs[0]) || signal.relatedBrand || signal.relatedProductContext || product(match.item));
+      const extraCount = direct || unverified ? additional.length : Math.max(0, refs.length - 1);
+      const type = unverified ? "브랜드 미확인 참고 신호" : ratio ? "Ratio-only 시장 신호" : low ? "저강도 선행 신호"
+        : direct ? "상품 직접 매칭" : ({ brand: "브랜드 급등", ingredient: "성분 관련", product_line: "제품/제품라인 관련" }[signal.signalType] || "제품군/카테고리 관련");
+      const judgment = signal.judgment || match.judgment || type, reason = signal.reason || match.reason;
+      const amt = row.lift ?? row.estimatedSurgeCount, peakDate = row.peakDate || row.peakDailyDate, score = match.score == null ? "미확인" : num(match.score) + "%";
+      const grade = grades[row.marketConfidenceGrade], conf = row.marketConfidenceScore == null ? "점수 미확인" : num(row.marketConfidenceScore) + "/100" + (grade ? " · " + grade : "");
+      const history = row.surgeHistoryState;
+      const datagap = history?.dataGap === true;
+      const historyItems = history?.recentHistory || [];
+      const historyText = history ? '<dl class="cmp-facts">' + [
+        fact("이력 상태", h(history.statusText)), fact("최초 / 최근 급등", h(history.firstSurgedAt) + " / " + h(history.lastSurgedAt)),
+        fact("누적 / 연속", h(num(history.surgeDaysCount)) + "일 / " + h(num(history.consecutiveSurgeDays)) + "일"),
+        fact("직전 / 최근 / 최대 급등량", [history.previousSurgeCount, history.latestSurgeCount, history.maxSurgeCount].map(num).map(h).join(" / ")),
+        fact("급등수 기준", h(num(history.threshold))),
+        fact("저장된 급등 기록", list(historyItems.map(point => h(point.date) + " · " + h(signed(point.estimatedSurgeCount)))))
+      ].join("") + '</dl>' : "";
+      const lastHistory = historyItems[historyItems.length - 1];
+      const source = Array.isArray(row.discoverySource) ? row.discoverySource.join(" · ") : row.discoverySource;
+      const scopeNote = match.identificationScope === "ingredient_concentration" ? "성분+농도 관련 상품 · 브랜드/단일 상품 확정 아님" : null;
+      const details = [
+        fact("분류 · 발견 출처", [type, row.category, source].filter(Boolean).map(h).join(" · ")),
+        fact("선정 · 분석", "이 Instant 결과에 포함 · 신규 우선 선정 여부는 이 결과만으로 확인 불가"),
+        fact("목표일 / 실제 기준일", h(job.sourceFreshness?.targetDataDate || job.targetDataDate) + " / " + h(row.latestDataDate)),
+        fact("원천 수집 시각 (KST)", row.trendFetchedAt ? h(formatHistoryDate(row.trendFetchedAt)) : "기록 없음"),
+        fact("상품 캐시 관측 (KST)", job.productCacheObservedAt ? h(formatHistoryDate(job.productCacheObservedAt)) : "기록 없음"),
+        fact("급등 판정", sourceRatio ? h(type) : surgeSignalSummary(row)),
+        fact(sourceRatio ? "최대 / 기준 ratio" : "추정 최신 / 최대 / 기준",
+          sourceRatio ? h(num(row.ratioPeak)) + " / " + h(growth.baselineLabel)
+            : [row.estimatedLatest ?? row.today, row.estimatedPeak, row.estimatedBaseline ?? row.yesterday].map(num).map(h).join(" / ")),
+        ...(sourceRatio ? [] : [fact("추정 급등량", h(signed(amt))), fact("최대 일간 증가량", h(signed(row.peakDailyLift)))]),
+        fact("최대 관측일", h(peakDate)), fact("상승률 / 원본 기준값", h(growth.rateLabel) + " / " + h(growth.baselineLabel)),
+        fact("신뢰도", h(conf)), fact("판단 근거", list(confidence.reasons.map(h))),
+        ...(row.qualityProjection?.displayWarning || confidence.scoreWarning ? [fact("주의", [row.qualityProjection?.displayWarning, confidence.scoreWarning].filter(Boolean).map(h).join(" · "))] : []),
+        fact("상품 일치율 · 판단", h(score) + " · " + h(judgment)), fact("판단 설명", h(reason)),
+        fact("비교값", h(match.candidate)), fact("동일 강도 후보", match.matchingCandidateCount == null ? "확인 불가" : h(num(match.matchingCandidateCount) + "개")),
+        fact(unverified ? "기존 비교 후보(미검증)" : direct ? "대표 매칭 상품" : "비교한 상품", productInfo(match.item) || "없음"),
+        fact(unverified ? "추가 비교 후보(미검증)" : "추가 매칭 후보", list(additional.map(entry => productInfo(entry.item, entry)))),
+        ...(scopeNote ? [fact("식별 범위", h(scopeNote))] : []),
+        fact("관련 브랜드 / 제품 문맥", [signal.relatedBrand || "확인 불가", signal.relatedProductContext || "확인 불가"].map(h).join(" / ")),
+        fact("상품·성분·제품군 근거", [match.signals?.matchedTokens, match.signals?.ingredientMatches, match.signals?.concentrationMatches, match.signals?.typeMatches, match.signals?.productLineMatches].flat().filter(Boolean).map(h).join(" · ") || "기록 없음"),
+        ...(!direct || refs.length ? [fact("관련 상품 수", signal.countScope === "stored_references_only" ? `저장 참고 상품 ${h(num(signal.verifiedReferenceCount))}건 · 전체 수 미재집계`
+          : signal.relatedProductCount == null ? "확인 불가" : h(num(signal.relatedProductCount) + "건")), fact("저장된 참고 상품", list(refs.map(item => productInfo(item))))] : []),
+        ...(row.sources && !Array.isArray(row.sources) ? [fact("원천별 지표", sourceSummary(row))] : []),
+        ...(row.news?.items?.length ? [fact("저장된 뉴스", list(row.news.items.map(item => h(String(item.title || "").replace(/<[^>]*>/g, "")))))] : [])
+      ];
+      const peakStat = row.ratioPeak == null ? "확인 불가" : Number(row.ratioPeak).toFixed(2);
+      const amountCell = sourceRatio ? h(ratio ? peakStat + " / " + growth.baselineLabel : "절대량 없음") : h(signed(low ? (row.peakDailyLift == null ? null : Math.round(row.peakDailyLift)) : amt));
+      const cells = [
+        `<td><strong class="cmp-key">${h(row.keyword)}</strong></td>`,
+        `<td class="cmp-number">${amountCell}${(low || ratio) && peakDate ? line(peakDate) : ""}</td>`,
+        `<td class="cmp-number">${h(growth.status === "unavailable" ? "비교 불가 · 자료 부족" : growth.rateLabel)}${growth.roundedToZero ? line("원본 기준 " + growth.baselineLabel) : ""}</td>`,
+        `<td class="cmp-number">${h(conf)}${confidence.scoreWarning ? line("비교 근거 미검증") : ""}</td>`,
+        `<td><span class="cmp-product">${h(representative || "확인 불가")}</span>${line([unverified ? "비교 후보(미검증)" : (signal.relatedBrand || (scopeNote ? "성분·농도 관련" : null)), extraCount ? (direct || unverified ? "추가 " : "참고 추가 ") + num(extraCount) + "개" : null].filter(Boolean).join(" · ") || "")}</td>`,
+        `<td>${badge(score)}<span class="cmp-reason">${h(!direct && !low && !ratio ? type : judgment)}</span></td>`,
+        `<td class="cmp-date">${rowDate}${datagap ? line("이력 데이터 공백") : ""}</td>`
+      ];
+      if (direct) cells.push(`<td>${lastHistory ? line(String(lastHistory.date || "확인 불가") + " · " + signed(lastHistory.estimatedSurgeCount)) : ""}${history ? '<button type="button" data-cmp-history>이력 보기</button>' : '기록 없음'}</td>`);
+      return comparisonRow({ scope, key: index + ":" + row.keyword, keyword: row.keyword, jobId: job.jobId, cells,
+        detail: '<dl class="cmp-facts">' + details.join("") + '</dl>', history: historyText });
     }
 
     function surgeSignalSummary(row) {
@@ -3847,9 +4042,10 @@
       return parts ? `${parts[1].slice(2)}${parts[2]}${parts[3]}-${parts[4]}${parts[5]}` : "time-unknown";
     }
 
-    function instantRowDateSummary(row) {
+    function instantRowDateSummary(row, compact = false) {
       const actual = row.latestDataDate || null;
       const target = state.currentAnalysisJob?.sourceFreshness?.targetDataDate || state.currentAnalysisJob?.targetDataDate || null;
+      if (compact) return `<span aria-label="NAVER 기준 ${escapeHtml(actual || "확인 불가")}">${escapeHtml(actual || "확인 불가")}</span>${actual && target && actual < target ? '<small class="cmp-reason">목표일 이전 관측</small>' : ""}`;
       return `<span class="muted">NAVER 기준 ${escapeHtml(actual || "확인 불가")}${actual && target && actual < target ? " · 목표일 이전 관측" : ""}</span>`;
     }
 
@@ -4196,6 +4392,7 @@
         startCurrentJobWatcher();
       }
     }
+    initComparisonTables();
     initializeApp();
   </script>
 </body>

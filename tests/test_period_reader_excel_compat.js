@@ -156,7 +156,7 @@ function uiRuntime(runtime, fixtures) {
   });
   vm.runInContext("let analysisRequestVersion = 0, analysisContext = null; const analysisResultReadVersion = { instant: 0, period: 0 };", context);
   vm.runInContext(uiFunction("analysisViewStamp"), context);
-  for (const name of ["storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay", "periodSelectionMatchesJob", "periodConfidenceSummary", "periodRelationSummary", "periodResultRow",
+  for (const name of ["comparisonRow", "formatSurgeHistory", "storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay", "periodSelectionMatchesJob", "periodConfidenceSummary", "periodRelationSummary", "periodResultRow",
     "renderPeriodResultTables", "refreshPeriodSelectionDisplay", "displayPeriodAnalysis", "loadLastSuccessfulAnalysis", "downloadExcelShared"])
     vm.runInContext(uiFunction(name), context);
   context.displayCompletedAnalysis = (job, options) => context.displayPeriodAnalysis(job, options);

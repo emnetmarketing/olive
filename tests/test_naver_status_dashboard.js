@@ -8,22 +8,24 @@ const scripts = ["shared/kst-time-presentation.js", "shared/naver-status-present
   .map(file => fs.readFileSync(file, "utf8"));
 
 function runtime(payload = {}) {
-  const nodes = new Map(), requests = [];
+  const nodes = new Map(), requests = [], detailRows = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { value: "", textContent: "", innerHTML: "", hidden: false,
       classList: { toggle() {} }, style: {} });
     return nodes.get(id);
   };
   const context = vm.createContext({ $: node, state: { marketDiscoveryRows: [], periodResultQuery: "" },
+    comparisonRow: row => { detailRows.push(row); return "<tr>" + row.cells.join("") + "</tr>"; },
     canOperate: () => true, fetch: async route => { requests.push(route); return new Response(JSON.stringify(payload)); } });
   for (const script of scripts) vm.runInContext(script, context);
   for (const name of ["escapeHtml", "formatHistoryDate", "earlyBrandContextSummary", "sourceFreshnessLabel", "earlySignalFreshnessDisplay",
+    "sourceComparisonFacts", "sourceComparisonNames", "sourceComparisonTime", "sourceNaverBadges", "discoveryComparisonRow", "earlyComparisonRow",
     "loadMarketDiscoveryNewList", "loadTodayEarlySignals", "periodSelectionMatchesJob", "renderPeriodResultTables", "refreshPeriodSelectionDisplay"])
     vm.runInContext(extractFunction(html, name), context);
   // Rendering machinery is exercised; simple stable cells keep this test about
   // status/date binding rather than re-testing unchanged analysis calculations.
   context.periodResultRow = (row, rank) => `<tr><td>${rank + 1}</td><td>${row.keyword}</td></tr>`;
-  return { context, node, requests };
+  return { context, node, requests, detailRows, details: () => detailRows.map(row => row.detail).join("") };
 }
 
 function status(overrides = {}) {
@@ -44,7 +46,9 @@ test("priority, actual Job selection, cache, collection and assessment remain se
     naverStatus: status() };
   const payload = { items: [item] }, before = JSON.stringify(payload), rt = runtime(payload);
   await rt.context.loadMarketDiscoveryNewList();
-  const output = rt.node("marketDiscoveryNewBody").innerHTML;
+  const list = rt.node("marketDiscoveryNewBody").innerHTML, output = rt.details();
+  assert.match(list, /우선 미선정/); assert.match(list, /분석 대상 선정/); assert.match(list, /11\/1 자료 있음/);
+  assert.match(list, /판정 확인 불가/); assert.doesNotMatch(list, /기준 Instant Job|최근 24시간/);
   assert.match(output, /우선 검증 대상 미선정/);
   assert.match(output, /data-naver-status="selection">분석 대상 선정/);
   assert.match(output, /data-naver-status="data">검색 추이 데이터 있음 · 목표일 관측 있음/);
@@ -61,7 +65,7 @@ test("priority, actual Job selection, cache, collection and assessment remain se
 test("a legacy pending label does not fabricate queue membership or target-day availability", async () => {
   const rt = runtime({ items: [{ keyword: "legacy", rank: 1, trendStatus: "pending", trendFetchedAt: "2026-11-02T02:00:00Z" }] });
   await rt.context.loadMarketDiscoveryNewList();
-  const output = rt.node("marketDiscoveryNewBody").innerHTML;
+  const output = rt.details();
   assert.match(output, /선정 여부 확인 불가/);
   assert.match(output, /data-naver-status="collection">상태 확인 불가/);
   assert.match(output, /데이터 기준일: 확인 불가/);
@@ -75,7 +79,9 @@ test("queue, running, old data and confirmed empty response are displayed only f
     { keyword: "empty", naverStatus: status({ collection: { state: "processed" }, data: { state: "empty" } }) }
   ];
   const rt = runtime({ items }); await rt.context.loadMarketDiscoveryNewList();
-  const output = rt.node("marketDiscoveryNewBody").innerHTML;
+  const list = rt.node("marketDiscoveryNewBody").innerHTML, output = rt.details();
+  assert.match(list, /실제 수집 대기/); assert.match(list, /수집 중/); assert.match(list, /10\/31 자료 있음<\/span> <span class="cmp-badge">목표일 미확인/);
+  assert.match(list, /조회 완료 · 빈 응답/); assert.doesNotMatch(list, /상승 확인/);
   assert.match(output, /data-naver-status="collection">수집 대기/);
   assert.match(output, /data-naver-status="collection">수집 중/);
   assert.match(output, /검색 추이 데이터 있음 · 목표일 미확인/);
@@ -88,7 +94,7 @@ test("unlabelled budget states do not claim today's budget is exhausted", async 
     const item = { keyword: budgetState, naverStatus: status({ collection: { state: budgetState } }) };
     const before = JSON.stringify(item), rt = runtime({ items: [item] });
     await rt.context.loadMarketDiscoveryNewList();
-    const output = rt.node("marketDiscoveryNewBody").innerHTML;
+    const output = rt.details(); assert.match(rt.node("marketDiscoveryNewBody").innerHTML, /해당 작업 예산 제한/);
     assert.match(output, /data-naver-status="collection">해당 작업 예산 제한 · 현재 잔여 예산 확인 불가/);
     assert.doesNotMatch(output, /오늘 수집 예산 소진/);
     assert.equal(JSON.stringify(item), before);
@@ -101,7 +107,7 @@ test("server-provided budget labels take precedence over the conservative fallba
       const item = { keyword: budgetState, naverStatus: status({ collection: { state: budgetState, label } }) };
       const rt = runtime({ items: [item] });
       await rt.context.loadMarketDiscoveryNewList();
-      const output = rt.node("marketDiscoveryNewBody").innerHTML;
+      const output = rt.details();
       assert.ok(output.includes(`<div data-naver-status="collection">${label}</div>`));
       assert.doesNotMatch(output, /해당 작업 예산 제한 · 현재 잔여 예산 확인 불가/);
     }
@@ -116,7 +122,9 @@ test("today signals do not turn lifetime everSurged into a prior-day verdict", a
   ] };
   const before = JSON.stringify(payload), rt = runtime(payload);
   await rt.context.loadTodayEarlySignals();
-  const output = rt.node("todayEarlySignalBody").innerHTML;
+  const list = rt.node("todayEarlySignalBody").innerHTML, output = rt.details();
+  assert.match(list, /상승 확인/); assert.match(list, /조회 완료 · 빈 응답/);
+  assert.doesNotMatch(rt.detailRows[0].cells.join(""), /상승 확인|9,999/);
   assert.match(output, /전일 NAVER 상태 확인 불가 · 해당 날짜의 조회·분석 기록 부족/);
   assert.match(output, /확인 대상일 2026-11-01 · 전일 급등 확인/);
   assert.match(output, /조회 완료 · 데이터 없음 · 급등 판정 미확인/);
@@ -166,6 +174,25 @@ test("matching stored Period retains 439 rows, top10 order and local search with
 test("status strings are escaped rather than interpreted as HTML", async () => {
   const rt = runtime({ items: [{ keyword: "safe", naverStatus: status({ assessment: { label: "<script>alert(1)</script>" } }) }] });
   await rt.context.loadMarketDiscoveryNewList();
-  assert.match(rt.node("marketDiscoveryNewBody").innerHTML, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  assert.doesNotMatch(rt.node("marketDiscoveryNewBody").innerHTML, /<script>/);
+  assert.match(rt.details(), /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(rt.node("marketDiscoveryNewBody").innerHTML + rt.details(), /<script>/);
+});
+
+test("compact source rows keep order and the full per-keyword evidence outside the list", async () => {
+  const warning = "기존 출처 신뢰도 · 정확한 분리 근거가 부족합니다";
+  const items = [
+    { keyword: "가나다".repeat(32), rank: 4, sourceConfidence: null, sourceConfidenceQuality: { warning },
+      naverStatus: status({ data: { state: "window-unavailable", actualDataDate: "2026-10-23" } }) },
+    { keyword: "다음 키워드", rank: 5, sourceConfidence: 0, naverStatus: status({ data: { state: "empty" },
+      collection: { state: "error", errorCode: "UPSTREAM_503", label: "해당 Job 조회 오류: UPSTREAM_503" } }) }
+  ];
+  const rt = runtime({ items }), before = JSON.stringify(items); await rt.context.loadMarketDiscoveryNewList();
+  const [first, second] = rt.detailRows;
+  assert.deepEqual(rt.detailRows.map(row => row.keyword), items.map(row => row.keyword));
+  assert.equal(first.cells.length, 8); assert.match(first.cells[4], /확인 불가/);
+  assert.match(first.cells[7], /기간 데이터 부족 · 10\/23까지/);
+  assert.doesNotMatch(first.cells.join(""), /정확한 분리 근거/); assert.ok(first.detail.includes(warning));
+  assert.doesNotMatch(second.detail, /정확한 분리 근거/); assert.match(second.cells[4], />0</);
+  assert.match(second.cells[7], /조회 완료 · 빈 응답/); assert.match(second.cells[7], /조회 오류/); assert.match(second.detail, /해당 Job 조회 오류: UPSTREAM_503/);
+  assert.equal(JSON.stringify(rt.context.state.marketDiscoveryRows), before);
 });

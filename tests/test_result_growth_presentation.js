@@ -28,9 +28,12 @@ const actual = () => ({ keyword: "나이아신아마이드20", estimatedBaseline
 function ui() {
   const nodes = new Map(); const $ = id => { if (!nodes.has(id)) nodes.set(id, { innerHTML: "" }); return nodes.get(id); };
   const context = vm.createContext({ $, ResultGrowthPresentation: { growthView, formatBaseline }, state: {},
+    KstTimePresentation: require("../shared/kst-time-presentation"),
     marketConfidenceSummary: () => "", instantRowDateSummary: () => "", storedPeriodConfidenceDisplay: () => ({ reasons: [] }),
     periodConfidenceSummary: () => "", periodRelationSummary: () => "", periodSourceEvidence: () => "", periodDataStatus: () => "" });
   for (const name of ["escapeHtml", "surgeSignalSummary", "renderTrendChart", "periodResultRow", "earlyBrandContextSummary", "periodConfidenceSummary", "storedInstantConfidenceDisplay", "marketConfidenceSummary", "periodRelationSummary", "renderRelatedSignals"])
+    vm.runInContext(extractFunction(html, name), context);
+  for (const name of ["formatHistoryDate", "formatSurgeHistory", "comparisonRow", "instantComparisonRow", "instantRowDateSummary", "sourceSummary"])
     vm.runInContext(extractFunction(html, name), context);
   return { context, $ };
 }
@@ -129,12 +132,38 @@ test("unverified primary and additional comparison candidates are not represente
     qualityProjection: { version: 1, displayWarning: "브랜드 미확인 참고 신호" } };
   const before = JSON.stringify(row), rt = ui();
   rt.context.renderRelatedSignals("unverified", [row], "empty");
-  const markup = rt.$("unverified").innerHTML;
-  assert.match(markup, /기존 비교 후보\(미검증\)/); assert.match(markup, /기존 상품/); assert.match(markup, /추가 후보/);
-  assert.match(markup, /저장 참고 상품 0건 · 전체 수 미재집계/);
+  const [markup, detail] = rt.$("unverified").innerHTML.split("<template data-cmp-detail>");
+  assert.match(markup, /비교 후보\(미검증\)/); assert.match(markup, /기존 상품/);
+  assert.match(detail, /기존 비교 후보\(미검증\)/); assert.match(detail, /추가 후보/);
+  assert.match(detail, /저장 참고 상품 0건 · 전체 수 미재집계/);
   assert.match(rt.context.periodRelationSummary(row), /기존 비교 후보\(미검증\): 기존 상품/);
   assert.equal(excel.resultRow(row).product, "기존 비교 후보(미검증): 기존 상품");
   assert.match(excel.resultRow(row).brand, /기존 비교 후보 브랜드\(미검증\)/);
   assert.match(excel.periodResultRow(row, {}).productBrand, /^기존 비교 후보\(미검증\):/);
   assert.equal(JSON.stringify(row), before);
+});
+
+test("Instant summary preserves comparison warnings; the matching row's detail keeps every product, reason, time and history entry", () => {
+  const rt = ui(), row = actual();
+  rt.context.state.currentAnalysisJob = { jobId: "saved-instant", targetDataDate: "2026-10-26" };
+  row.trendFetchedAt = "2026-10-24T00:30:00Z";
+  row.match.additionalMatches = Array.from({length: 12}, (_, i) => ({
+    item: { product: `추가 후보 <${i}> 전체 상품명`, account: "계정 예시" }, score: 82
+  }));
+  row.marketConfidenceReasons = Array.from({length: 9}, (_, i) => "저장 판단 근거 " + i);
+  row.surgeHistoryState = { statusText: "재급등", dataGap: true, recentHistory: Array.from({length: 10}, (_, i) =>
+    ({ date: `2026-10-${String(i+1).padStart(2,"0")}`, estimatedSurgeCount: 300 + i })) };
+  const before = JSON.stringify(row), excelBefore = excel.resultRow(row);
+  const [summary, detail] = rt.context.instantComparisonRow(row, 0, "resultBody", rt.context.instantRowDateSummary(row, true)).split("<template data-cmp-detail>");
+  assert.match(summary, /추가 12개/); assert.match(summary, /비교 불가 · 기준값 0/);
+  assert.match(summary, /\+1,121/); assert.match(summary, /2026-10-23/); assert.match(summary, /목표일 이전 관측/);
+  assert.match(summary, /이력 데이터 공백/); assert.match(summary, /data-cmp-history/);
+  assert.doesNotMatch(summary, /전체 상품명|저장 판단 근거 8|2026-10-01/);
+  assert.equal((detail.match(/전체 상품명/g) || []).length, 12);
+  assert.match(detail, /추가 후보 &lt;11&gt;/); assert.match(detail, /저장 판단 근거 8/);
+  assert.match(detail, /2026-10-01 · \+300/); assert.match(detail, /2026-10-10 · \+309/);
+  assert.match(detail, /2026-10-24 09:30:00/); assert.match(detail, /saved-instant/);
+  const different = rt.context.instantComparisonRow({keyword:"다른 키워드"}, 1, "resultBody", "확인 불가");
+  assert.doesNotMatch(different, /추가 후보|저장 판단 근거 8|2026-10-10|나이아신아마이드20/);
+  assert.equal(JSON.stringify(row), before); assert.deepEqual(excel.resultRow(row), excelBefore);
 });

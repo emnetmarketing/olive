@@ -155,6 +155,7 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
   }
   const functions = ["escapeHtml", "formatDateTimeText", "formatHistoryDate", "surgeSignalSummary", "periodSelectionMatchesJob",
     ...(html.includes("function storedPeriodConfidenceDisplay(") ? ["storedInstantConfidenceDisplay", "storedPeriodConfidenceDisplay"] : []),
+    ...(html.includes("function comparisonRow(") ? ["comparisonRow","formatSurgeHistory"] : []),
     "periodConfidenceSummary", "periodRelationSummary", "periodSourceEvidence", "periodDataStatus", "periodResultRow",
     "renderPeriodResultTables", "refreshPeriodSelectionDisplay", "displayPeriodAnalysis", "displayCompletedAnalysis",
     "loadLastSuccessfulAnalysis", "downloadExcelShared"];
@@ -174,17 +175,27 @@ async function verifyDisplay({ html, period, instant, status, snapshot, partial,
   const renderedRows = [...allMarkup.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)]
     .map(match => [...match[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(cell => plain(cell[1])));
   for (const [i, row] of period.results.entries()) {
-    const cells = renderedRows[i]; assert.equal(cells.length, 11);
+    const compact = html.includes("function comparisonRow(");
+    const cells = renderedRows[i]; assert.equal(cells.length, compact ? 9 : 11);
     assert.equal(cells[0], String(i + 1)); assert.ok(cells[1].startsWith(String(row.keyword || "")));
     assert.equal(cells[2], row.estimatedSurgeCount == null ? "계산 불가" : `+${Number(row.estimatedSurgeCount).toLocaleString("ko-KR")}`);
     if (context.ResultGrowthPresentation) {
       const growth = context.ResultGrowthPresentation.growthView(row);
-      assert.equal(cells[3], growth.rateLabel + (growth.roundedToZero ? `원본 기준 ${growth.baselineLabel}` : ""));
+      assert.equal(cells[3], (compact && growth.status === "unavailable" ? "비교 불가 · 자료 부족" : growth.rateLabel) + (growth.roundedToZero ? `원본 기준 ${growth.baselineLabel}` : ""));
     } else assert.equal(cells[3], row.peakRelativeLiftPct == null ? "비교 불가" : `+${Number(row.peakRelativeLiftPct).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%`);
     const confidence = row.qualityProjection && row.periodMarketConfidenceScore === null ? null : row.periodMarketConfidenceScore ?? row.marketConfidenceScore;
     assert.ok(cells[4].includes(confidence == null ? row.qualityProjection?.displayWarning ? "확인 불가" : "미계산" : `${Number(confidence)}/100`));
     const displayReasons = context.storedPeriodConfidenceDisplay ? context.storedPeriodConfidenceDisplay(row).reasons
       : row.periodMarketConfidenceReasons || row.marketConfidenceReasons || [];
+    if (compact) {
+      assert.ok(cells[6].startsWith(row.latestDataDate || "확인 불가"));
+      for (const reason of displayReasons) assert.ok(cells[8].includes(reason));
+      const display = context.storedPeriodConfidenceDisplay(row);
+      for (const [label, source] of [["YouTube", row.periodMarketEvidence?.youtube], ["Search Ad", display.searchAd]]) {
+        assert.ok(cells[8].includes(label + " 기간 변화" + plain(context.periodSourceEvidence(source, label))));
+      }
+      continue;
+    }
     for (const reason of displayReasons.slice(0, 5)) assert.ok(cells[5].includes(reason));
     for (const [column, source] of [[7, row.periodMarketEvidence?.youtube], [8, row.periodMarketEvidence?.searchAd]]) {
       if (!source || source.availability === "no_data") assert.equal(cells[column], "데이터 없음");

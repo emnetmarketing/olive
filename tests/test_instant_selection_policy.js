@@ -127,9 +127,10 @@ function uiRuntime(responses = {}) {
   const context = vm.createContext({ ResultGrowthPresentation: require("../shared/result-growth-presentation"), state: { currentAnalysisJob: { targetDataDate: "2026-10-26" } }, $, console,
     fetch: async route => { requests.push(route); assert.ok(Object.hasOwn(responses, route), "Unexpected request: " + route); return new Response(JSON.stringify(responses[route])); },
     displayCompletedAnalysis: value => displayed.push(value), showApiErrors: error => errors.push(error),
+    comparisonRow: ({ cells }) => "<tr>" + cells.join("") + "</tr>",
     marketConfidenceSummary: () => "confidence", surgeSignalSummary: () => "surge", sourceSummary: () => "sources", formatSurgeHistory: () => "history" });
   vm.runInContext("let analysisRequestVersion = 0, analysisContext = null; const analysisResultReadVersion = { instant: 0, period: 0 };", context);
-  for (const name of ["analysisViewStamp", "escapeHtml", "instantRowDateSummary", "loadLastSuccessfulAnalysis", "renderTrendChart", "renderRatioOnlySignals", "renderLowIntensitySignals", "renderRelatedSignals"])
+  for (const name of ["analysisViewStamp", "escapeHtml", "instantRowDateSummary", "loadLastSuccessfulAnalysis", "renderTrendChart", "renderRatioOnlySignals", "renderLowIntensitySignals", "renderRelatedSignals", "instantComparisonRow", "storedInstantConfidenceDisplay"])
     vm.runInContext(extractFunction(html, name), context);
   return { context, $, requests, displayed, errors };
 }
@@ -164,7 +165,7 @@ test("TOP10 and every detail type show individual observation dates without chan
   rt.context.renderLowIntensitySignals(rows); assert.match(rt.$("lowIntensitySignalBody").innerHTML, /NAVER 기준 2026-10-25/);
   rt.context.renderRelatedSignals("fixture", rows, "empty"); assert.match(rt.$("fixture").innerHTML, /NAVER 기준 2026-10-25/);
   assert.match(rt.context.instantRowDateSummary({}), /확인 불가/);
-  assert.match(extractFunction(html, "render"), /instantRowDateSummary\(row\)/);
+  assert.match(extractFunction(html, "render"), /instantRowDateSummary\(row, true\)/);
 });
 
 test("Excel keeps per-row NAVER dates and product observation time separate without adding to quantities", async () => {

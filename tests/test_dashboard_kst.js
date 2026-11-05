@@ -110,12 +110,14 @@ test("discovered, last-seen and Trend-fetch row timestamps use KST with no addit
   const payload = { items: [{ keyword: "fixture", rank: 1, discoveredAt: stamp,
     lastSeenAt: "2026-11-02T01:00:01Z", trendFetchedAt: "2026-11-02T02:00:02Z", trendStatus: "completed",
     naverStatus: { data: { state: "target-observed", actualDataDate: "2026-11-01", fetchedAt: "2026-11-02T02:00:02Z" } } }] };
-  const rt = runtime(["earlyBrandContextSummary", "loadMarketDiscoveryNewList"], payload);
+  const rt = runtime(["earlyBrandContextSummary", "sourceComparisonNames", "sourceComparisonTime", "sourceNaverBadges", "sourceComparisonFacts", "discoveryComparisonRow", "loadMarketDiscoveryNewList"], payload);
+  let detail; rt.context.comparisonRow = row => { detail = row.detail; return row.cells.join(""); };
   const before = JSON.stringify(payload);
   await rt.context.loadMarketDiscoveryNewList();
   assert.match(rt.node("marketDiscoveryNewBody").innerHTML, /2026-11-02 00:02:03/);
-  assert.match(rt.node("marketDiscoveryNewBody").innerHTML, /2026-11-02 10:00:01/);
-  assert.match(rt.node("marketDiscoveryNewBody").innerHTML, /2026-11-02 11:00:02/);
+  assert.match(detail, /2026-11-02 10:00:01/);
+  assert.match(detail, /2026-11-02 11:00:02/);
+  assert.doesNotMatch(rt.node("marketDiscoveryNewBody").innerHTML, /2026-11-02 (10:00:01|11:00:02)/);
   assert.equal(JSON.stringify(payload), before);
   assert.deepEqual(rt.requests, ["/.netlify/functions/market-discovery-list?window=24h&limit=100"]);
 });
