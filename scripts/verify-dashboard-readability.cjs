@@ -95,6 +95,14 @@ async function render(browser,v, size) {
     for(const [id,expectedRows] of checkedGroups)assert.deepEqual(await p.locator("#"+id+" tr[data-cmp-keyword]").evaluateAll(rs=>rs.map(r=>r.dataset.cmpKeyword)),expectedRows.map(r=>r.keyword),id+" order");
     // Clamp only presentation nodes; verify that even the genuinely clipped product
     // remains intact in the same row's detail template, not a shortened string.
+    // The narrower navigation sidebar leaves more space on desktop. Exercise
+    // actual saved long names at the supported minimum table width, independently
+    // of sidebar width; restore layout before the other interaction checks.
+    const originalTableStyle=await p.locator("#resultBody").evaluate(b=>{
+      const table=b.closest("table"),style=table.getAttribute("style");
+      table.style.width=getComputedStyle(table).minWidth;
+      return style;
+    });
     const clamps=await p.locator("#resultBody tr").evaluateAll(rs=>rs.flatMap(r=>{
       const el=r.querySelector(".cmp-product");
       if(!el || el.scrollHeight<=el.clientHeight+1)return [];
@@ -105,6 +113,9 @@ async function render(browser,v, size) {
     assert(clamps.length>0,"fixture should exercise real text overflow");
     for(const c of clamps)assert(c.fullInDetail && c.lines==="2" && c.visibleHeight<=2*c.lineHeight+1,"long text clipped in detail or more than 2 lines: "+c.keyword);
     report.clampedProducts=clamps;
+    await p.locator("#resultBody").evaluate((b,style)=>{
+      const table=b.closest("table");if(style===null)table.removeAttribute("style");else table.setAttribute("style",style);
+    },originalTableStyle);
     for(const [id,original,amount,date] of [[rows.direct,fixture.job.results.filter(r=>r.resultType==="product_match"),1,6],[rows.period,fixture.period.results,2,6]]) {
       const values=await p.locator("#"+id+" tr").evaluateAll((rs,[a,d])=>rs.map(r=>[r.cells[a].innerText,r.cells[d].innerText]),[amount,date]);
       original.forEach((r,i)=>{

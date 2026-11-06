@@ -1375,6 +1375,52 @@
       .cmp-table :is(th,td):last-child { width:62px; }
       #cmpDetailContent { padding:14px 16px; }
     }
+    /* Stage 1 navigation only: do not re-create analysis views or settings controls. */
+    .shell-layout { grid-template-columns:208px minmax(0,1fr);gap:20px; }
+    .shell-sidebar { padding:20px 14px; }
+    .shell-sidebar .brand-card { margin-bottom:20px; }
+    .shell-sidebar .brand-name { font-size:15px; }
+    .shell-nav { display:grid;gap:6px; }
+    .shell-nav button { display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;width:100%;min-height:46px;padding:10px 12px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--muted);box-shadow:none;font-size:14px;transform:none; }
+    .shell-nav button[aria-current=page] { color:var(--brand-dark);background:#f0edff;border-color:#dad5f4;font-weight:800; }
+    .shell-nav button:hover { background:#f4f2fb;color:var(--brand-dark); }
+    .shell-soon { display:inline-block;border-radius:5px;padding:3px 6px;font-size:11px;line-height:1.4;color:#637168;background:#eef2ee;font-weight:600;white-space:nowrap; }
+    #shellKeywordView[hidden],#shellVideoView[hidden],body[data-shell-view=video] [data-shell-keyword-control] { display:none!important; }
+    .shell-video { min-width:0; }
+    .shell-video-card { min-height:330px;padding:46px 32px; }
+    .shell-video-card h2 { margin:14px 0;font-size:25px; }
+    .shell-video-card p { line-height:1.7; }
+    #shellSettingsBtn { margin-left:auto; }
+    #shellSettingsDialog { position:fixed;inset:0 0 0 auto;width:min(540px,100%);height:100%;height:100dvh;max-width:100%;max-height:none;margin:0;padding:0;border:0;background:#fff;color:var(--ink);box-shadow:-12px 0 48px #172c3b26; }
+    #shellSettingsDialog[open] { display:flex;flex-direction:column; }
+    #shellSettingsDialog::backdrop { background:#172c3b66; }
+    .shell-settings-head { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line);background:#f7f9fb; }
+    .shell-settings-head h2 { margin:0;font-size:21px; }
+    #shellSettingsClose { min-height:40px; }
+    #shellSettingsBody { flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:20px 22px; }
+    #shellSettingsBody h2 { margin:0 0 14px;font-size:17px; }
+    #shellSettingsBody :is(input,select,textarea,.field,.tab-panel,.api-card) { min-width:0;max-width:100%; }
+    #shellSettingsBody :is(.note,.muted,.settings-save-status) { overflow-wrap:anywhere; }
+    #shellSettingsBody .side-tabs { position:sticky;top:-20px;z-index:1;background:#f4f7ff; }
+    #shellSettingsBody .side-tab { min-height:44px; }
+    :is(.shell-nav,#shellSettingsDialog) button:focus-visible,#shellSettingsBtn:focus-visible { outline:3px solid #166f98;outline-offset:2px; }
+    @media(max-width:1040px) {
+      .shell-layout { grid-template-columns:minmax(0,1fr); }
+      .shell-sidebar { position:static;max-height:none;overflow:visible;display:flex;align-items:center;gap:16px;padding:12px 16px; }
+      .shell-sidebar .brand-card { margin:0; }
+      .shell-nav { display:flex;flex:1;justify-content:flex-end;gap:8px; }
+      .shell-nav button { width:auto; }
+    }
+    @media(max-width:560px) {
+      .shell-sidebar { display:block;padding:12px; }
+      .shell-sidebar .brand-card { margin-bottom:10px; }
+      .shell-nav { display:grid;grid-template-columns:1fr 1fr;gap:5px; }
+      .shell-nav button { padding:10px 8px;font-size:13px;gap:5px; }
+      .shell-video-card { min-height:280px;padding:26px 20px; }
+      .shell-settings-head,#shellSettingsBody { padding:16px; }
+      #shellSettingsBody .side-tabs { top:-16px; }
+      #shellSettingsBody button { min-height:44px; }
+    }
   </style>
 </head>
 <body class="locked">
@@ -1405,7 +1451,7 @@
       <h1>네쇼검 트렌드 모니터</h1>
     </div>
     <div class="header-control-stack">
-      <div class="toolbar header-toolbar header-analysis-controls">
+      <div class="toolbar header-toolbar header-analysis-controls" data-shell-keyword-control>
         <div class="header-date-range">
           <div class="field">
             <label for="collectionStart">선택 기간 시작일</label>
@@ -1420,12 +1466,13 @@
         <button id="instantRunBtn" type="button" title="현재 저장된 최신 데이터를 기준으로 자동 결과를 다시 계산합니다. 외부 API를 호출하지 않습니다.">⚡ 최신 결과 다시 계산</button>
       </div>
       <div class="toolbar header-toolbar header-management-controls">
-        <button id="teamsBtn" class="success">↗ Teams 전송</button>
+        <button id="teamsBtn" class="success" data-shell-keyword-control>↗ Teams 전송</button>
         <button id="headerAccessBtn" class="secondary header-access-btn" type="button" style="display: none;">권한 관리 <span id="pendingBadge" class="badge-count">0</span></button>
         <span id="currentUserChip" class="user-chip">로그인 정보 없음</span>
+        <button id="shellSettingsBtn" class="secondary" type="button" aria-haspopup="dialog" aria-controls="shellSettingsDialog" aria-expanded="false">설정</button>
         <button id="logoutBtn" class="secondary" type="button">로그아웃</button>
       </div>
-      <details id="adminDataManagement" style="display:none;">
+      <details id="adminDataManagement" style="display:none;" data-shell-keyword-control>
         <summary><strong>관리자 데이터 관리</strong></summary>
         <div class="toolbar" style="margin-top:8px;">
           <button id="refreshSearchAdBtn" class="secondary" type="button">↻ Search Ad 상품 새로고침</button>
@@ -1440,7 +1487,7 @@
     </div>
   </header>
 
-  <div id="schedulePanel" class="schedule-panel">
+  <div id="schedulePanel" class="schedule-panel" data-shell-keyword-control>
     <h2>자동 수집 설정</h2>
     <div class="field">
       <label for="scheduleMode">수집 반복 방식</label>
@@ -1478,143 +1525,19 @@
     <div id="scheduleStatus" class="schedule-status">자동 수집 시간이 설정되지 않았습니다.</div>
   </div>
 
-  <main>
-    <aside>
+  <main class="shell-layout">
+    <aside class="shell-sidebar">
       <div class="brand-card">
-        <span class="brand-mark">NT</span>
-        <div>
-          <span class="brand-name">Naver Trend Monitor</span>
-          <span class="brand-sub">Keyword monitor</span>
-        </div>
+        <span class="brand-mark" aria-hidden="true">NT</span>
+        <div><span class="brand-name">네쇼검 트렌드</span><span class="brand-sub">트렌드 모니터</span></div>
       </div>
-      <div class="side-tabs">
-        <button id="monitorTabBtn" class="side-tab active" type="button">모니터링</button>
-        <button id="apiTabBtn" class="side-tab" type="button">API 연결</button>
-      </div>
-
-      <div id="monitorPanel" class="tab-panel">
-        <h2>설정</h2>
-        <div class="grid" style="grid-template-columns:1fr 1fr;">
-          <div class="field">
-            <label for="surgeThreshold">급등수 기준</label>
-            <input id="surgeThreshold" type="number" min="1" max="10000000" step="1" value="300">
-          </div>
-          <div class="field">
-            <label for="matchThreshold">일치율 기준(%)</label>
-            <input id="matchThreshold" type="number" min="1" max="100" value="40">
-          </div>
-        </div>
-        <button id="operatingSettingsSaveBtn" class="secondary" type="button">설정 저장</button>
-        <div id="operatingSettingsStatus" class="settings-save-status">공통 운영 설정을 불러오는 중입니다.</div>
-      </div>
-
-      <div id="apiPanel" class="tab-panel" hidden>
-        <h2>API 연결</h2>
-        <div id="permissionNote" class="permission-note">현재 계정은 실행 권한입니다. 분석과 수집은 실행할 수 있지만 API 연결과 모니터링 조건은 편집할 수 없습니다.</div>
-        <div class="note">운영 연결 시 5개 API 정보를 이곳에서 관리합니다. 브라우저 직접 호출이 막히면 사내 프록시 URL을 입력하세요.</div>
-        <div id="adminAccessCard" class="admin-card">
-          <div class="api-card-title">접근 승인 및 권한 관리 <span class="api-tag">Master</span></div>
-          <div class="muted">신청 사용자를 승인하고 역할을 지정합니다. 역할: 마스터, 편집자, 보기/다운로드.</div>
-          <div id="accessUserList" class="user-list"></div>
-        </div>
-        <div class="api-list">
-          <div class="api-card">
-            <div class="api-card-title">Teams Webhook URL <span class="api-tag">Alert</span></div>
-            <div class="field">
-              <label for="teamsWebhook">Webhook URL</label>
-              <input id="teamsWebhook" type="url" placeholder="https://...webhook...">
-            </div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">메일 발송 연결 <span class="api-tag">Email</span></div>
-            <div class="field">
-              <label for="emailEndpoint">Endpoint</label>
-              <input id="emailEndpoint" placeholder="메일 발송 API 또는 사내 프록시 URL">
-            </div>
-            <div class="field">
-              <label for="emailRecipients">수신 이메일</label>
-              <input id="emailRecipients" placeholder="team@example.com, owner@example.com">
-            </div>
-            <div class="field">
-              <label for="emailApiKey">API Key / Token</label>
-              <input id="emailApiKey" type="password" placeholder="메일 발송 토큰">
-            </div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">카카오톡 발송 연결 <span class="api-tag">Kakao</span></div>
-            <div class="field">
-              <label for="kakaoEndpoint">Endpoint</label>
-              <input id="kakaoEndpoint" placeholder="카카오 알림톡 API 또는 사내 프록시 URL">
-            </div>
-            <div class="field">
-              <label for="kakaoChannel">채널 / 템플릿 ID</label>
-              <input id="kakaoChannel" placeholder="채널 ID 또는 알림톡 템플릿 ID">
-            </div>
-            <div class="field">
-              <label for="kakaoApiKey">API Key / Token</label>
-              <input id="kakaoApiKey" type="password" placeholder="카카오 발송 토큰">
-            </div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">자동 알람 설정 <span class="api-tag">Automation</span></div>
-            <div class="field">
-              <label for="alertState">자동 알람 스위치 (ON / OFF)</label>
-              <select id="alertState">
-                <option value="off">🔴 OFF (자동 알람 끄기)</option>
-                <option value="on">🟢 ON (자동 알람 켜기)</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="alertChannel">알람 채널</label>
-              <select id="alertChannel">
-                <option value="teams">Teams</option>
-                <option value="email">메일</option>
-                <option value="kakao">카카오톡</option>
-                <option value="all">전체 채널</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="alertInterval">자동 점검 주기</label>
-              <select id="alertInterval">
-                <option value="15">15분마다</option>
-                <option value="30">30분마다</option>
-                <option value="60">1시간마다</option>
-                <option value="daily">매일 1회</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="alertRule">자동 알람 조건</label>
-              <input id="alertRule" value="일치 키워드 1건 이상 발생 시">
-            </div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">네이버 쇼핑검색광고 계정 API 1 <span class="api-tag">Search Ad</span></div>
-            <div class="note">Endpoint, API Key, Secret Key, Customer ID는 브라우저에 저장하지 않고 Netlify 환경변수에서 서버 함수가 사용합니다.</div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">네이버 쇼핑검색광고 계정 API 2 <span class="api-tag">Search Ad</span></div>
-            <div class="note">Endpoint, API Key, Secret Key, Customer ID는 브라우저에 저장하지 않고 Netlify 환경변수에서 서버 함수가 사용합니다.</div>
-          </div>
-
-          <div class="api-card">
-            <div class="api-card-title">네이버 API HUB <span class="api-tag">Naver Open API</span></div>
-            <div class="note">Client ID와 Client Secret은 Netlify 환경변수에서만 사용합니다. 쇼핑인사이트는 화장품/미용(50000002)과 건강식품(50000023)을 서버에서 통합 조회합니다.</div>
-          </div>
-        </div>
-        <div class="toolbar" style="margin-top:14px;">
-          <button id="saveBtn" class="secondary">설정 저장</button>
-          <button id="apiBtn" class="secondary">API 데이터 가져오기</button>
-        </div>
-        <div id="apiSaveStatus" class="settings-save-status">저장 상태를 확인하는 중입니다.</div>
-      </div>
+      <nav class="shell-nav" aria-label="기능 메뉴">
+        <button id="shellKeywordNav" type="button" aria-current="page" aria-controls="shellKeywordView">트렌드 검색어</button>
+        <button id="shellVideoNav" type="button" aria-controls="shellVideoView">트렌드 영상 <span class="shell-soon">준비 중</span></button>
+      </nav>
     </aside>
 
-    <div class="workspace">
+    <div class="workspace" id="shellKeywordView">
       <section class="panel">
         <div class="cmp-toolbar"><h2>모니터링 요약</h2>
           <div class="cmp-density" role="group" aria-label="결과 목록 표시 방식"><span>목록 보기</span>
@@ -1799,8 +1722,148 @@
         </table></div>
       </section>
     </div>
+    <div id="shellVideoView" class="shell-video" hidden>
+      <section class="panel shell-video-card" aria-labelledby="shellVideoTitle">
+        <span class="shell-soon">준비 중</span>
+        <h2 id="shellVideoTitle">트렌드 영상</h2>
+        <p>영상 콘텐츠 모니터링 기능을 준비 중입니다.</p>
+        <p class="muted">현재 트렌드 검색어 기능은 기존과 동일하게 이용할 수 있습니다.</p>
+      </section>
+    </div>
   </main>
 
+  <dialog id="shellSettingsDialog" aria-labelledby="shellSettingsTitle">
+    <div class="shell-settings-head"><h2 id="shellSettingsTitle">설정</h2><button type="button" class="secondary" id="shellSettingsClose" autofocus>닫기</button></div>
+    <div id="shellSettingsBody">
+      <div class="side-tabs">
+        <button id="monitorTabBtn" class="side-tab active" type="button">① 검색어 분석 기준</button>
+        <button id="apiTabBtn" class="side-tab" type="button">② API 연결</button>
+      </div>
+
+      <div id="monitorPanel" class="tab-panel">
+        <h2>검색어 분석 기준</h2>
+        <p class="muted">공통 분석 기준은 아래 ‘설정 저장’을 눌러야 적용됩니다.</p>
+        <div class="grid" style="grid-template-columns:1fr 1fr;">
+          <div class="field">
+            <label for="surgeThreshold">급등수 기준</label>
+            <input id="surgeThreshold" type="number" min="1" max="10000000" step="1" value="300">
+          </div>
+          <div class="field">
+            <label for="matchThreshold">일치율 기준(%)</label>
+            <input id="matchThreshold" type="number" min="1" max="100" value="40">
+          </div>
+        </div>
+        <button id="operatingSettingsSaveBtn" class="secondary" type="button">설정 저장</button>
+        <div id="operatingSettingsStatus" class="settings-save-status">공통 운영 설정을 불러오는 중입니다.</div>
+      </div>
+
+      <div id="apiPanel" class="tab-panel" hidden>
+        <h2>API 연결</h2>
+        <p class="muted">API·알림 입력은 기존과 같이 이 브라우저에 자동 저장됩니다. 원천 API 인증정보는 서버에서 관리합니다.</p>
+        <div id="permissionNote" class="permission-note">현재 계정은 실행 권한입니다. 분석과 수집은 실행할 수 있지만 API 연결과 모니터링 조건은 편집할 수 없습니다.</div>
+        <div class="note">운영 연결 시 5개 API 정보를 이곳에서 관리합니다. 브라우저 직접 호출이 막히면 사내 프록시 URL을 입력하세요.</div>
+        <div id="adminAccessCard" class="admin-card">
+          <div class="api-card-title">접근 승인 및 권한 관리 <span class="api-tag">Master</span></div>
+          <div class="muted">신청 사용자를 승인하고 역할을 지정합니다. 역할: 마스터, 편집자, 보기/다운로드.</div>
+          <div id="accessUserList" class="user-list"></div>
+        </div>
+        <div class="api-list">
+          <div class="api-card">
+            <div class="api-card-title">Teams Webhook URL <span class="api-tag">Alert</span></div>
+            <div class="field">
+              <label for="teamsWebhook">Webhook URL</label>
+              <input id="teamsWebhook" type="url" placeholder="https://...webhook...">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">메일 발송 연결 <span class="api-tag">Email</span></div>
+            <div class="field">
+              <label for="emailEndpoint">Endpoint</label>
+              <input id="emailEndpoint" placeholder="메일 발송 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="emailRecipients">수신 이메일</label>
+              <input id="emailRecipients" placeholder="team@example.com, owner@example.com">
+            </div>
+            <div class="field">
+              <label for="emailApiKey">API Key / Token</label>
+              <input id="emailApiKey" type="password" placeholder="메일 발송 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">카카오톡 발송 연결 <span class="api-tag">Kakao</span></div>
+            <div class="field">
+              <label for="kakaoEndpoint">Endpoint</label>
+              <input id="kakaoEndpoint" placeholder="카카오 알림톡 API 또는 사내 프록시 URL">
+            </div>
+            <div class="field">
+              <label for="kakaoChannel">채널 / 템플릿 ID</label>
+              <input id="kakaoChannel" placeholder="채널 ID 또는 알림톡 템플릿 ID">
+            </div>
+            <div class="field">
+              <label for="kakaoApiKey">API Key / Token</label>
+              <input id="kakaoApiKey" type="password" placeholder="카카오 발송 토큰">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">자동 알람 설정 <span class="api-tag">Automation</span></div>
+            <div class="field">
+              <label for="alertState">자동 알람 스위치 (ON / OFF)</label>
+              <select id="alertState">
+                <option value="off">🔴 OFF (자동 알람 끄기)</option>
+                <option value="on">🟢 ON (자동 알람 켜기)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="alertChannel">알람 채널</label>
+              <select id="alertChannel">
+                <option value="teams">Teams</option>
+                <option value="email">메일</option>
+                <option value="kakao">카카오톡</option>
+                <option value="all">전체 채널</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="alertInterval">자동 점검 주기</label>
+              <select id="alertInterval">
+                <option value="15">15분마다</option>
+                <option value="30">30분마다</option>
+                <option value="60">1시간마다</option>
+                <option value="daily">매일 1회</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="alertRule">자동 알람 조건</label>
+              <input id="alertRule" value="일치 키워드 1건 이상 발생 시">
+            </div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 쇼핑검색광고 계정 API 1 <span class="api-tag">Search Ad</span></div>
+            <div class="note">Endpoint, API Key, Secret Key, Customer ID는 브라우저에 저장하지 않고 Netlify 환경변수에서 서버 함수가 사용합니다.</div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 쇼핑검색광고 계정 API 2 <span class="api-tag">Search Ad</span></div>
+            <div class="note">Endpoint, API Key, Secret Key, Customer ID는 브라우저에 저장하지 않고 Netlify 환경변수에서 서버 함수가 사용합니다.</div>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-title">네이버 API HUB <span class="api-tag">Naver Open API</span></div>
+            <div class="note">Client ID와 Client Secret은 Netlify 환경변수에서만 사용합니다. 쇼핑인사이트는 화장품/미용(50000002)과 건강식품(50000023)을 서버에서 통합 조회합니다.</div>
+          </div>
+        </div>
+        <div class="toolbar" style="margin-top:14px;">
+          <button id="saveBtn" class="secondary">설정 저장</button>
+          <button id="apiBtn" class="secondary">API 데이터 가져오기</button>
+        </div>
+        <div id="apiSaveStatus" class="settings-save-status">저장 상태를 확인하는 중입니다.</div>
+      </div>
+    </div>
+  </dialog>
   <dialog id="cmpDetailDialog" aria-labelledby="cmpDetailTitle">
     <header><div><small id="cmpDetailScope"></small><h2 id="cmpDetailTitle"></h2></div>
       <button type="button" id="cmpDetailClose" autofocus>닫기</button></header>
@@ -2681,6 +2744,60 @@
         }
       }
       analysisStatusReadVersion += 1;
+    }
+
+    function initShellNavigation() {
+      const keyword = document.getElementById("shellKeywordView"), video = document.getElementById("shellVideoView");
+      const keywordNav = document.getElementById("shellKeywordNav"), videoNav = document.getElementById("shellVideoNav");
+      const dialog = document.getElementById("shellSettingsDialog"), settings = document.getElementById("shellSettingsBtn");
+      if (!keyword || !video || !dialog || keyword.dataset.shellBound) return;
+      keyword.dataset.shellBound = "true";
+      let current = "keyword", keywordPosition = null, dialogPosition = null;
+      function select(view) {
+        if (view === current) return;
+        if (current === "keyword") {
+          keywordPosition = { x:window.scrollX, y:window.scrollY,
+            tables:[...keyword.querySelectorAll(".table-wrap")].map(node => ({ node, top:node.scrollTop, left:node.scrollLeft })) };
+        }
+        current = view;
+        document.body.dataset.shellView = view;
+        keyword.hidden = view !== "keyword";
+        video.hidden = view !== "video";
+        for (const [button, selected] of [[keywordNav,view === "keyword"],[videoNav,view === "video"]]) {
+          if (selected) button.setAttribute("aria-current","page"); else button.removeAttribute("aria-current");
+        }
+        // Existing nodes, analysis context and polling are deliberately untouched.
+        if (view === "keyword" && keywordPosition) {
+          keywordPosition.tables.forEach(({ node, top, left }) => { node.scrollTop = top; node.scrollLeft = left; });
+          window.scrollTo({ left:keywordPosition.x, top:keywordPosition.y, behavior:"instant" });
+        } else window.scrollTo({ left:0, top:0, behavior:"instant" });
+      }
+      keywordNav.addEventListener("click", () => select("keyword"));
+      videoNav.addEventListener("click", () => select("video"));
+      document.body.dataset.shellView = "keyword";
+      settings.addEventListener("click", () => {
+        if (!state.currentUser || dialog.open) return;
+        if (!canEdit() && !$("apiPanel").hidden) switchSideTab("monitor");
+        dialogPosition = { x:window.scrollX, y:window.scrollY };
+        dialog.showModal();
+        settings.setAttribute("aria-expanded","true");
+        document.getElementById("shellSettingsClose").focus({ preventScroll:true });
+      });
+      document.getElementById("shellSettingsClose").addEventListener("click", () => dialog.close());
+      dialog.addEventListener("click", event => {
+        const box = dialog.getBoundingClientRect();
+        if (event.target === dialog && (event.clientX < box.left || event.clientX >= box.right || event.clientY < box.top || event.clientY >= box.bottom)) dialog.close();
+      });
+      dialog.addEventListener("close", () => {
+        settings.setAttribute("aria-expanded","false");
+        if (state.currentUser) settings.focus({ preventScroll:true });
+        if (dialogPosition) window.scrollTo({left:dialogPosition.x,top:dialogPosition.y,behavior:"instant"});
+        dialogPosition = null;
+      });
+      // Logout or an expired session cannot leave settings exposed in the top layer.
+      new MutationObserver(() => {
+        if (document.body.classList.contains("locked") && dialog.open) dialog.close();
+      }).observe(document.body,{attributes:true,attributeFilter:["class"]});
     }
 
     function comparisonRow({ scope, key, keyword, cells, detail, jobId, history }) {
@@ -4393,6 +4510,7 @@
       }
     }
     initComparisonTables();
+    initShellNavigation();
     initializeApp();
   </script>
 </body>
